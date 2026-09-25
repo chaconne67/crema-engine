@@ -204,10 +204,11 @@ TOOLSETS = {
         "messaging, audio, or clarify UI",
         [t for t in _CODING_TOOLS if t != "clarify"],
     ),
+    # Crema: the tools the Crema app offers (see CREMA.md); add a tool here when Crema adopts it.
     "hermes-api-server": _ts(
-        "OpenAI-compatible API server — full agent tools accessible via HTTP (no "
-        "interactive UI tools like clarify or send_message)",
-        _core_without("text_to_speech", "clarify", "computer_use", kanban=False),
+        "Crema — files, terminal, todo, web and image understanding",
+        ["read_file", "write_file", "patch", "search_files", "terminal", "process_manage",
+         "todo_list", "web_search", "web_extract", "vision_analyze"],
     ),
     "hermes-cli": _bundle("Full interactive CLI toolset - all default tools plus cronjob management"),
 

@@ -1714,7 +1714,9 @@ DEFAULT_CONFIG = {
         # and rotate, so two programs on one login can log each other out; set false to make Hermes use only
         # its own logins (`hermes auth add <provider>`). `hermes auth add openai-codex` still offers the import
         # interactively.
-        "adopt_external_logins": True,
+        # Crema: off, so Crema's engine uses only the logins made in Crema and never logs Claude Code or
+        # the Codex CLI out by refreshing their shared token.
+        "adopt_external_logins": False,
         # How `hermes auth add openai-codex` / `hermes model` sign in to OpenAI Codex.
         # "device_code" (default): open a URL, enter a code. "browser": authorization-code + PKCE on
         # the loopback listener http://localhost:1455/auth/callback (the redirect OpenAI registered

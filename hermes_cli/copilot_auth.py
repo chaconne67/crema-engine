@@ -77,6 +77,11 @@ def resolve_copilot_token() -> tuple[str, str]:
                      "token` fallback to honor explicit env-var intent (and avoid the subprocess "
                      "cost on cold start, #60800).")
         return "", ""
+    # Crema: the GitHub CLI's login is another program's, borrowed only when external logins are
+    # adopted (auth.adopt_external_logins; off in Crema), so Copilot appears only once it is added.
+    from agent.credential_sources import adopt_external_logins_enabled
+    if not adopt_external_logins_enabled():
+        return "", ""
     token = _try_gh_cli_token()
     if token:
         valid, msg = validate_copilot_token(token)

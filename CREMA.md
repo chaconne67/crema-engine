@@ -25,20 +25,28 @@ Both bind 127.0.0.1 only.
 | Area | Kept | How it is chosen |
 |---|---|---|
 | Tools | files, terminal/process, todo, web search/extract, image understanding | `hermes-api-server` in `toolsets.py` |
-| Providers | ChatGPT (openai-codex), Claude (anthropic, claude-code), OpenAI, Gemini, OpenRouter API keys | provider plugins kept below; the Crema app lists only these |
+| Providers | ChatGPT (openai-codex), Claude (anthropic: its login or API key), OpenAI, Gemini, OpenRouter API keys, GitHub Copilot (a GitHub token) | provider plugins kept below; the Crema app lists only these |
+| Logins | only those made in Crema: other programs' logins (Claude Code, Codex CLI, GitHub CLI) are never borrowed | `auth.adopt_external_logins` default |
 
 ## Changes from upstream
 
 1. `crema_engine.py` — new: the launcher above.
 2. `toolsets.py` — `hermes-api-server` lists Crema's tools instead of the full core set.
-3. Removed (not used by the engine; nothing kept imports them):
+3. `hermes_cli/config_defaults.py` — `auth.adopt_external_logins` defaults to false: borrowing another
+   program's rotating login can log that program out, and a Provider should appear only once added.
+4. `hermes_cli/copilot_auth.py` — the `gh auth token` fallback follows `auth.adopt_external_logins` too.
+5. `pyproject.toml` — the `crema` extra (see below).
+6. Removed (not used by the engine; nothing kept imports them):
    - top level: `apps/ website/` (except `website/static/api/model-catalog.json`) `ui-tui/ web/ skills/ optional-skills/
      optional-mcps/ plugin-catalog/ evals/ scripts/ docker/ nix/ native/ tests-js/ contributors/`,
      Docker/Nix/npm/lint files, translated READMEs, `batch_runner.py mini_swe_runner.py mcp_serve.py
      toolset_distributions.py trajectory_compressor.py setup-hermes.sh`
    - `plugins/`: `disk-cleanup google_meet hermes-achievements kanban security-guidance spotify observability
      teams_pipeline platforms image_gen video_gen cron_providers`, the memory providers under `plugins/memory/`,
-     and every model provider except `openai-codex anthropic gemini openrouter custom`
+     and every model provider except `openai-codex anthropic gemini openrouter custom copilot`
+     (`copilot` restored after the first cut, when Crema adopted it)
+   - `scripts/` except `run_tests_parallel.py`, upstream's per-file test runner the tests rely on for
+     isolation: run the tests with `python scripts/run_tests_parallel.py`, not bare pytest
 
 Kept code still mentions many removed features (browser, memory, delegation, …) through imports that
 are either lazy or guarded; those modules stay until the code that names them is gone.

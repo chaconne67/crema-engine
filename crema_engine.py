@@ -54,8 +54,14 @@ async def main() -> None:
 
     port = free_port()
     server = uvicorn.Server(uvicorn.Config(settings, host="127.0.0.1", port=port, log_level="warning"))
+    serving = asyncio.create_task(server.serve())
+    while not server.started:
+        if serving.done():
+            sys.exit("the settings API did not start")
+        await asyncio.sleep(0.05)
+    # Both listen now: Crema may call either as soon as it reads this line.
     print(json.dumps({"api": api._port, "settings": port}), flush=True)
-    await server.serve()
+    await serving
 
 
 if __name__ == "__main__":

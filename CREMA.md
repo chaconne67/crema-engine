@@ -41,6 +41,7 @@ Both bind 127.0.0.1 only.
      optional-mcps/ plugin-catalog/ evals/ scripts/ docker/ nix/ native/ tests-js/ contributors/`,
      Docker/Nix/npm/lint files, translated READMEs, `batch_runner.py mini_swe_runner.py mcp_serve.py
      toolset_distributions.py trajectory_compressor.py setup-hermes.sh`
+   - `tools/`: `xai_video_tools.py video_generation_tool.py` (their `plugins/video_gen/` was removed)
    - `plugins/`: `disk-cleanup google_meet hermes-achievements kanban security-guidance spotify observability
      teams_pipeline platforms image_gen video_gen cron_providers`, the memory providers under `plugins/memory/`,
      and every model provider except `openai-codex anthropic gemini openrouter custom copilot`
@@ -50,6 +51,9 @@ Both bind 127.0.0.1 only.
 
 Kept code still mentions many removed features (browser, memory, delegation, …) through imports that
 are either lazy or guarded; those modules stay until the code that names them is gone.
+
+Known harmless log: the first Anthropic call logs "boto3 lazy install did not complete" once — the
+Anthropic adapter imports `agent/bedrock_adapter.py`, which asks for boto3, and runtime installs are off.
 
 ## Adding a feature back
 

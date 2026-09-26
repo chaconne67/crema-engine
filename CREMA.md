@@ -25,7 +25,7 @@ Both bind 127.0.0.1 only.
 | Area | Kept | How it is chosen |
 |---|---|---|
 | Tools | files, terminal/process, todo, web search/extract, image understanding | `hermes-api-server` in `toolsets.py` |
-| Providers | ChatGPT (openai-codex), Claude (anthropic: its login or API key), OpenAI, Gemini, OpenRouter API keys, GitHub Copilot (a GitHub token) | provider plugins kept below; the Crema app lists only these |
+| Providers | every upstream provider that needs no extra package (Bedrock needs boto3 and Vertex google-auth, so both are left out) | provider plugins kept below; the Crema app hides only `moa` and `claude-code` |
 | Logins | only those made in Crema: other programs' logins (Claude Code, Codex CLI, GitHub CLI) are never borrowed | `auth.adopt_external_logins` default |
 
 ## Changes from upstream
@@ -44,8 +44,8 @@ Both bind 127.0.0.1 only.
    - `tools/`: `xai_video_tools.py video_generation_tool.py` (their `plugins/video_gen/` was removed)
    - `plugins/`: `disk-cleanup google_meet hermes-achievements kanban security-guidance spotify observability
      teams_pipeline platforms image_gen video_gen cron_providers`, the memory providers under `plugins/memory/`,
-     and every model provider except `openai-codex anthropic gemini openrouter custom copilot`
-     (`copilot` restored after the first cut, when Crema adopted it)
+     and the model providers `bedrock vertex` (they need packages the bundle does not carry; the other
+     providers were cut at first and restored on 2026-09-26)
    - `scripts/` except `run_tests_parallel.py`, upstream's per-file test runner the tests rely on for
      isolation: run the tests with `python scripts/run_tests_parallel.py`, not bare pytest
 

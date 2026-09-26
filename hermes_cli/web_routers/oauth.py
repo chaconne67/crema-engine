@@ -696,10 +696,10 @@ async def disconnect_oauth_provider(provider_id: str, request: Request, profile:
 
 # In-browser device-code sessions: /start spawns a poller thread and returns the
 # display fields; the UI polls .../poll/{session_id} until status != "pending" (on
-# "approved" the poller has already saved creds). Anthropic has NO dashboard PKCE
-# flow — an unattended endpoint minting Claude subscription tokens outside
-# Anthropic's own client violates its OAuth usage policy; that card is "external".
-# Sessions are in-memory (single-process), expire after 15 min, GC'd on /start.
+# "approved" the poller has already saved creds). Anthropic's is a PKCE session
+# instead: /start returns the claude.ai page, /submit takes the code#state the
+# person pastes from it (no poll). Sessions are in-memory (single-process),
+# expire after 15 min, GC'd on /start.
 
 
 def _gc_oauth_sessions() -> None:
@@ -731,6 +731,8 @@ async def start_oauth_login(provider_id: str, request: Request, profile: Optiona
     try:
         if catalog_entry["flow"] == "device_code":
             return await _start_device_code_flow(provider_id, profile=profile)
+        if catalog_entry["flow"] == "pkce":
+            return _start_pkce_flow(provider_id, profile)
     except HTTPException:
         raise
     except Exception as e:
@@ -745,7 +747,37 @@ async def submit_oauth_code(
 ):
     """Submit the auth code for PKCE flows. Token-protected."""
     _require_token(request)
-    raise HTTPException(status_code=400, detail=f"submit not supported for {provider_id}")
+    requested_profile = _validate_oauth_profile(profile)
+    with _oauth_sessions_lock:
+        sess = _oauth_sessions.get(body.session_id)
+    if not sess or sess["flow"] != "pkce" or sess["provider"] != provider_id or sess.get("profile") != requested_profile:
+        raise HTTPException(status_code=400, detail=f"No {provider_id} login is waiting for a code; start again")
+
+    def _run():
+        from agent.anthropic_credentials import finish_hermes_oauth_login
+        from agent.credential_pool import load_pool
+        from hermes_cli.auth_commands import save_oauth_credential
+        creds = finish_hermes_oauth_login(body.code, sess["verifier"], sess["state"])
+        if not creds:
+            raise HTTPException(status_code=400, detail="The code was not accepted; start again")
+        save_oauth_credential(provider_id, load_pool(provider_id), creds)
+        return {"ok": True, "provider": provider_id}
+
+    try:
+        return await scoped_to_thread(profile, _run)
+    finally:
+        # One code per login: a used or rejected session is gone either way.
+        _drop_oauth_session(body.session_id)
+
+
+def _start_pkce_flow(provider_id: str, profile: Optional[str]) -> Dict[str, Any]:
+    """Anthropic's browser login: the claude.ai page to open; its code comes back through /submit."""
+    from agent.anthropic_credentials import start_hermes_oauth_login
+    auth_url, verifier, state = start_hermes_oauth_login()
+    sid, _ = _new_oauth_session(provider_id, "pkce", profile=profile)
+    with _oauth_sessions_lock:
+        _oauth_sessions[sid].update({"verifier": verifier, "state": state})
+    return {"session_id": sid, "flow": "pkce", "auth_url": auth_url}
 
 
 @router.get("/api/providers/oauth/{provider_id}/poll/{session_id}")

@@ -501,29 +501,63 @@ def test_nous_dashboard_poller_preserves_effective_scope_when_token_omits_scope(
 
 
 
-def test_anthropic_dashboard_oauth_is_removed_and_external():
-    """Anthropic subscription OAuth is not minted by the dashboard anymore."""
+def test_anthropic_pkce_login_starts_then_saves_the_pasted_code(tmp_path, monkeypatch):
+    """Crema: Anthropic's subscription login is the terminal's PKCE flow in the app —
+    /start gives the claude.ai page, /submit exchanges the pasted code#state and adds a
+    ``manual:hermes_pkce`` pool entry, exactly as ``hermes auth add anthropic`` does."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    sent = {}
 
-    resp = client.get("/api/providers/oauth", headers=HEADERS)
-    assert resp.status_code == 200, resp.text
-    providers = {p["id"]: p for p in resp.json()["providers"]}
-    assert providers["anthropic"]["flow"] == "external"
+    def fake_token(data, **_kwargs):
+        sent.update(json.loads(data))
+        return {"access_token": "sk-ant-oat-test", "refresh_token": "sk-ant-ort-test", "expires_in": 3600}
 
-    before_sessions = set(_web_server_oauth._oauth_sessions)
-    start_resp = client.post(
-        "/api/providers/oauth/anthropic/start",
-        headers=HEADERS,
+    monkeypatch.setattr("agent.anthropic_credentials._post_oauth_token", fake_token)
+
+    providers = {p["id"]: p for p in client.get("/api/providers/oauth", headers=HEADERS).json()["providers"]}
+    assert providers["anthropic"]["flow"] == "pkce"
+
+    start = client.post("/api/providers/oauth/anthropic/start", headers=HEADERS)
+    assert start.status_code == 200, start.text
+    body = start.json()
+    assert body["flow"] == "pkce" and body["auth_url"].startswith("https://claude.ai/oauth/authorize?")
+    assert "verifier" not in start.text
+    sess = _web_server_oauth._oauth_sessions[body["session_id"]]
+
+    submit = client.post(
+        "/api/providers/oauth/anthropic/submit", headers=HEADERS,
+        json={"session_id": body["session_id"], "code": f"the-code#{sess['state']}"},
     )
-    assert start_resp.status_code == 400, start_resp.text
-    assert "claude.ai" not in start_resp.text
+    assert submit.status_code == 200, submit.text
+    assert sent["code"] == "the-code" and sent["code_verifier"] == sess["verifier"]
+    assert body["session_id"] not in _web_server_oauth._oauth_sessions
 
-    submit_resp = client.post(
-        "/api/providers/oauth/anthropic/submit",
-        headers=HEADERS,
-        json={"session_id": "unused", "code": "unused"},
+    from agent.credential_pool import load_pool
+    (entry,) = load_pool("anthropic").entries()
+    assert entry.source == "manual:hermes_pkce" and entry.auth_type == "oauth"
+    assert entry.access_token == "sk-ant-oat-test" and entry.refresh_token == "sk-ant-ort-test"
+
+
+def test_anthropic_pkce_submit_rejects_a_wrong_state_or_unknown_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "agent.anthropic_credentials._post_oauth_token",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no exchange without a matching state")),
     )
-    assert submit_resp.status_code == 400, submit_resp.text
-    assert set(_web_server_oauth._oauth_sessions) == before_sessions
+    unknown = client.post(
+        "/api/providers/oauth/anthropic/submit", headers=HEADERS, json={"session_id": "unused", "code": "x#y"},
+    )
+    assert unknown.status_code == 400, unknown.text
+
+    sid = client.post("/api/providers/oauth/anthropic/start", headers=HEADERS).json()["session_id"]
+    wrong = client.post(
+        "/api/providers/oauth/anthropic/submit", headers=HEADERS, json={"session_id": sid, "code": "code#other"},
+    )
+    assert wrong.status_code == 400, wrong.text
+    assert sid not in _web_server_oauth._oauth_sessions
+
+    from agent.credential_pool import load_pool
+    assert load_pool("anthropic").entries() == []
 
 
 def test_accounts_offers_every_oauth_provider_from_catalog():

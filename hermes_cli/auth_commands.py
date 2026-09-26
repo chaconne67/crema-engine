@@ -420,9 +420,14 @@ def _add_credential(args, provider: str, pool, requested_type: str) -> PooledCre
     if spec is None:
         raise SystemExit(f"`hermes auth add {provider}` is not implemented for auth type {requested_type} yet.")
 
-    creds = spec.login(args)
+    return save_oauth_credential(provider, pool, spec.login(args), getattr(args, "label", None))
+
+
+def save_oauth_credential(provider: str, pool, creds: dict, label: str | None = None) -> PooledCredential:
+    """Add a finished OAuth login to ``provider``'s pool, as ``hermes auth add`` and the settings API do."""
+    spec = _OAUTH_ADD_SPECS[provider]
     token = spec.token(creds)
-    label = (getattr(args, "label", None) or "").strip() or label_from_token(
+    label = (label or "").strip() or label_from_token(
         token, f"{provider}-oauth-{len(pool.entries()) + 1}")
     # Every account gets a distinct, self-contained pool entry instead of routing through a
     # singleton save path (which collapsed every added account into the latest login).

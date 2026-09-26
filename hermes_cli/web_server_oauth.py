@@ -156,11 +156,10 @@ _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
     # (slash-commands only exist inside an interactive session).
     {"id": "copilot-acp", "name": "GitHub Copilot (ACP)", "flow": "external", "cli_command": "copilot login",
      "docs_url": "https://docs.github.com/en/copilot", "status_fn": _copilot_acp_status},
-    # Anthropic / Claude entries sit at the bottom. Deliberately flow == "external": an
-    # in-dashboard Connect button would let a scriptable HTTP endpoint mint Claude Pro/Max
-    # subscription tokens outside Anthropic's own client, against its OAuth usage policies.
-    # Login works via the terminal (`hermes auth add anthropic`) or a plain API key.
-    {"id": "anthropic", "name": "Anthropic API Key", "flow": "external", "cli_command": "hermes auth add anthropic",
+    # Anthropic / Claude entries sit at the bottom. Crema: flow == "pkce" is the terminal's
+    # `hermes auth add anthropic` in the app — the person approves on claude.ai and pastes the
+    # code#state it shows (/start, then /submit); the same functions mint and save the login.
+    {"id": "anthropic", "name": "Anthropic API Key", "flow": "pkce", "cli_command": "hermes auth add anthropic",
      "docs_url": "https://docs.claude.com/en/api/getting-started", "status_fn": _anthropic_oauth_status},
     {"id": "claude-code", "name": "Anthropic OAuth: Required Extra Usage Credits to Use Subscription",
      "flow": "external", "cli_command": "claude setup-token",

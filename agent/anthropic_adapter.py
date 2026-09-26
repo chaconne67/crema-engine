@@ -278,7 +278,6 @@ def _get_claude_code_version() -> str:
     return _claude_code_version_cache
 
 
-_CLAUDE_CODE_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
 _MCP_TOOL_PREFIX = "mcp__"
 
 # Anthropic's OAuth billing classifier fingerprints certain Hermes tool schemas/prose as a
@@ -531,33 +530,17 @@ def _oauth_wire_namer(anthropic_tools: List[Dict[str, Any]]):
     return to_wire
 
 
-_OAUTH_SYSTEM_REPLACEMENTS = (
-    ("Hermes Agent", "Claude Code"), ("Hermes agent", "Claude Code"), ("Nous Research", "Anthropic"),
-)
-# The slug is rewritten only as a standalone prose word. Joined to a host, path, repo, mailbox
-# or quoted as an identifier (``hermes-agent.nousresearch.com``, ``~/.hermes/hermes-agent/venv``,
-# ``NousResearch/hermes-agent``, ``skill_view(name='hermes-agent')``) it is an address the model
-# dereferences, and the rewritten form does not exist (#48860). The OPENING quote marks an
-# identifier; a sentence-final ``.`` or a possessive ``'s`` is prose.
-_OAUTH_SLUG_PATTERN = re.compile(r"""(?<![\w./:@'"`-])hermes-agent(?![\w/@-]|\.\w)""")
-
-
-def _apply_claude_code_identity(system, anthropic_tools, anthropic_messages, to_wire):
-    """OAuth transforms: Claude Code system prefix, product-name sanitizing (avoids server-side
-    content filters), tool/description aliasing, and the same tool renames on replayed tool_use
-    blocks so history matches ``tools[]``. Returns the new ``system``; tools and messages are
-    mutated in place."""
-    cc_block = {"type": "text", "text": _CLAUDE_CODE_SYSTEM_PREFIX}
+def _apply_oauth_tool_names(system, anthropic_tools, anthropic_messages, to_wire):
+    """OAuth tool naming: tool/description aliasing, the same aliases in the system prose that names
+    those tools, and the same tool renames on replayed tool_use blocks so history matches ``tools[]``.
+    Crema: nothing here touches identity — no Claude Code prefix, no product-name rewriting; who the
+    agent is comes from SOUL.md alone, whatever the model. Returns the new ``system``; tools and
+    messages are mutated in place."""
     if isinstance(system, str) and system:
         system = [{"type": "text", "text": system}]
-    system = [cc_block] + (system if isinstance(system, list) else [])
-    for block in system:
+    for block in system if isinstance(system, list) else []:
         if isinstance(block, dict) and block.get("type") == "text":
-            text = block.get("text", "")
-            for old, new in _OAUTH_SYSTEM_REPLACEMENTS:
-                text = text.replace(old, new)
-            text = _OAUTH_SLUG_PATTERN.sub("claude-code", text)
-            block["text"] = _apply_oauth_prose_aliases(text)
+            block["text"] = _apply_oauth_prose_aliases(block.get("text", ""))
     for tool in anthropic_tools or []:
         if "name" in tool:
             tool["name"] = to_wire(tool["name"])
@@ -627,7 +610,7 @@ def build_anthropic_kwargs(
         effective_max_tokens = max(context_length - 1, 1)
     to_wire = _oauth_wire_namer(anthropic_tools) if is_oauth else None
     if to_wire:
-        system = _apply_claude_code_identity(system, anthropic_tools, anthropic_messages, to_wire)
+        system = _apply_oauth_tool_names(system, anthropic_tools, anthropic_messages, to_wire)
     kwargs: Dict[str, Any] = {"model": model, "messages": anthropic_messages, "max_tokens": effective_max_tokens}
     if system:
         kwargs["system"] = system

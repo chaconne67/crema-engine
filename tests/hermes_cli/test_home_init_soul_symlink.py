@@ -43,3 +43,19 @@ def test_soul_symlink_to_customized_file_is_left_alone(tmp_path):
 
     assert soul.is_symlink()
     assert soul.read_text(encoding="utf-8") == "custom identity\n"
+
+
+def test_hermes_default_soul_becomes_cremas_and_a_written_one_stays(tmp_path):
+    """Crema: a SOUL.md still holding Hermes' seeded default is replaced by Crema's on the next start;
+    one the person wrote is never touched."""
+    from hermes_cli.default_soul import _HERMES_SOUL_MD
+
+    seeded, written = tmp_path / "seeded", tmp_path / "written"
+    for home, text in ((seeded, _HERMES_SOUL_MD.replace("\n", "\r\n") + "\r\n"), (written, "당신은 JUDY입니다.\n")):
+        home.mkdir()
+        (home / "SOUL.md").write_text(text, encoding="utf-8")
+        _ensure_default_soul_md(home)
+
+    assert (seeded / "SOUL.md").read_text(encoding="utf-8") == DEFAULT_SOUL_MD
+    assert "Hermes" not in DEFAULT_SOUL_MD and "Crema" in DEFAULT_SOUL_MD
+    assert (written / "SOUL.md").read_text(encoding="utf-8") == "당신은 JUDY입니다.\n"

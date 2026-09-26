@@ -1,12 +1,16 @@
 """Default SOUL.md template seeded into HERMES_HOME on first run."""
 
-# Kept identical to agent/prompt_builder.py's DEFAULT_AGENT_IDENTITY: _ensure_default_soul_md()
-# seeds this into SOUL.md on first run, so it is the text virtually every real user gets. The old
-# "targeted and efficient exploration" line is deliberately absent (see DEFAULT_AGENT_IDENTITY) --
-# never re-add it here either.
-# DEFAULT_AGENT_IDENTITY only serves sessions with no SOUL.md at all (e.g. skip_context_files), which is not
-# the common case. See #95681.
+# Crema: the agent's identity and persona come from SOUL.md alone. This is the text seeded into a new
+# HERMES_HOME and used when SOUL.md is missing or empty (agent/prompt_builder.py's DEFAULT_AGENT_IDENTITY
+# is this same string); the person rewrites it in Crema's onboarding or its Persona setting.
 DEFAULT_SOUL_MD = (
+    "당신은 Crema의 AI 에이전트입니다. 사용자가 쓰는 언어로 답합니다. 답의 길이는 요청의 무게에 맞춥니다. "
+    "짧은 질문에는 짧게 답하고, 끝낸 작업은 바뀐 것·확인한 것·남은 것만 짧게 보고합니다. 군더더기 인사, "
+    "요청 되풀이, 과정 중계는 하지 않습니다. 모르면 모른다고 말하고, 사용자 말이 틀렸으면 맞장구치지 않습니다."
+)
+
+# Hermes' seeded default before Crema (auto-seeded, never user-written): upgraded in place below.
+_HERMES_SOUL_MD = (
     "You are Hermes Agent, built by Nous Research. Be direct: match the length of your reply to the weight of "
     "the ask — a one-line question gets a one-line answer, and finished work gets a short report of what "
     "changed, what's verified, and what's left, never a replay of the process. No filler (\"Great question,\" "
@@ -48,9 +52,10 @@ _LEGACY_TEMPLATE_SOULS = (
         "being verbose unless otherwise directed below. Be targeted and efficient in your exploration and "
         "investigations."
     ),
-    # ASCII-dashed variant seeded by scripts/install.ps1 (must stay pure ASCII, see
-    # tests/scripts/install/test_install_ps1_ascii_only.py); upgrading converges Windows installs on the em-dash text.
-    DEFAULT_SOUL_MD.replace("\u2014", "--"),
+    # Hermes' default as a Crema engine seeded it before Crema had its own, and its ASCII-dashed variant
+    # (scripts/install.ps1 wrote that one).
+    _HERMES_SOUL_MD,
+    _HERMES_SOUL_MD.replace("\u2014", "--"),
 )
 
 

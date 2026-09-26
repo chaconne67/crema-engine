@@ -48,6 +48,10 @@ Both bind 127.0.0.1 only.
      providers were cut at first and restored on 2026-09-26)
    - `scripts/` except `run_tests_parallel.py`, upstream's per-file test runner the tests rely on for
      isolation: run the tests with `python scripts/run_tests_parallel.py`, not bare pytest
+   - the test files of removed features (every test in them failed only here, or their subject is a
+     removed feature). The tests of kept files that still check a removed feature are listed in the
+     Crema repo's `scripts/engine-tests/known-pruned-failures.txt`, which the engine test comparison
+     (`.github/workflows/engine-tests.yml` there) reports apart from new failures
 
 Kept code still mentions many removed features (browser, memory, delegation, …) through imports that
 are either lazy or guarded; those modules stay until the code that names them is gone.

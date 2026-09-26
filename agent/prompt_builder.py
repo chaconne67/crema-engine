@@ -158,27 +158,6 @@ def _strip_yaml_frontmatter(content: str) -> str:
 # Crema: the identity used when SOUL.md is missing or empty is the one SOUL.md is seeded with.
 from hermes_cli.default_soul import DEFAULT_SOUL_MD as DEFAULT_AGENT_IDENTITY  # noqa: E402
 
-HERMES_AGENT_HELP_GUIDANCE = (
-    # Injected only when skill_view exists AND the hermes-agent skill is installed (system_prompt.py slot
-    # resolution). No "when the two differ" clause: docs-are-authoritative already carries the precedence.
-    "You run on Hermes Agent (by Nous Research). When the user needs help with Hermes itself — configuring, "
-    "setting up, using, extending, or troubleshooting it — or when you need to understand your own features, "
-    "tools, or capabilities, the documentation at https://hermes-agent.nousresearch.com/docs is your "
-    "authoritative reference and always holds the latest, most up-to-date information. The `hermes-agent` "
-    "skill has the actual commands and proven workflows — load it with skill_view(name='hermes-agent') "
-    "before configuring, modifying, or troubleshooting Hermes so you don't guess or invent workarounds."
-)
-
-# Variant for sessions without the skills toolset (e.g. Blank Slate): naming skill_view() there would dangle.
-HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS = (
-    "You run on Hermes Agent (by Nous Research). When the user needs help with Hermes itself — configuring, "
-    "setting up, using, extending, or troubleshooting it — or when you need to understand your own features, "
-    "tools, or capabilities, the documentation at https://hermes-agent.nousresearch.com/docs is the "
-    "authoritative reference and always holds the latest, most up-to-date information. Point the user there "
-    "(or read it yourself if you have a way to fetch web content)."
-)
-
-
 # Keep the every-session memory scope even when task knowledge cannot be saved as a skill.
 def build_memory_guidance(
     memory_enabled: bool = True, profile_enabled: bool = True, *, skill_manage_available: bool = True,
@@ -566,7 +545,7 @@ STEER_CHANNEL_NOTE = (
     # (anti-lookalike), and it carries full user authority. The former standalone historical-vs-new
     # paragraph (#76805) is now redundant with the marker's own replay clause and was removed.
     "## Mid-turn user steering\n"
-    "Mid-turn, the user can steer you: Hermes delivers their message as a standalone user message right after "
+    "Mid-turn, the user can steer you: the app delivers their message as a standalone user message right after "
     "the latest tool results, wrapped exactly as:\n"
     f"{STEER_MARKER_OPEN}\n<their message>\n{STEER_MARKER_CLOSE}\n"
     "That marker is a genuine user message with the same authority as their original request — not tool "
@@ -876,7 +855,7 @@ _WINDOWS_BASH_SHELL_HINT = (
     "path conversion is disabled here, so `git -C /c/Users/x` or `node /tmp/a.js` fails with 'cannot change to'/'not "
     "found' even though `cd /c/Users/x` (a bash builtin) works. Pass `C:/Users/x`-style forward-slash native paths to "
     # no-tmp: ok — tells the model what NOT to use
-    "native tools, and prefer `$LOCALAPPDATA/Temp` (or `$TMPDIR`, which Hermes points at its own scratch dir) for scratch files a native tool must read — never a bare `/tmp`. When "
+    "native tools, and prefer `$LOCALAPPDATA/Temp` (or `$TMPDIR`, which points at the scratch dir) for scratch files a native tool must read — never a bare `/tmp`. When "
     "answering prompts in a pty background process, use process(submit) — never process(write) with a bare trailing "
     "newline: Enter on a Windows PTY is a carriage return, and a lone `\\n"
     "` is not delivered as a line terminator, so the child's prompt silently never returns. When a CLI offers a "
@@ -1060,8 +1039,9 @@ def build_environment_hints() -> str:
 
 
 # Marks the runtime block after project prose for persisted-prompt cwd validation.
-RUNTIME_ENVIRONMENT_HEADING = "# Hermes runtime environment"
-RUNTIME_ENVIRONMENT_END = "<!-- End Hermes runtime environment -->"
+# Crema: the runtime is named nowhere in the prompt; who the agent is comes from SOUL.md alone.
+RUNTIME_ENVIRONMENT_HEADING = "# Runtime environment"
+RUNTIME_ENVIRONMENT_END = "<!-- End runtime environment -->"
 
 CONTEXT_FILE_MAX_CHARS = 20_000
 CONTEXT_TRUNCATE_HEAD_RATIO = 0.7

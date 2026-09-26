@@ -2,8 +2,6 @@
 session can't call (Blank Slate audit, Aug 2026).
 
 Covers:
-  * HERMES_AGENT_HELP_GUIDANCE degrades to the docs-only variant when the
-    skill tools aren't loaded.
   * execution_guidance_text() never names a web tool (guidance is toolset-neutral).
   * The coding operating brief drops the `todo` sentence when the todo tool
     isn't loaded.

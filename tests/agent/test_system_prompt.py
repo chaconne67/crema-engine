@@ -395,7 +395,7 @@ class TestNamedProfileHintIntegration:
         with patch("agent.coding_context._coding_mode", return_value="off"):
             prompt = "\n\n".join(_prompt_parts(agent).values())
 
-        assert "Active Hermes profile: coder." in prompt
+        assert "Active profile: coder." in prompt
         assert f"reads and writes {profile_home}/." in prompt
         # The doubled form must not appear anywhere.
         assert f"{profile_home}/profiles/coder" not in prompt
@@ -420,7 +420,7 @@ class TestNamedProfileHintIntegration:
         with patch("agent.coding_context._coding_mode", return_value="off"):
             prompt = "\n\n".join(_prompt_parts(agent).values())
 
-        assert "Active Hermes profile: default." in prompt
+        assert "Active profile: default." in prompt
         assert f"under {root}/profiles/<name>/." in prompt
 
 
@@ -446,8 +446,6 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
         _parallel_tool_call_guidance=False,
     )
     monkeypatch.setattr(system_prompt, "DEFAULT_AGENT_IDENTITY", "IDENTITY")
-    monkeypatch.setattr(system_prompt, "HERMES_AGENT_HELP_GUIDANCE", "HELP")
-    monkeypatch.setattr(system_prompt, "HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS", "HELP")
     monkeypatch.setattr(system_prompt, "STEER_CHANNEL_NOTE", "STEER")
     monkeypatch.setattr(system_prompt, "get_hermes_home", lambda: Path("/hermes"))
 
@@ -456,7 +454,7 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
     # build the expectation the same way instead of hardcoding "/hermes".
     _home_str = str(Path("/hermes"))
     expected_profile = (
-        "Active Hermes profile: default. Other profiles (if any) live "
+        "Active profile: default. Other profiles (if any) live "
         f"under {_home_str}/profiles/<name>/. Each profile has its own skills/, "
         "plugins/, cron/, and memories/ that affect a different session than "
         "this one. Do not modify another profile's skills/plugins/cron/memories "
@@ -464,7 +462,6 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
     )
     expected = "\n\n".join((
         "IDENTITY",
-        "HELP",
         "STEER",
         "CODING_STABLE",
         "SYSTEM_MESSAGE",
@@ -493,7 +490,7 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
         prompt = build_system_prompt(agent, system_message="SYSTEM_MESSAGE")
 
     assert prompt == expected
-    assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:4])
+    assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:3])
 
 
 class TestTelegramRichMessagesHint:
@@ -812,8 +809,6 @@ def test_conversation_start_uses_session_start_not_build_time(monkeypatch):
         session_id="20260101_120000_abc123",
     )
     monkeypatch.setattr(system_prompt, "DEFAULT_AGENT_IDENTITY", "IDENTITY")
-    monkeypatch.setattr(system_prompt, "HERMES_AGENT_HELP_GUIDANCE", "HELP")
-    monkeypatch.setattr(system_prompt, "HERMES_AGENT_HELP_GUIDANCE_NO_SKILLS", "HELP")
     monkeypatch.setattr(system_prompt, "STEER_CHANNEL_NOTE", "STEER")
     monkeypatch.setattr(system_prompt, "get_hermes_home", lambda: Path("/hermes"))
 

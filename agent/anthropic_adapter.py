@@ -530,15 +530,21 @@ def _oauth_wire_namer(anthropic_tools: List[Dict[str, Any]]):
     return to_wire
 
 
+# A Claude subscription (OAuth) serves only Haiku without this first system block: every other model
+# answers 429 (checked 2026-09-26). It is the one line kept; the agent's name and persona still come
+# from SOUL.md, and nothing in the prompt is renamed.
+_CLAUDE_CODE_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
+
+
 def _apply_oauth_tool_names(system, anthropic_tools, anthropic_messages, to_wire):
-    """OAuth tool naming: tool/description aliasing, the same aliases in the system prose that names
-    those tools, and the same tool renames on replayed tool_use blocks so history matches ``tools[]``.
-    Crema: nothing here touches identity — no Claude Code prefix, no product-name rewriting; who the
-    agent is comes from SOUL.md alone, whatever the model. Returns the new ``system``; tools and
-    messages are mutated in place."""
+    """OAuth request shape: the Claude Code first block, tool/description aliasing, the same aliases in
+    the system prose that names those tools, and the same tool renames on replayed tool_use blocks so
+    history matches ``tools[]``. The caller's system prompt is otherwise sent as written. Returns the
+    new ``system``; tools and messages are mutated in place."""
     if isinstance(system, str) and system:
         system = [{"type": "text", "text": system}]
-    for block in system if isinstance(system, list) else []:
+    system = [{"type": "text", "text": _CLAUDE_CODE_SYSTEM_PREFIX}] + (system if isinstance(system, list) else [])
+    for block in system[1:]:
         if isinstance(block, dict) and block.get("type") == "text":
             block["text"] = _apply_oauth_prose_aliases(block.get("text", ""))
     for tool in anthropic_tools or []:

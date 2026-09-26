@@ -1778,9 +1778,10 @@ class TestFinalPayloadHasNoBlankTextBlocks:
         assert len(image_blocks) == 1
 
 
-def test_oauth_system_prompt_keeps_the_callers_identity():
-    """Crema: a subscription (OAuth) request carries the system prompt as written — no Claude Code
-    prefix and no product-name rewriting; the agent's identity comes from SOUL.md alone."""
+def test_oauth_system_prompt_is_sent_as_written_after_the_claude_code_line():
+    """Crema: a subscription (OAuth) request gets the Claude Code first block a Claude subscription
+    needs for any model but Haiku, and the caller's system prompt as written — nothing renamed, so
+    the agent's name and persona come from SOUL.md."""
     prompt = "You are Crema. Hermes Agent by Nous Research uses hermes-agent skills; built by hermes-agent."
     kwargs = build_anthropic_kwargs(
         model="claude-sonnet-4-20250514",
@@ -1791,8 +1792,22 @@ def test_oauth_system_prompt_keeps_the_callers_identity():
         is_oauth=True,
     )
 
-    assert [block["text"] for block in kwargs["system"]] == [prompt]
-    assert "Claude Code" not in str(kwargs)
+    assert [block["text"] for block in kwargs["system"]] == [
+        "You are Claude Code, Anthropic's official CLI for Claude.", prompt,
+    ]
+
+
+def test_api_key_request_has_no_claude_code_line():
+    kwargs = build_anthropic_kwargs(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "system", "content": "You are Crema."}, {"role": "user", "content": "Hi"}],
+        tools=None,
+        max_tokens=4096,
+        reasoning_config=None,
+        is_oauth=False,
+    )
+
+    assert "Claude Code" not in str(kwargs.get("system"))
 
 
 def test_unsupported_inline_image_subtype_downgrades_to_text_for_anthropic(monkeypatch):

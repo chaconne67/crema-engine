@@ -1404,12 +1404,23 @@ def _anthropic_catalog(normalized: str, force_refresh: bool) -> list[str]:
         cfg_base_url = str(model_cfg.get("base_url", "") or "").strip()
         cfg_api_key = str(model_cfg.get("api_key", "") or "").strip()
     live = _fetch_anthropic_models(base_url=cfg_base_url or None, api_key=cfg_api_key or None)
-    curated = list(_PROVIDER_MODELS.get("anthropic", []))
-    if not live:
-        return curated
-    # The live /v1/models dump lags newly-routed curated aliases (reachable before enumerated):
-    # curated first, then live-only extras, so a fresh curated model never disappears.
-    return live if cfg_base_url else _merge_unique(curated, live)
+    # Crema: the account's own /v1/models list, so a new model appears with no catalog edit; the
+    # curated list only while it cannot be fetched. Strongest first (_anthropic_rank).
+    return sorted(live or _PROVIDER_MODELS.get("anthropic", []), key=_anthropic_rank)
+
+
+# Crema: Claude families, strongest first; a family not listed follows them.
+_ANTHROPIC_FAMILIES = ("fable", "opus", "sonnet", "haiku")
+
+
+def _anthropic_rank(model_id: str) -> tuple:
+    """Sort key: family (_ANTHROPIC_FAMILIES), then the higher version first
+    (claude-opus-4-5-20251101 → 4.5; the date is not a version)."""
+    parts = re.split(r"[-.]", str(model_id).lower())
+    family = next((name for name in _ANTHROPIC_FAMILIES if name in parts), None)
+    rank = _ANTHROPIC_FAMILIES.index(family) if family else len(_ANTHROPIC_FAMILIES)
+    version = [int(part) for part in parts if part.isdigit() and len(part) < 4][:3]
+    return (rank, *(-number for number in version + [0] * (3 - len(version))))
 
 
 def _openai_catalog(normalized: str, force_refresh: bool) -> Optional[list[str]]:

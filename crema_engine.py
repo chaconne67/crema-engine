@@ -79,7 +79,8 @@ async def main() -> None:
     async def knowledge_list(type: str = ""):
         store = KnowledgeStore.open()
         pages = await asyncio.to_thread(store.list, type or None)
-        return {"pages": pages, "last_daily": store.maintenance_value("last_daily")}
+        return {"pages": pages, "last_daily": store.maintenance_value("last_daily"),
+                "meaning": await asyncio.to_thread(store.vector_status)}
 
     def knowledge_call(fn, *args, **kwargs):
         try:
@@ -237,7 +238,9 @@ def daily_once(api, now: float = None) -> dict:
 
 def index_past_chats() -> None:
     """Index the chats saved before the Korean/CJK two-letter search index existed; new messages are
-    indexed as they are saved. Until this finishes, short CJK searches scan the chats instead."""
+    indexed as they are saved. Until this finishes, short CJK searches scan the chats instead. Then
+    give knowledge pages written before meaning search (or under another model) their vectors; until
+    then the notebook finds them by words."""
     from hermes_state import SessionDB
 
     try:
@@ -249,6 +252,12 @@ def index_past_chats() -> None:
             db.close()
     except Exception:
         logging.getLogger(__name__).warning("indexing past chats failed", exc_info=True)
+    try:
+        from agent.knowledge_store import KnowledgeStore
+
+        KnowledgeStore.open().fill_vectors()
+    except Exception:
+        logging.getLogger(__name__).warning("knowledge vectors backfill failed", exc_info=True)
 
 
 if __name__ == "__main__":

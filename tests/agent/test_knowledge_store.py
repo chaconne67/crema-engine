@@ -1,11 +1,13 @@
-"""Crema knowledge store: GBrain's page model and hybrid keyword ranking on SQLite."""
+"""Crema knowledge store: GBrain's page model and hybrid keyword and meaning ranking on SQLite."""
 import shutil
 import subprocess
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+from agent import knowledge_embed
 from agent.knowledge_store import KnowledgeStore, chunk_text, extract_links, slugify
 
 REPO = Path(__file__).resolve().parent.parent.parent
@@ -121,3 +123,76 @@ def test_status_weights_and_maintenance(store, monkeypatch):
     report = store.maintain()
     assert report["purged"] == 1 and report["needs_review"] == 1
     assert store.get("reference/새-주소")["status"] == "needs_review"
+
+
+class FakeEmbedder:
+    """Meaning by concept groups, so a question in other words lands on the right page."""
+    GROUPS = (("프린터", "인쇄", "출력"), ("와이파이", "무선", "인터넷"), ("세금", "부가세", "신고"))
+
+    def __init__(self, fail=False):
+        self.fail, self.calls = fail, 0
+
+    def encode(self, texts, kind="passage"):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("model broke")
+        out = np.full((len(texts), len(self.GROUPS) + 1), 0.01, dtype=np.float32)
+        for i, text in enumerate(texts):
+            for g, words in enumerate(self.GROUPS):
+                out[i, g] += sum(text.count(w) for w in words)
+        return out / np.linalg.norm(out, axis=1, keepdims=True)
+
+
+@pytest.fixture()
+def meaning(monkeypatch):
+    def use(embedder):
+        knowledge_embed.set_embedder(embedder)
+        return embedder
+    yield use
+    knowledge_embed.set_embedder(None)
+
+
+def _two_pages(store):
+    store.write("incident/프린터", title="사무실 프린터 인쇄 안 됨", body="스풀러를 다시 시작해 해결.", sources=["t"])
+    store.write("incident/와이파이", title="노트북 와이파이 끊김", body="어댑터 절전을 꺼서 해결.", sources=["t"])
+
+
+def test_meaning_finds_a_question_in_other_words(store, meaning):
+    meaning(FakeEmbedder())
+    _two_pages(store)
+    assert store.vector_status()["vectors"] == store.vector_status()["chunks"] == 2
+    top = store.search(["출력 문제"])[0]
+    assert top["slug"] == "incident/프린터" and top["evidence"] == "meaning" and "프린터" in top["snippet"]
+    assert store.search(["출력 문제"], type_="feedback") == []
+
+
+def test_deleted_pages_leave_meaning_search_and_undo_brings_them_back(store, meaning):
+    meaning(FakeEmbedder())
+    _two_pages(store)
+    store.search(["출력 문제"])  # vectors cached
+    store.delete("incident/프린터")
+    assert "incident/프린터" not in [r["slug"] for r in store.search(["출력 문제"])]
+    store.undo("incident/프린터")
+    assert store.search(["출력 문제"])[0]["slug"] == "incident/프린터"
+
+
+def test_without_a_working_model_words_still_work_and_vectors_fill_later(store, meaning):
+    meaning(FakeEmbedder(fail=True))
+    _two_pages(store)
+    assert store.vector_status()["vectors"] == 0
+    assert store.search(["프린터"])[0]["slug"] == "incident/프린터"
+    assert store.search(["출력 문제"]) == []
+    good = meaning(FakeEmbedder())
+    assert store.fill_vectors() == 2
+    assert store.search(["출력 문제"])[0]["slug"] == "incident/프린터"
+    good.calls = 0
+    assert store.fill_vectors() == 0 and good.calls == 0
+
+
+def test_no_model_means_keyword_search(store, meaning, monkeypatch):
+    monkeypatch.delenv("CREMA_EMBED_MODEL", raising=False)
+    knowledge_embed.set_embedder(None)
+    _two_pages(store)
+    assert store.vector_status() == {"on": False, "chunks": 2, "vectors": 0}
+    assert store.fill_vectors() == 0
+    assert store.search(["와이파이"])[0]["evidence"] in ("title", "keyword")

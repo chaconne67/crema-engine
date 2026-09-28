@@ -4,12 +4,14 @@ state.db. The method is GBrain's (github.com/garrytan/gbrain, MIT, e78f1c3 v0.59
 with a compiled body and a dated timeline, whole-page writes that keep the previous version, content
 hashes, soft delete, CJK-aware chunks, links extracted by rule, and hybrid ranking with reciprocal rank
 fusion (src/core/search/hybrid.ts). Crema stores it in SQLite and ranks two keyword indexes (the
-cjk_unicode61 tokenizer and trigram) where GBrain adds a vector index.
+cjk_unicode61 tokenizer and trigram) and, when the local model is there (agent/knowledge_embed.py),
+chunk vectors compared in numpy — GBrain's vector index.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
 import sqlite3
@@ -18,6 +20,10 @@ import time
 import unicodedata
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+
+from agent import knowledge_embed as embed
+
+logger = logging.getLogger(__name__)
 
 # Kinds of page, by slug prefix as in GBrain (the prefix is what classifies a page).
 TYPES = ("project", "incident", "feedback", "reference", "decision")
@@ -30,6 +36,10 @@ PURGE_AFTER_S = 72 * 3600  # GBrain soft delete window
 STALE_AFTER_S = 90 * 86400  # not confirmed for this long -> needs review
 CHUNK_WORDS, CHUNK_OVERLAP = 300, 50  # GBrain chunkers/recursive.ts
 _STATUS_WEIGHT = {"active": 1.0, "needs_review": 0.8, "superseded": 0.5}
+# The meaning list's weight in the fusion, against 1 for each keyword list: the smallest weight within a
+# point of the best top-3 on the Korean workbook (tests/agent/test_knowledge_meaning_quality.py: words
+# only 59%, 1 -> 69%, 4 -> 77%, 20 -> 86%, 50 -> 87%), so exact words still break close calls.
+VECTOR_WEIGHT = 20.0
 
 _CJK = re.compile(r"[ᄀ-ᇿ぀-ヿ㄰-㆏㐀-䶿一-鿿가-힯]")
 _WIKI_LINK = re.compile(r"\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]")
@@ -54,6 +64,7 @@ CREATE TABLE IF NOT EXISTS chunks (
   id INTEGER PRIMARY KEY, page_id INTEGER NOT NULL, idx INTEGER NOT NULL, text TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS distilled (session_id TEXT PRIMARY KEY, messages INTEGER NOT NULL, at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS maintenance (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS chunk_vectors (chunk_id INTEGER PRIMARY KEY, model TEXT NOT NULL, vec BLOB NOT NULL);
 """
 
 
@@ -177,6 +188,7 @@ class KnowledgeStore:
         """)
         if not existing or word not in existing[0]:
             self.conn.execute("INSERT INTO chunks_word(chunks_word) VALUES ('rebuild')")
+        self._vectors = None  # (page ids, page types, chunk ids, matrix) of live pages, loaded on search
 
     # -- writing -------------------------------------------------------------------------
 
@@ -242,16 +254,115 @@ class KnowledgeStore:
         for chunk in old:
             for table in ("chunks_word", "chunks_tri"):
                 self.conn.execute(f"INSERT INTO {table}({table}, rowid, text) VALUES ('delete', ?, ?)", (chunk["id"], chunk["text"]))
+            self.conn.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk["id"],))
         self.conn.execute("DELETE FROM chunks WHERE page_id = ?", (page_id,))
         timeline = "\n".join(f"{r['date']} {r['summary']}" for r in self.conn.execute(
             "SELECT date, summary FROM timeline WHERE page_id = ? ORDER BY date", (page_id,)))
+        new = []
         for idx, text in enumerate(chunk_text(f"{title}\n\n{body}") + chunk_text(timeline)):
             chunk_id = self.conn.execute("INSERT INTO chunks (page_id, idx, text) VALUES (?, ?, ?)", (page_id, idx, text)).lastrowid
             for table in ("chunks_word", "chunks_tri"):
                 self.conn.execute(f"INSERT INTO {table}(rowid, text) VALUES (?, ?)", (chunk_id, text))
+            new.append((chunk_id, text))
+        self._store_vectors(new)
         self.conn.execute("DELETE FROM links WHERE from_id = ?", (page_id,))
         for target in extract_links(body):
             self.conn.execute("INSERT OR IGNORE INTO links (from_id, to_slug) VALUES (?, ?)", (page_id, target))
+
+    def _store_vectors(self, chunks: List[tuple]) -> int:
+        """Meaning vectors for (chunk id, text) pairs still as given; nothing when the model is not
+        there or fails — the page stays findable by words and fill_vectors() tries again."""
+        self._vectors = None
+        embedder = embed.get_embedder()
+        if embedder is None or not chunks:
+            return 0
+        try:
+            vectors = embedder.encode([text for _, text in chunks], "passage")
+        except Exception as exc:
+            logger.warning("knowledge vectors not computed: %s", exc)
+            return 0
+        stored = 0
+        for (chunk_id, text), vector in zip(chunks, vectors):
+            stored += self.conn.execute(
+                "INSERT OR REPLACE INTO chunk_vectors (chunk_id, model, vec) SELECT ?, ?, ?"
+                " WHERE EXISTS (SELECT 1 FROM chunks WHERE id = ? AND text = ?)",
+                (chunk_id, embed.MODEL_ID, vector.astype("float32").tobytes(), chunk_id, text)).rowcount
+        return stored
+
+    def fill_vectors(self, batch: int = 64) -> int:
+        """Background backfill: vectors for chunks that have none or another model's, a batch at a
+        time with the model run outside the lock. Returns how many were stored."""
+        with self.lock:
+            if not self.conn.execute(
+                    "SELECT 1 FROM chunks c LEFT JOIN chunk_vectors v ON v.chunk_id = c.id"
+                    " WHERE v.chunk_id IS NULL OR v.model != ? LIMIT 1", (embed.MODEL_ID,)).fetchone():
+                return 0  # all there: the model is not loaded for nothing
+        embedder = embed.get_embedder()
+        if embedder is None:
+            return 0
+        total = 0
+        while True:
+            with self.lock:
+                missing = [(r[0], r[1]) for r in self.conn.execute(
+                    "SELECT c.id, c.text FROM chunks c LEFT JOIN chunk_vectors v ON v.chunk_id = c.id"
+                    " WHERE v.chunk_id IS NULL OR v.model != ? LIMIT ?", (embed.MODEL_ID, batch))]
+            if not missing:
+                return total
+            try:
+                vectors = embedder.encode([text for _, text in missing], "passage")
+            except Exception as exc:
+                logger.warning("knowledge vector backfill stopped: %s", exc)
+                return total
+            with self.lock:
+                for (chunk_id, text), vector in zip(missing, vectors):
+                    total += self.conn.execute(
+                        "INSERT OR REPLACE INTO chunk_vectors (chunk_id, model, vec) SELECT ?, ?, ?"
+                        " WHERE EXISTS (SELECT 1 FROM chunks WHERE id = ? AND text = ?)",
+                        (chunk_id, embed.MODEL_ID, vector.astype("float32").tobytes(), chunk_id, text)).rowcount
+                self._vectors = None
+
+    def vector_status(self) -> Dict[str, Any]:
+        """For the settings screen: whether meaning search is on and how much of the notebook it covers."""
+        with self.lock:
+            chunks = self.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+            done = self.conn.execute("SELECT COUNT(*) FROM chunk_vectors WHERE model = ?", (embed.MODEL_ID,)).fetchone()[0]
+        return {"on": embed.available(), "chunks": chunks, "vectors": done}
+
+    def _vector_hits(self, queries: List[str], type_: Optional[str]) -> List[List[tuple]]:
+        """Per query, (page id, chunk text) by meaning, best chunk per page, up to 60 pages."""
+        embedder = embed.get_embedder()
+        if embedder is None:
+            return []
+        import numpy as np
+        if self._vectors is None:
+            rows = self.conn.execute(
+                "SELECT c.id, c.page_id, p.type, v.vec FROM chunk_vectors v JOIN chunks c ON c.id = v.chunk_id"
+                " JOIN pages p ON p.id = c.page_id WHERE p.deleted_at IS NULL AND v.model = ?",
+                (embed.MODEL_ID,)).fetchall()
+            matrix = (np.frombuffer(b"".join(r[3] for r in rows), dtype=np.float32).reshape(len(rows), -1)
+                      if rows else np.zeros((0, 1), dtype=np.float32))
+            self._vectors = (np.array([r[1] for r in rows]), [r[2] for r in rows], [r[0] for r in rows], matrix)
+        page_ids, types, chunk_ids, matrix = self._vectors
+        if not len(chunk_ids):
+            return []
+        try:
+            query_vectors = embedder.encode(queries, "query")
+        except Exception as exc:
+            logger.warning("knowledge meaning search skipped: %s", exc)
+            return []
+        hits = []
+        for sims in query_vectors @ matrix.T:
+            ranked, seen = [], set()
+            for i in np.argsort(-sims):
+                page_id = int(page_ids[i])
+                if page_id in seen or (type_ and types[i] != type_):
+                    continue
+                seen.add(page_id)
+                ranked.append((page_id, chunk_ids[i]))
+                if len(ranked) == 60:
+                    break
+            hits.append(ranked)
+        return hits
 
     def add_timeline(self, slug: str, summary: str, *, date: Optional[str] = None, source: str = "") -> Dict[str, Any]:
         """One dated line under a page (GBrain timeline); the same line twice is kept once."""
@@ -285,6 +396,7 @@ class KnowledgeStore:
         with self.lock:
             row = self._live(slug)
             self.conn.execute("UPDATE pages SET deleted_at = ? WHERE id = ?", (time.time(), row["id"]))
+            self._vectors = None
         return {"slug": row["slug"], "result": "deleted"}
 
     def undo(self, slug: str) -> Dict[str, Any]:
@@ -295,6 +407,7 @@ class KnowledgeStore:
             row = self.conn.execute("SELECT * FROM pages WHERE slug = ?", (slug,)).fetchone()
             if row is None:
                 raise ValueError(f"no page {slug}")
+            self._vectors = None
             if row["deleted_at"] is not None:
                 self.conn.execute("UPDATE pages SET deleted_at = NULL WHERE id = ?", (row["id"],))
                 return {"slug": slug, "result": "restored"}
@@ -357,15 +470,22 @@ class KnowledgeStore:
                 f"SELECT * FROM pages WHERE {' AND '.join(where)} ORDER BY updated_at DESC", args)]
 
     def search(self, queries: List[str], limit: int = 8, type_: Optional[str] = None) -> List[Dict[str, Any]]:
-        """GBrain's hybrid ranking over keyword lists: per query a word list (cjk_unicode61 BM25) and a
-        substring list (trigram BM25), fused by reciprocal rank (k=60); then title-phrase, backlink and
-        status weights; an exact slug or title goes first. Best chunk per page."""
+        """GBrain's hybrid ranking: per query a word list (cjk_unicode61 BM25), a substring list
+        (trigram BM25) and, with the model, a meaning list (cosine over chunk vectors, weighted
+        VECTOR_WEIGHT), fused by reciprocal rank (k=60); then title-phrase, backlink and status
+        weights; an exact slug or title goes first. Best chunk per page."""
         queries = [q.strip() for q in queries if q and q.strip()][:3]
         if not queries:
             return []
         with self.lock:
             fused: Dict[int, float] = {}
             best: Dict[int, tuple] = {}
+            meaning_chunk: Dict[int, int] = {}
+            for ranked in self._vector_hits(queries, type_):
+                for position, (page_id, chunk_id) in enumerate(ranked):
+                    fused[page_id] = fused.get(page_id, 0.0) + VECTOR_WEIGHT / (RRF_K + position + 1)
+                    meaning_chunk.setdefault(page_id, chunk_id)
+            meaning_only = set(fused)
             for query in queries:
                 terms = _TOKEN.findall(query.lower())
                 if not terms:
@@ -388,6 +508,7 @@ class KnowledgeStore:
                         if row["page_id"] in seen_pages:
                             continue
                         seen_pages.add(row["page_id"])
+                        meaning_only.discard(row["page_id"])
                         fused[row["page_id"]] = fused.get(row["page_id"], 0.0) + 1.0 / (RRF_K + position + 1)
                         if row["page_id"] not in best:
                             best[row["page_id"]] = (row["snip"], table)
@@ -414,10 +535,13 @@ class KnowledgeStore:
                 score *= 1 + 0.05 * math.log(1 + backlinks)
                 score *= _STATUS_WEIGHT.get(meta.get("status", "active"), 1.0)
                 evidence = "exact" if page_id in exact else ("title" if any(q.lower() in title for q in queries)
-                                                            else "keyword")
+                                                            else "meaning" if page_id in meaning_only else "keyword")
+                snippet = best.get(page_id, (None,))[0]
+                if snippet is None and page_id in meaning_chunk:
+                    snippet = self.conn.execute("SELECT text FROM chunks WHERE id = ?", (meaning_chunk[page_id],)).fetchone()[0][:160]
                 page = self._page(row, full=False)
                 page.update({"score": round(score + (10 if page_id in exact else 0), 4), "evidence": evidence,
-                             "snippet": (best.get(page_id) or (row["body"][:160],))[0]})
+                             "snippet": snippet or row["body"][:160]})
                 results.append(page)
             results.sort(key=lambda p: p["score"], reverse=True)
             results = results[:limit]
@@ -445,6 +569,7 @@ class KnowledgeStore:
                 for chunk in self.conn.execute("SELECT id, text FROM chunks WHERE page_id = ?", (page_id,)).fetchall():
                     for table in ("chunks_word", "chunks_tri"):
                         self.conn.execute(f"INSERT INTO {table}({table}, rowid, text) VALUES ('delete', ?, ?)", (chunk["id"], chunk["text"]))
+                    self.conn.execute("DELETE FROM chunk_vectors WHERE chunk_id = ?", (chunk["id"],))
                 for table in ("chunks", "timeline", "page_versions"):
                     self.conn.execute(f"DELETE FROM {table} WHERE page_id = ?", (page_id,))
                 self.conn.execute("DELETE FROM links WHERE from_id = ?", (page_id,))

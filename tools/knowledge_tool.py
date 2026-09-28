@@ -1,7 +1,7 @@
 """Crema knowledge tools: the agent's work notebook (agent/knowledge_store.py), used the way the
 founder's agents use GBrain — search before working, write what was learned after.
 
-knowledge_search — hybrid keyword search; takes the question plus up to two rephrasings (GBrain's
+knowledge_search — hybrid keyword and meaning search; takes the question plus up to two rephrasings (GBrain's
     query expansion, written by the agent itself so no extra model call); in the balanced and
     thorough modes the top results are reranked by the auxiliary model (GBrain's reranker).
 knowledge_get — one page: body, dated timeline, links and backlinks.

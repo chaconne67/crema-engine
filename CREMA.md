@@ -64,6 +64,12 @@ Both bind 127.0.0.1 only.
      memory instead of every tenth turn
    - `crema_engine.py`: the notebook routes, `distill` (the background review on one chat, focused on
      the notebook, with the knowledge tools admitted through `extra_tools`) and the daily pass
+   - meaning search (GBrain's vector index, run locally): `agent/knowledge_embed.py` (Crema's int8
+     KoEn-E5-Tiny under `CREMA_EMBED_MODEL`, onnxruntime + tokenizers + numpy in the `crema` extra),
+     chunk vectors in `knowledge.db`, a weighted meaning list in the fusion, words only without the
+     model; `crema_engine.py` fills missing vectors at start; the quality floor
+     `tests/agent/test_knowledge_meaning_quality.py` on `tests/fixtures/knowledge_eval_ko.json` runs when
+     `CREMA_TEST_EMBED_MODEL` names the model (the Crema engine test workflow downloads it)
 10. Removed (not used by the engine; nothing kept imports them):
    - top level: `apps/ website/` (except `website/static/api/model-catalog.json`) `ui-tui/ web/ skills/ optional-skills/
      optional-mcps/ plugin-catalog/ evals/ scripts/ docker/ nix/ native/ (except native/fts5_cjk/) tests-js/ contributors/`,

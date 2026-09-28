@@ -206,7 +206,8 @@ uvloop = [
 anthropic = ["anthropic==0.87.0"]  # CVE-2026-34450, CVE-2026-34452
 # Crema: everything the bundled engine needs beyond the core (run API server, Claude). It runs with
 # lazy installs off, so a feature Crema adopts must add its packages here.
-crema = ["hermes-agent[anthropic]", "aiohttp==3.14.3"]
+# Meaning search in the knowledge notebook (agent/knowledge_embed.py): the local embedding model.
+crema = ["hermes-agent[anthropic]", "aiohttp==3.14.3", "onnxruntime==1.30.0", "tokenizers==0.23.2", "numpy==2.5.3"]
 # Web search backends — each only loaded when the user picks it as their
 # search provider (configured via `hermes tools` or config.yaml).
 exa = ["exa-py==2.10.2"]

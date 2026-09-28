@@ -31,7 +31,7 @@ Both bind 127.0.0.1 only.
 | Area | Kept | How it is chosen |
 |---|---|---|
 | Tools | files, terminal/process, todo, web search/extract, image understanding, memory, past-chat search, skills (the agent writes and improves them) | `hermes-api-server` in `toolsets.py` |
-| Knowledge notebook | pages of what the agent learned working with the user, searched before work and written after (the method of GBrain, below); a quiet chat is distilled into it, and once a day while Crema is quiet the notebook is tidied | `knowledge` in `toolsets.py` (in `_HERMES_CORE_TOOLS`, so never deferred); `knowledge.search_mode` light/balanced/thorough, `knowledge.nightly` |
+| Knowledge notebook | pages of what the agent learned working with the user, searched before work and written after (the method of GBrain, below); a quiet chat is distilled into it, and once a day while Crema is quiet the notebook is tidied | `knowledge` in `toolsets.py` (a direct surface in `tools/tool_search.py`, so never deferred); `knowledge.search_mode` light/balanced/thorough, `knowledge.nightly` |
 | Past-chat search in Korean/CJK | the `cjk_unicode61` tokenizer (`native/fts5_cjk/`), built by Crema as `fts5_cjk.dll` and named in `HERMES_FTS5_CJK_SO`; chats saved before it are indexed when the engine starts | `crema_engine.py` |
 | Providers | every upstream provider that needs no extra package (Bedrock needs boto3 and Vertex google-auth, so both are left out) | provider plugins kept below; the Crema app hides only `moa` and `claude-code` |
 | Logins | only those made in Crema: other programs' logins (Claude Code, Codex CLI, GitHub CLI) are never borrowed | `auth.adopt_external_logins` default |
@@ -56,7 +56,8 @@ Both bind 127.0.0.1 only.
    - new: `agent/knowledge_store.py` (SQLite `knowledge.db`), `tools/knowledge_tool.py` (the tools and
      the always-on instructions), `tests/agent/test_knowledge_*.py`, `tests/tools/test_knowledge_tool.py`,
      `tests/test_crema_engine_knowledge.py`
-   - `toolsets.py`: the `knowledge` toolset, in `hermes-api-server` and `_HERMES_CORE_TOOLS`
+   - `toolsets.py`: the `knowledge` toolset, in `hermes-api-server`; `tools/tool_search.py`: `knowledge` is a
+     direct surface (never deferred behind tool_search)
    - `agent/system_prompt.py`: the notebook's instructions in the tool guidance when its tools are loaded
    - `tools/memory_tool.py`, `agent/background_review.py`: memories in the language the user writes in
    - `hermes_cli/config_defaults.py`: `memory.nudge_interval` 0 — a quiet chat's distillation reviews

@@ -23,7 +23,6 @@ _HERMES_CORE_TOOLS = [
     "browser_exec",  # replaces the other browser tools when browser.backend is "browser-use"
     "text_to_speech",
     "todo_list", "memory",
-    "knowledge_search", "knowledge_get", "knowledge_write", "knowledge_think",  # Crema: always in view
     "session_search",
     "clarify",
     "execute_code", "delegate_task",

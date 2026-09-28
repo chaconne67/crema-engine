@@ -49,6 +49,20 @@ def test_timeline_status_and_delete(store):
     assert "error" in json.loads(kt.knowledge_get({"slug": "reference/주소-1"}))
 
 
+def test_writing_a_page_the_user_deleted_tells_the_agent(store):
+    _seed(store)
+    store.delete("reference/주소-2")  # Settings → 기억
+    out = json.loads(kt.knowledge_write({"action": "write", "slug": "reference/주소-2", "title": "사이트 주소 2",
+                                         "body": "다시 배운 주소", "sources": ["chat:b"]}))
+    assert "deleted by the user" in out["error"] and "another slug" in out["error"]
+    assert "error" in json.loads(kt.knowledge_get({"slug": "reference/주소-2"}))
+    # A page the agent deleted itself it may write again.
+    kt.knowledge_write({"action": "delete", "slug": "reference/주소-3"})
+    out = json.loads(kt.knowledge_write({"action": "write", "slug": "reference/주소-3", "title": "사이트 주소 3",
+                                         "body": "다시 배운 주소", "sources": ["chat:b"]}))
+    assert out["result"] == "updated"
+
+
 def test_search_reranks_in_balanced_mode_and_keeps_order_on_failure(monkeypatch, store):
     _seed(store)
     monkeypatch.setattr(kt, "_mode", lambda: "balanced")

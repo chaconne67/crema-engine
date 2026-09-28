@@ -197,7 +197,8 @@ class KnowledgeStore:
               status: str = "active", tags: Optional[List[str]] = None) -> Dict[str, Any]:
         """Create or replace a whole page (GBrain put_page). The same content again is skipped; a
         replaced page keeps its previous version. ``sources`` say where it came from (a chat, a
-        file, an address) and are required."""
+        file, an address) and are required. A page the agent deleted comes back when written again;
+        one the user deleted does not — only the user's undo brings it back."""
         slug = slugify(slug)
         if "/" not in slug or slug.split("/", 1)[0] not in TYPES:
             raise ValueError(f"slug must start with one of {', '.join(t + '/' for t in TYPES)}")
@@ -218,6 +219,10 @@ class KnowledgeStore:
         with self.lock:
             row = self.conn.execute("SELECT * FROM pages WHERE slug = ?", (slug,)).fetchone()
             meta = json.loads(row["meta"]) if row else {}
+            if row and row["deleted_at"] is not None:
+                if meta.pop("deleted_by", "user") != "agent":
+                    raise ValueError(f"{slug} was deleted by the user in Settings → 기억. Only the user can bring it "
+                                     "back (되돌리기, within 72 hours). Do not save it again, under this or another slug.")
             meta.update({"authority": authority, "status": status, "tags": sorted(set(tags or meta.get("tags", [])))})
             meta["sources"] = list(dict.fromkeys(meta.get("sources", []) + sources))[-20:]
             digest = _content_hash(title, type_, body, {k: meta[k] for k in ("authority", "status")})
@@ -391,30 +396,39 @@ class KnowledgeStore:
                               (json.dumps(meta, ensure_ascii=False), time.time(), row["id"]))
         return {"slug": row["slug"], "status": status}
 
-    def delete(self, slug: str) -> Dict[str, Any]:
-        """Soft delete: gone from search and lists, restorable for 72 hours (GBrain)."""
+    def delete(self, slug: str, by: str = "user") -> Dict[str, Any]:
+        """Soft delete: gone from search and lists, restorable for 72 hours (GBrain). ``by`` (user or
+        agent) is kept: write() does not bring back a page the user deleted."""
         with self.lock:
             row = self._live(slug)
-            self.conn.execute("UPDATE pages SET deleted_at = ? WHERE id = ?", (time.time(), row["id"]))
+            meta = json.loads(row["meta"])
+            meta["deleted_by"] = by
+            self.conn.execute("UPDATE pages SET deleted_at = ?, meta = ? WHERE id = ?",
+                              (time.time(), json.dumps(meta, ensure_ascii=False), row["id"]))
             self._vectors = None
         return {"slug": row["slug"], "result": "deleted"}
 
     def undo(self, slug: str) -> Dict[str, Any]:
-        """Back one step: a deleted page comes back; a replaced page returns to its previous version;
-        a page with no previous version is deleted (it was just created)."""
+        """The user's undo, back one step: a deleted page comes back; a replaced page returns to its
+        previous version; a page with no previous version is deleted (it was just created) — by the user."""
         slug = slugify(slug)
         with self.lock:
             row = self.conn.execute("SELECT * FROM pages WHERE slug = ?", (slug,)).fetchone()
             if row is None:
                 raise ValueError(f"no page {slug}")
             self._vectors = None
+            meta = json.loads(row["meta"])
             if row["deleted_at"] is not None:
-                self.conn.execute("UPDATE pages SET deleted_at = NULL WHERE id = ?", (row["id"],))
+                meta.pop("deleted_by", None)
+                self.conn.execute("UPDATE pages SET deleted_at = NULL, meta = ? WHERE id = ?",
+                                  (json.dumps(meta, ensure_ascii=False), row["id"]))
                 return {"slug": slug, "result": "restored"}
             prev = self.conn.execute(
                 "SELECT * FROM page_versions WHERE page_id = ? ORDER BY id DESC LIMIT 1", (row["id"],)).fetchone()
             if prev is None:
-                self.conn.execute("UPDATE pages SET deleted_at = ? WHERE id = ?", (time.time(), row["id"]))
+                meta["deleted_by"] = "user"
+                self.conn.execute("UPDATE pages SET deleted_at = ?, meta = ? WHERE id = ?",
+                                  (time.time(), json.dumps(meta, ensure_ascii=False), row["id"]))
                 return {"slug": slug, "result": "deleted"}
             self.conn.execute("DELETE FROM page_versions WHERE id = ?", (prev["id"],))
             meta = json.loads(prev["meta"] or "{}")

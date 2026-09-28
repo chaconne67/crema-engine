@@ -123,7 +123,7 @@ def knowledge_write(args: Dict[str, Any], **kw: Any) -> str:
         elif action == "status":
             result = store.set_status(slug, args.get("status") or "")
         elif action == "delete":
-            result = store.delete(slug)
+            result = store.delete(slug, by="agent")
         else:
             return tool_error("action must be write, timeline, status or delete")
     except ValueError as exc:

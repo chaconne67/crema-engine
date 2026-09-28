@@ -77,6 +77,46 @@ def test_soft_delete_and_undo(store):
     assert store.search(["보고서"])[0]["slug"] == "feedback/보고서-말투"
 
 
+def test_a_page_the_user_deleted_stays_deleted_until_the_user_undoes(store):
+    store.write("feedback/보고서-말투", title="보고서는 존댓말로", body="사용자가 보고서 문체를 존댓말로 고쳐 달라고 함", sources=["chat:a"])
+    store.delete("feedback/보고서-말투")  # Settings → 기억
+    with pytest.raises(ValueError, match="deleted by the user"):
+        store.write("feedback/보고서-말투", title="보고서는 존댓말로", body="다시 배운 내용", sources=["chat:a"])
+    assert store.search(["보고서"]) == [] and store.list() == []
+    with pytest.raises(ValueError):
+        store.get("feedback/보고서-말투")
+    assert store.undo("feedback/보고서-말투")["result"] == "restored"
+    assert store.write("feedback/보고서-말투", title="보고서는 존댓말로", body="다시 배운 내용", sources=["chat:a"])["result"] == "updated"
+    assert store.get("feedback/보고서-말투")["body"] == "다시 배운 내용"
+
+
+def test_undoing_a_new_page_is_the_users_delete(store):
+    store.write("reference/새-주소", title="새 사이트 주소", body="지금 주소는 new.example", sources=["chat:a"])
+    assert store.undo("reference/새-주소")["result"] == "deleted"
+    with pytest.raises(ValueError, match="deleted by the user"):
+        store.write("reference/새-주소", title="새 사이트 주소", body="지금 주소는 new.example", sources=["chat:b"])
+
+
+def test_pages_deleted_before_anyone_was_recorded_count_as_the_users(store):
+    store.write("reference/새-주소", title="새 사이트 주소", body="지금 주소는 new.example", sources=["chat:a"])
+    store.conn.execute("UPDATE pages SET deleted_at = ? WHERE slug = 'reference/새-주소'", (time.time(),))
+    with pytest.raises(ValueError, match="deleted by the user"):
+        store.write("reference/새-주소", title="새 사이트 주소", body="지금 주소는 new.example", sources=["chat:b"])
+
+
+def test_a_page_the_agent_deleted_comes_back_and_a_purged_slug_is_free(store):
+    store.write("reference/옛-주소", title="옛 사이트 주소", body="예전 주소는 old.example", sources=["chat:a"])
+    store.delete("reference/옛-주소", by="agent")
+    assert store.write("reference/옛-주소", title="옛 사이트 주소", body="예전 주소는 old.example", sources=["chat:b"])["result"] == "updated"
+    assert store.get("reference/옛-주소")["title"] == "옛 사이트 주소"
+    store.delete("reference/옛-주소")  # now the user
+    with pytest.raises(ValueError, match="deleted by the user"):
+        store.write("reference/옛-주소", title="옛 사이트 주소", body="예전 주소는 old.example", sources=["chat:c"])
+    store.conn.execute("UPDATE pages SET deleted_at = ? WHERE slug = 'reference/옛-주소'", (time.time() - 80 * 3600,))
+    assert store.maintain()["purged"] == 1
+    assert store.write("reference/옛-주소", title="옛 사이트 주소", body="예전 주소는 old.example", sources=["chat:d"])["result"] == "created"
+
+
 def test_search_korean_short_words_titles_and_exact(store, cjk_so):
     store.write("incident/세금계산서-오류", title="세금계산서 발행 오류",
                 body="홈택스에서 세금계산서를 발행할 때 사업자번호 누락으로 실패했다. 거래처 정보를 고쳐 해결.", sources=["chat:a"])

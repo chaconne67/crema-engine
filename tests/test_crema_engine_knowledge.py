@@ -1,4 +1,5 @@
 """Crema launcher: distilling a quiet chat into the knowledge notebook, and the daily pass."""
+import json
 import time
 
 import pytest
@@ -84,6 +85,25 @@ def test_a_quiet_chat_with_enough_new_turns_is_distilled_once(store, reviews):
     assert "language the user writes in" in reviews[0]["focus"]
     # Nothing new since: not again.
     assert crema_engine.distill(api, "agent-client-a")["ran"] is False
+
+
+def test_distilling_does_not_bring_back_a_page_the_user_deleted(store, monkeypatch):
+    import tools.knowledge_tool as kt
+    store.write("incident/세금-오류", title="세금계산서 오류", body="사업자번호 누락", sources=["chat:agent-client-a"])
+    store.delete("incident/세금-오류")  # Settings → 기억
+    replies = []
+
+    def spawn(agent, messages, focus=None, task_cfg=None, **_):
+        def target():  # the review agent writing the page again through its tool
+            replies.append(json.loads(kt.knowledge_write(
+                {"action": "write", "slug": "incident/세금-오류", "title": "세금계산서 오류",
+                 "body": "사업자번호 누락. 거래처 정보 수정으로 해결", "sources": []}, session_id="agent-client-a")))
+        return target, "prompt"
+    monkeypatch.setattr("agent.background_review.spawn_background_review_thread", spawn)
+    out = crema_engine.distill(FakeApi({"agent-client-a": (turns(3), time.time())}), "agent-client-a")
+    assert out["ran"] and out["written"] == []
+    assert "deleted by the user" in replies[0]["error"]
+    assert store.list() == [] and store.search(["세금계산서"]) == []
 
 
 def test_short_chats_other_sessions_and_memory_off_are_left_alone(store, reviews, monkeypatch):

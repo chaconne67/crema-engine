@@ -23,6 +23,7 @@ _HERMES_CORE_TOOLS = [
     "browser_exec",  # replaces the other browser tools when browser.backend is "browser-use"
     "text_to_speech",
     "todo_list", "memory",
+    "knowledge_search", "knowledge_get", "knowledge_write", "knowledge_think",  # Crema: always in view
     "session_search",
     "clarify",
     "execute_code", "delegate_task",
@@ -130,6 +131,9 @@ TOOLSETS = {
     "tts": _ts("Text-to-speech: convert text to audio with Edge TTS (free), ElevenLabs, OpenAI, or xAI", ["text_to_speech"]),
     "todo": _ts("Task planning and tracking for multi-step work", ["todo_list"]),
     "memory": _ts("Persistent memory across sessions (personal notes + user profile)", ["memory"]),
+    # Crema: the knowledge notebook (tools/knowledge_tool.py).
+    "knowledge": _ts("Knowledge notebook of what was learned with this user", ["knowledge_search", "knowledge_get",
+                                                                               "knowledge_write", "knowledge_think"]),
     "context_engine": _ts("Runtime tools exposed by the active context engine"),
     "session_search": _ts("Search and recall past conversations with summarization", ["session_search"]),
     "connections": _ts("Remote connector discovery, execution, and account authorization", ["manage_connections"]),
@@ -206,10 +210,11 @@ TOOLSETS = {
     ),
     # Crema: the tools the Crema app offers (see CREMA.md); add a tool here when Crema adopts it.
     "hermes-api-server": _ts(
-        "Crema — files, terminal, todo, web, image understanding, memory, past chats and skills",
+        "Crema — files, terminal, todo, web, image understanding, memory, past chats, skills and the knowledge notebook",
         ["read_file", "write_file", "patch", "search_files", "terminal", "process_manage",
          "todo_list", "web_search", "web_extract", "vision_analyze",
-         "memory", "session_search", "skills_list", "skill_view", "skill_manage"],
+         "memory", "session_search", "skills_list", "skill_view", "skill_manage",
+         "knowledge_search", "knowledge_get", "knowledge_write", "knowledge_think"],
     ),
     "hermes-cli": _bundle("Full interactive CLI toolset - all default tools plus cronjob management"),
 

@@ -1,0 +1,125 @@
+"""Crema launcher: distilling a quiet chat into the knowledge notebook, and the daily pass."""
+import time
+
+import pytest
+
+import crema_engine
+from agent.knowledge_store import KnowledgeStore
+
+
+class FakeDB:
+    def __init__(self, chats):
+        self.chats = chats  # id -> (messages, last_active)
+
+    def get_messages_as_conversation(self, session_id, **_):
+        return list(self.chats[session_id][0])
+
+    def list_sessions_rich(self, **_):
+        rows = [{"id": sid, "last_active": last, "message_count": len(msgs)} for sid, (msgs, last) in self.chats.items()]
+        return sorted(rows, key=lambda r: r["last_active"], reverse=True)
+
+
+class FakeMemorySessions:
+    def __init__(self):
+        self.checked_in = []
+
+    def checkin(self, agent):
+        self.checked_in.append(agent)
+
+
+class FakeApi:
+    def __init__(self, chats):
+        self.db = FakeDB(chats)
+        self._memory_sessions = FakeMemorySessions()
+        self.created = []
+
+    def _ensure_session_db(self):
+        return self.db
+
+    def _create_agent(self, **kwargs):
+        self.created.append(kwargs)
+        return object()
+
+
+def turns(n, tool=False):
+    msgs = []
+    for i in range(n):
+        msgs += [{"role": "user", "content": f"질문 {i}"}, {"role": "assistant", "content": f"답 {i}"}]
+    if tool:
+        msgs.append({"role": "tool", "content": "결과"})
+    return msgs
+
+
+@pytest.fixture()
+def store(tmp_path, monkeypatch):
+    KnowledgeStore._shared.clear()
+    s = KnowledgeStore.open(tmp_path / "knowledge.db")
+    monkeypatch.setattr(KnowledgeStore, "open", classmethod(lambda cls, path=None: s))
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {})
+    yield s
+    KnowledgeStore._shared.clear()
+
+
+@pytest.fixture()
+def reviews(monkeypatch, store):
+    """The engine's review, faked: records its call and writes the page a real review would."""
+    calls = []
+
+    def spawn(agent, messages, review_memory=False, review_skills=False, focus=None, task_cfg=None, explicit=False):
+        calls.append({"messages": messages, "focus": focus, "extra": task_cfg.get("extra_tools"), "memory": review_memory})
+
+        def target():
+            store.write("incident/세금-오류", title="세금계산서 오류", body="사업자번호 누락", sources=["chat:x"])
+        return target, "prompt"
+    monkeypatch.setattr("agent.background_review.spawn_background_review_thread", spawn)
+    return calls
+
+
+def test_a_quiet_chat_with_enough_new_turns_is_distilled_once(store, reviews):
+    api = FakeApi({"agent-client-a": (turns(3), time.time())})
+    out = crema_engine.distill(api, "agent-client-a", model="m", provider="p")
+    assert out["ran"] and out["written"][0]["slug"] == "incident/세금-오류"
+    assert api.created[0]["requested_model"] == "m" and api._memory_sessions.checked_in
+    assert set(reviews[0]["extra"]) >= {"knowledge_search", "knowledge_write"} and reviews[0]["memory"]
+    assert "language the user writes in" in reviews[0]["focus"]
+    # Nothing new since: not again.
+    assert crema_engine.distill(api, "agent-client-a")["ran"] is False
+
+
+def test_short_chats_other_sessions_and_memory_off_are_left_alone(store, reviews, monkeypatch):
+    api = FakeApi({"agent-client-short": (turns(1), 0), "cron_x": (turns(5), 0), "agent-client-tool": (turns(1, tool=True), 0)})
+    assert crema_engine.distill(api, "agent-client-short")["ran"] is False
+    assert crema_engine.distill(api, "cron_x")["ran"] is False
+    assert crema_engine.distill(api, "agent-client-tool")["ran"] is True  # a tool call counts
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly",
+                        lambda: {"memory": {"memory_enabled": False, "user_profile_enabled": False}})
+    api.db.chats["agent-client-short"] = (turns(5), 0)
+    assert crema_engine.distill(api, "agent-client-short")["ran"] is False
+
+
+def test_daily_pass_waits_for_quiet_then_runs_once_a_day(store, reviews):
+    now = time.time()
+    api = FakeApi({"agent-client-a": (turns(4), now - 60)})
+    assert crema_engine.daily_once(api, now) == {}  # someone is working
+    api.db.chats["agent-client-a"] = (turns(4), now - 3600)
+    report = crema_engine.daily_once(api, now)
+    assert report["distilled"] == 1 and "purged" in report
+    assert crema_engine.daily_once(api, now + 3600) == {}  # done today
+    assert store.maintenance_value("last_daily")["distilled"] == 1
+
+
+def test_daily_pass_off_only_empties_old_deletes(store, reviews, monkeypatch):
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {"knowledge": {"nightly": False}})
+    store.write("reference/a", title="A", body="a", sources=["t"])
+    store.conn.execute("UPDATE pages SET confirmed_at = ?", (time.time() - 100 * 86400,))
+    api = FakeApi({"agent-client-a": (turns(4), time.time() - 3600)})
+    report = crema_engine.daily_once(api)
+    assert report["needs_review"] == 0 and report["distilled"] == 0 and not reviews
+    assert store.get("reference/a")["status"] == "active"
+
+
+def test_daily_pass_skips_ai_steps_in_light_mode(store, reviews, monkeypatch):
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {"knowledge": {"search_mode": "light"}})
+    api = FakeApi({"agent-client-a": (turns(4), time.time() - 3600)})
+    report = crema_engine.daily_once(api)
+    assert report["distilled"] == 0 and not reviews

@@ -270,6 +270,12 @@ def _profile_name_for_home(home: Path) -> str:
         return "default"
 
 
+def _knowledge_guidance() -> str:
+    """Crema: the knowledge notebook's always-on instructions (tools/knowledge_tool.py)."""
+    from tools.knowledge_tool import KNOWLEDGE_GUIDANCE
+    return KNOWLEDGE_GUIDANCE
+
+
 def _tool_guidance_block(agent: Any) -> Optional[str]:
     """Tool-aware behavioral guidance, injected only when the tools are loaded."""
     names = agent.valid_tool_names
@@ -291,6 +297,7 @@ def _tool_guidance_block(agent: Any) -> Optional[str]:
     tool_guidance = [
         memory_guidance,
         SESSION_SEARCH_GUIDANCE if "session_search" in names else None,
+        _knowledge_guidance() if "knowledge_search" in names else None,
         SKILLS_GUIDANCE if "skill_manage" in names else None,
         _kanban_guidance,
     ]

@@ -19,7 +19,9 @@ and `HERMES_DASHBOARD_SESSION_TOKEN` in the environment. It prints one line, `{"
   (`hermes_cli/web_routers/`) — plus four routes of others: `/api/learning/graph` and
   `/api/learning/node` (what the agent remembers and the skills it learned, to read, edit and
   delete), `/api/sessions/search`, `/api/tools/toolsets/{name}/models`; and Crema's own
-  `POST /api/crema/backup` (the engine folder into a .zip, without API keys and sign-in tokens).
+  `POST /api/crema/backup` (the engine folder into a .zip, without API keys and sign-in tokens),
+  `/api/crema/knowledge` (the knowledge notebook: list, page, edit, delete, undo) and
+  `POST /api/crema/distill` (a quiet chat's lessons into the notebook).
   Auth: `X-Hermes-Session-Token: <token>`.
 
 Both bind 127.0.0.1 only.
@@ -29,6 +31,7 @@ Both bind 127.0.0.1 only.
 | Area | Kept | How it is chosen |
 |---|---|---|
 | Tools | files, terminal/process, todo, web search/extract, image understanding, memory, past-chat search, skills (the agent writes and improves them) | `hermes-api-server` in `toolsets.py` |
+| Knowledge notebook | pages of what the agent learned working with the user, searched before work and written after (the method of GBrain, below); a quiet chat is distilled into it, and once a day while Crema is quiet the notebook is tidied | `knowledge` in `toolsets.py` (in `_HERMES_CORE_TOOLS`, so never deferred); `knowledge.search_mode` light/balanced/thorough, `knowledge.nightly` |
 | Past-chat search in Korean/CJK | the `cjk_unicode61` tokenizer (`native/fts5_cjk/`), built by Crema as `fts5_cjk.dll` and named in `HERMES_FTS5_CJK_SO`; chats saved before it are indexed when the engine starts | `crema_engine.py` |
 | Providers | every upstream provider that needs no extra package (Bedrock needs boto3 and Vertex google-auth, so both are left out) | provider plugins kept below; the Crema app hides only `moa` and `claude-code` |
 | Logins | only those made in Crema: other programs' logins (Claude Code, Codex CLI, GitHub CLI) are never borrowed | `auth.adopt_external_logins` default |
@@ -46,7 +49,21 @@ Both bind 127.0.0.1 only.
 7. `agent/learning_mutations.py` — a user's memory edit or delete holds the memory tool's file lock.
 8. `hermes_cli/backup.py`, `hermes_cli/subcommands/backup.py` — `--no-secrets` leaves out `.env`,
    `auth.json` and the credential vault.
-9. Removed (not used by the engine; nothing kept imports them):
+9. The knowledge notebook (Crema's; the method of GBrain, github.com/garrytan/gbrain, MIT, at
+   `e78f1c3` v0.59.0.0 — page model, whole-page writes with versions, content hashes, soft delete,
+   CJK-aware chunking, rule-based links, reciprocal rank fusion with title/backlink weights, the
+   brain-first instructions; tracked in the Crema plans' `Crema-GBrain-추적.md`):
+   - new: `agent/knowledge_store.py` (SQLite `knowledge.db`), `tools/knowledge_tool.py` (the tools and
+     the always-on instructions), `tests/agent/test_knowledge_*.py`, `tests/tools/test_knowledge_tool.py`,
+     `tests/test_crema_engine_knowledge.py`
+   - `toolsets.py`: the `knowledge` toolset, in `hermes-api-server` and `_HERMES_CORE_TOOLS`
+   - `agent/system_prompt.py`: the notebook's instructions in the tool guidance when its tools are loaded
+   - `tools/memory_tool.py`, `agent/background_review.py`: memories in the language the user writes in
+   - `hermes_cli/config_defaults.py`: `memory.nudge_interval` 0 — a quiet chat's distillation reviews
+     memory instead of every tenth turn
+   - `crema_engine.py`: the notebook routes, `distill` (the background review on one chat, focused on
+     the notebook, with the knowledge tools admitted through `extra_tools`) and the daily pass
+10. Removed (not used by the engine; nothing kept imports them):
    - top level: `apps/ website/` (except `website/static/api/model-catalog.json`) `ui-tui/ web/ skills/ optional-skills/
      optional-mcps/ plugin-catalog/ evals/ scripts/ docker/ nix/ native/ (except native/fts5_cjk/) tests-js/ contributors/`,
      Docker/Nix/npm/lint files, translated READMEs, `batch_runner.py mini_swe_runner.py mcp_serve.py

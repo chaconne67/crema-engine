@@ -24,4 +24,7 @@ def build_backup_parser(subparsers, *, cmd_backup: Callable) -> None:
         "-k", "--keep", type=int, default=3, metavar="N",
         help="After a full backup, delete older hermes-backup-*.zip files in the output "
              "directory beyond the newest N (default 3; 0 keeps everything)")
+    backup_parser.add_argument(
+        "--no-secrets", action="store_true",
+        help="Leave out API keys and sign-in tokens (.env, auth.json, the credential vault)")
     backup_parser.set_defaults(func=cmd_backup)

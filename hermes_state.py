@@ -703,6 +703,7 @@ class SessionDB(
                         self._trigram_available = (
                             self._fts_table_probe(cursor, "messages_fts_trigram") is True
                         )
+                        self._probe_cjk_read_only(conn, cursor)
                 except BaseException:
                     self._conn = None
                     self._close_connection_quietly(conn)
@@ -719,6 +720,19 @@ class SessionDB(
                 if attempt >= _READ_ONLY_IOERR_RETRY_ATTEMPTS or not transient:
                     raise
                 time.sleep(_READ_ONLY_IOERR_RETRY_BACKOFF_S)
+
+    def _probe_cjk_read_only(self, conn: sqlite3.Connection, cursor) -> None:
+        """The CJK-bigram index for a read-only attach: the tokenizer registers per connection
+        (ro is fine), and the index serves only when present and neither stale nor awaiting its
+        backfill — the writer's rule. Without it short CJK prefix searches ("세금*") find nothing."""
+        self._fts_cjk_loaded = load_fts5_cjk_extension(conn)
+        try:
+            self._fts_cjk_available = self._fts_cjk_loaded and self._fts_table_probe(
+                cursor, "messages_fts_cjk") is True and not cursor.execute(
+                "SELECT 1 FROM state_meta WHERE key IN ('fts_cjk_stale', 'fts_cjk_rebuild_high_water') LIMIT 1"
+            ).fetchone()
+        except sqlite3.OperationalError:
+            self._fts_cjk_available = False
 
     def _connect_read_only(self, timeout: float) -> sqlite3.Connection:
         """``mode=ro`` tracked connection with Row factory. check_same_thread=False: pooled connections

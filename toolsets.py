@@ -206,9 +206,10 @@ TOOLSETS = {
     ),
     # Crema: the tools the Crema app offers (see CREMA.md); add a tool here when Crema adopts it.
     "hermes-api-server": _ts(
-        "Crema — files, terminal, todo, web and image understanding",
+        "Crema — files, terminal, todo, web, image understanding, memory, past chats and skills",
         ["read_file", "write_file", "patch", "search_files", "terminal", "process_manage",
-         "todo_list", "web_search", "web_extract", "vision_analyze"],
+         "todo_list", "web_search", "web_extract", "vision_analyze",
+         "memory", "session_search", "skills_list", "skill_view", "skill_manage"],
     ),
     "hermes-cli": _bundle("Full interactive CLI toolset - all default tools plus cronjob management"),
 

@@ -15,8 +15,12 @@ and `HERMES_DASHBOARD_SESSION_TOKEN` in the environment. It prints one line, `{"
 - `api`: the Hermes run API (`gateway/platforms/api_server.py`) without the gateway — `/health`,
   `/v1/models`, `/v1/runs` (events, approval, stop), `/api/sessions`, `/api/model/options`.
   Auth: `Authorization: Bearer <token>`.
-- `settings`: the four dashboard routers Crema uses — `oauth`, `config_env`, `models`, `audio`
-  (`hermes_cli/web_routers/`). Auth: `X-Hermes-Session-Token: <token>`.
+- `settings`: the dashboard routers Crema uses — `oauth`, `config_env`, `models`, `audio`
+  (`hermes_cli/web_routers/`) — plus four routes of others: `/api/learning/graph` and
+  `/api/learning/node` (what the agent remembers and the skills it learned, to read, edit and
+  delete), `/api/sessions/search`, `/api/tools/toolsets/{name}/models`; and Crema's own
+  `POST /api/crema/backup` (the engine folder into a .zip, without API keys and sign-in tokens).
+  Auth: `X-Hermes-Session-Token: <token>`.
 
 Both bind 127.0.0.1 only.
 
@@ -24,21 +28,27 @@ Both bind 127.0.0.1 only.
 
 | Area | Kept | How it is chosen |
 |---|---|---|
-| Tools | files, terminal/process, todo, web search/extract, image understanding | `hermes-api-server` in `toolsets.py` |
+| Tools | files, terminal/process, todo, web search/extract, image understanding, memory, past-chat search, skills (the agent writes and improves them) | `hermes-api-server` in `toolsets.py` |
+| Past-chat search in Korean/CJK | the `cjk_unicode61` tokenizer (`native/fts5_cjk/`), built by Crema as `fts5_cjk.dll` and named in `HERMES_FTS5_CJK_SO`; chats saved before it are indexed when the engine starts | `crema_engine.py` |
 | Providers | every upstream provider that needs no extra package (Bedrock needs boto3 and Vertex google-auth, so both are left out) | provider plugins kept below; the Crema app hides only `moa` and `claude-code` |
 | Logins | only those made in Crema: other programs' logins (Claude Code, Codex CLI, GitHub CLI) are never borrowed | `auth.adopt_external_logins` default |
 
 ## Changes from upstream
 
-1. `crema_engine.py` — new: the launcher above.
+1. `crema_engine.py` — new: the launcher above (and indexing past chats for the CJK search at start).
 2. `toolsets.py` — `hermes-api-server` lists Crema's tools instead of the full core set.
 3. `hermes_cli/config_defaults.py` — `auth.adopt_external_logins` defaults to false: borrowing another
    program's rotating login can log that program out, and a Provider should appear only once added.
 4. `hermes_cli/copilot_auth.py` — the `gh auth token` fallback follows `auth.adopt_external_logins` too.
 5. `pyproject.toml` — the `crema` extra (see below).
-6. Removed (not used by the engine; nothing kept imports them):
+6. `hermes_state.py` — a read-only attach also loads the CJK tokenizer and serves the CJK index when
+   it is complete, as the writer does; without it the dashboard's prefix search ("세금*") found nothing.
+7. `agent/learning_mutations.py` — a user's memory edit or delete holds the memory tool's file lock.
+8. `hermes_cli/backup.py`, `hermes_cli/subcommands/backup.py` — `--no-secrets` leaves out `.env`,
+   `auth.json` and the credential vault.
+9. Removed (not used by the engine; nothing kept imports them):
    - top level: `apps/ website/` (except `website/static/api/model-catalog.json`) `ui-tui/ web/ skills/ optional-skills/
-     optional-mcps/ plugin-catalog/ evals/ scripts/ docker/ nix/ native/ tests-js/ contributors/`,
+     optional-mcps/ plugin-catalog/ evals/ scripts/ docker/ nix/ native/ (except native/fts5_cjk/) tests-js/ contributors/`,
      Docker/Nix/npm/lint files, translated READMEs, `batch_runner.py mini_swe_runner.py mcp_serve.py
      toolset_distributions.py trajectory_compressor.py setup-hermes.sh`
    - `tools/`: `xai_video_tools.py video_generation_tool.py` (their `plugins/video_gen/` was removed)

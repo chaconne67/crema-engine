@@ -132,6 +132,8 @@ _IMPORT_SKIP_NAMES = {"gateway_state.json", "gateway.pid", "cron.pid", "gateway.
 # IS included in backups (user-entered secrets, not regenerable — unlike the
 # excluded browser-profile/ snapshot) but must come back owner-only.
 _SECRET_FILE_NAMES = {".env", "auth.json", "state.db", "vault.key", "vault.json.enc"}
+# Left out by ``--no-secrets``: the credentials among them (state.db is the chats, not a credential).
+_CREDENTIAL_FILE_NAMES = _SECRET_FILE_NAMES - {"state.db"}
 
 # Reserved archive subtree for memory-provider state OUTSIDE HERMES_HOME (e.g. ~/.honcho, via
 # MemoryProvider.backup_paths()), stored and restored relative to the user's home; paths not
@@ -698,6 +700,8 @@ def _run_backup_locked(args, hermes_root: Path) -> bool:
     print(f"Scanning {display_hermes_home()} ...")
     skipped_dirs: set = set()
     files_to_add: list[tuple[Path, Path]] = list(_iter_backup_files(hermes_root, out_path, skipped_dirs))
+    if getattr(args, "no_secrets", False):
+        files_to_add = [(f, rel) for f, rel in files_to_add if rel.name not in _CREDENTIAL_FILE_NAMES]
     external_to_add, skipped_external = _collect_external_entries()
     if not files_to_add and not external_to_add:
         logger.info("backup phase=scan status=empty duration_ms=%.1f", (time.monotonic() - scan_started) * 1000)

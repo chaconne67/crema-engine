@@ -56,6 +56,14 @@ def _locate_memory(node_id: str) -> tuple[Path, list[str], int]:
     return path, chunks, local
 
 
+def _memory_lock(node_id: str):
+    """The memory tool's lock on the node's file, held across a user's read-modify-write."""
+    from hermes_constants import get_hermes_home
+    from tools.memory_tool import MemoryStore
+    source, _ = _parse_memory_id(node_id)
+    return MemoryStore._file_lock(get_hermes_home() / "memories" / _MEMORY_FILES[source])
+
+
 def _write_memory(path: Path, chunks: list[str]) -> None:
     """Atomic temp-file + rename via the memory tool, so a concurrent reader
     never sees a half-written file (and the §-join stays single-sourced)."""
@@ -125,9 +133,10 @@ def _delete_skill(name: str) -> dict[str, Any]:
 
 
 def _delete_memory(node_id: str) -> dict[str, Any]:
-    path, chunks, local = _locate_memory(node_id)
-    del chunks[local]
-    _write_memory(path, chunks)
+    with _memory_lock(node_id):
+        path, chunks, local = _locate_memory(node_id)
+        del chunks[local]
+        _write_memory(path, chunks)
     return {"ok": True, "message": f"deleted memory from {path.name}"}
 
 
@@ -151,7 +160,8 @@ def _edit_memory(node_id: str, content: str) -> dict[str, Any]:
     body = content.strip()
     if not body:
         return {"ok": False, "message": "empty memory — use delete to remove it"}
-    path, chunks, local = _locate_memory(node_id)
-    chunks[local] = body
-    _write_memory(path, chunks)
+    with _memory_lock(node_id):
+        path, chunks, local = _locate_memory(node_id)
+        chunks[local] = body
+        _write_memory(path, chunks)
     return {"ok": True, "message": f"updated memory in {path.name}"}

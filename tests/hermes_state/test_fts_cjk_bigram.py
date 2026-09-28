@@ -66,6 +66,17 @@ def test_two_char_korean_hits_cjk_index(db):
     assert rows
 
 
+def test_read_only_attach_uses_cjk_index(db):
+    # The dashboard's session search reads through a read-only attach with prefix queries.
+    ro = SessionDB(db_path=db.db_path, read_only=True)
+    try:
+        assert ro._fts_cjk_available
+        rows = ro.search_messages("웅기*", limit=10)
+        assert rows and "웅기" in rows[0]["snippet"]
+    finally:
+        ro.close()
+
+
 def test_mixed_and_ascii_queries(db):
     assert db.search_messages("graphiti", limit=10)
     assert db.search_messages('"shared default" AND 웅기', limit=10)

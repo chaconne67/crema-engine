@@ -159,9 +159,6 @@ DEFAULT_CONFIG = {
         # exempt); (2) continue-intent extension of empty-response recovery re-prompts once when the
         # model says it will continue but takes no action. False disables both.
         "stall_guards": True,
-        # "Finish the job" prompt block for all models: don't stop at a stub, never fabricate output
-        # when the real path is blocked. ~80 cached tokens. False disables.
-        "task_completion_guidance": True,
         # Prompt block for all models steering independent tool calls (reads, searches, fetches,
         # read-only commands) into one batched turn; the runtime already runs them concurrently. ~70
         # cached tokens. False disables.

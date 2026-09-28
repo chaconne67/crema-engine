@@ -17,7 +17,6 @@ def _make_agent(**overrides):
         load_soul_identity=False,
         skip_context_files=False,
         valid_tool_names=[],
-        _task_completion_guidance=False,
         _tool_use_enforcement=False,
         _environment_probe=False,
         _kanban_worker_guidance="",
@@ -36,6 +35,17 @@ def _make_agent(**overrides):
     )
     base.update(overrides)
     return SimpleNamespace(**base)
+
+
+def test_crema_method_follows_a_user_written_persona():
+    from agent.prompt_builder import CREMA_METHOD_GUIDANCE
+    agent = _make_agent(load_soul_identity=True, skip_context_files=True)
+    with (
+        patch("agent.prompt_builder.load_soul_md", return_value="You are Luna. Speak warmly."),
+        patch("agent.prompt_builder.build_environment_hints", return_value=""),
+    ):
+        stable = build_system_prompt_parts(agent)["stable"]
+    assert stable.startswith("You are Luna. Speak warmly.\n\n" + CREMA_METHOD_GUIDANCE)
 
 
 def _captured_context_cwd(agent):
@@ -446,6 +456,7 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
         _parallel_tool_call_guidance=False,
     )
     monkeypatch.setattr(system_prompt, "DEFAULT_AGENT_IDENTITY", "IDENTITY")
+    monkeypatch.setattr(system_prompt, "CREMA_METHOD_GUIDANCE", "METHOD")
     monkeypatch.setattr(system_prompt, "STEER_CHANNEL_NOTE", "STEER")
     monkeypatch.setattr(system_prompt, "get_hermes_home", lambda: Path("/hermes"))
 
@@ -462,6 +473,7 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
     )
     expected = "\n\n".join((
         "IDENTITY",
+        "METHOD",
         "STEER",
         "CODING_STABLE",
         "SYSTEM_MESSAGE",
@@ -490,7 +502,7 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
         prompt = build_system_prompt(agent, system_message="SYSTEM_MESSAGE")
 
     assert prompt == expected
-    assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:3])
+    assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:4])
 
 
 class TestTelegramRichMessagesHint:

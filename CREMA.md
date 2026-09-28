@@ -70,7 +70,15 @@ Both bind 127.0.0.1 only.
      model; `crema_engine.py` fills missing vectors at start; the quality floor
      `tests/agent/test_knowledge_meaning_quality.py` on `tests/fixtures/knowledge_eval_ko.json` runs when
      `CREMA_TEST_EMBED_MODEL` names the model (the Crema engine test workflow downloads it)
-10. Removed (not used by the engine; nothing kept imports them):
+10. Crema's working method and default persona:
+   - `agent/prompt_builder.py` `CREMA_METHOD_GUIDANCE`: how the agent works (honesty, changing things safely,
+     smallest implementation, one success path, problem solving), in every prompt right after the identity,
+     for every model, with or without tools; `agent/system_prompt.py` `_guidance_parts` puts it first. It
+     replaces upstream `TASK_COMPLETION_GUIDANCE`, and its `agent.task_completion_guidance` switch is gone:
+     the method is not the user's to turn off. How the agent speaks stays in SOUL.md, the persona the user edits.
+   - `hermes_cli/default_soul.py`: the Crema default persona (seeded SOUL.md) with the answer style; an
+     unedited earlier Crema default is upgraded in place
+11. Removed (not used by the engine; nothing kept imports them):
    - top level: `apps/ website/` (except `website/static/api/model-catalog.json`) `ui-tui/ web/ skills/ optional-skills/
      optional-mcps/ plugin-catalog/ evals/ scripts/ docker/ nix/ native/ (except native/fts5_cjk/) tests-js/ contributors/`,
      Docker/Nix/npm/lint files, translated READMEs, `batch_runner.py mini_swe_runner.py mcp_serve.py

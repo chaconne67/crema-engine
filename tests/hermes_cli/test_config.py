@@ -104,6 +104,23 @@ class TestEnsureHermesHome:
             ensure_hermes_home()
             assert soul_path.read_text(encoding="utf-8") == DEFAULT_SOUL_MD
 
+    # Crema's first default persona (2026-09-26 .. 2026-09-29), hardcoded for the same reason.
+    _CREMA_V1_DEFAULT_SOUL = (
+        "당신은 Crema의 AI 에이전트입니다. 사용자가 쓰는 언어로 답합니다. 답의 길이는 요청의 무게에 맞춥니다. "
+        "짧은 질문에는 짧게 답하고, 끝낸 작업은 바뀐 것·확인한 것·남은 것만 짧게 보고합니다. 군더더기 인사, "
+        "요청 되풀이, 과정 중계는 하지 않습니다. 모르면 모른다고 말하고, 사용자 말이 틀렸으면 맞장구치지 않습니다."
+    )
+
+    def test_upgrades_crema_v1_default_soul_md(self, tmp_path):
+        from hermes_cli.default_soul import DEFAULT_SOUL_MD
+
+        assert self._CREMA_V1_DEFAULT_SOUL != DEFAULT_SOUL_MD
+        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+            soul_path = tmp_path / "SOUL.md"
+            soul_path.write_text(self._CREMA_V1_DEFAULT_SOUL, encoding="utf-8")
+            ensure_hermes_home()
+            assert soul_path.read_text(encoding="utf-8") == DEFAULT_SOUL_MD
+
     def test_does_not_upgrade_user_customized_soul_md(self, tmp_path):
         # A SOUL.md that merely starts with the old default but was edited by
         # the user carries real intent and must never be silently overwritten.

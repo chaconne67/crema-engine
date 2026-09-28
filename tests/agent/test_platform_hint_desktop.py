@@ -38,7 +38,6 @@ def _make_agent(platform="", **overrides):
         load_soul_identity=False,
         skip_context_files=False,
         valid_tool_names=[],
-        _task_completion_guidance=False,
         _tool_use_enforcement=False,
         _environment_probe=False,
         _kanban_worker_guidance="",

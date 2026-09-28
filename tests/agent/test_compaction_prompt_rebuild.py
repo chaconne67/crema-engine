@@ -104,7 +104,6 @@ class TestWorkspaceSnapshotPinnedAcrossCompaction(unittest.TestCase):
                 model="gpt-4o",
                 _memory_enabled=False,
                 _user_profile_enabled=False,
-                _task_completion_guidance=False,
                 _parallel_tool_call_guidance=False,
                 _tool_use_enforcement=False,
                 _execution_guidance=False,
@@ -159,7 +158,6 @@ class TestWorkspaceSnapshotPinnedAcrossCompaction(unittest.TestCase):
                 model="gpt-4o",
                 _memory_enabled=False,
                 _user_profile_enabled=False,
-                _task_completion_guidance=False,
                 _parallel_tool_call_guidance=False,
                 _tool_use_enforcement=False,
                 _execution_guidance=False,
@@ -198,7 +196,7 @@ class TestWorkspaceSnapshotPinnedAcrossCompaction(unittest.TestCase):
             repo = _init_repo(tmp / "proj", "init commit")
             agent = _agent(
                 load_soul_identity=False, skip_context_files=True, valid_tool_names={"terminal"},
-                platform="cli", model="gpt-4o", _task_completion_guidance=False,
+                platform="cli", model="gpt-4o",
                 _parallel_tool_call_guidance=False, _tool_use_enforcement=False, _execution_guidance=False,
                 _environment_probe=False, _bot_mode_protocol=False, _kanban_worker_guidance="",
                 pass_session_id=False, session_id="s1", _emit_status=lambda *a, **k: None,
@@ -220,7 +218,7 @@ class TestWorkspaceSnapshotPinnedAcrossCompaction(unittest.TestCase):
     def _pin_agent(self, **over):
         return _agent(
             load_soul_identity=False, skip_context_files=True, valid_tool_names={"terminal"},
-            platform="cli", model="gpt-4o", _task_completion_guidance=False,
+            platform="cli", model="gpt-4o",
             _parallel_tool_call_guidance=False, _tool_use_enforcement=False, _execution_guidance=False,
             _environment_probe=False, _bot_mode_protocol=False, _kanban_worker_guidance="",
             pass_session_id=False, session_id="s1", _emit_status=lambda *a, **k: None, **over,

@@ -1016,32 +1016,18 @@ class TestExecutionGuidanceConfig:
         assert OPENAI_MODEL_EXECUTION_GUIDANCE not in agent._build_system_prompt()
 
 
-class TestTaskCompletionGuidance:
-    """Tests for the universal task-completion / no-fabrication guidance
-    (config.yaml ``agent.task_completion_guidance``).
+class TestCremaMethodGuidance:
+    """Crema's working method (agent/prompt_builder.py CREMA_METHOD_GUIDANCE): in every prompt, right
+    after the identity, for every model, with or without tools. No config key turns it off; it took
+    over the former ``agent.task_completion_guidance`` block."""
 
-    Unlike tool_use_enforcement, this block is model-family-agnostic — it
-    targets cross-model failure modes (stopping after a stub; fabricating
-    output when blocked) and should appear for every model by default."""
-
-    def _make_agent(self, model="anthropic/claude-opus-4.8",
-                    task_completion_guidance=True, **extra_cfg):
-        agent_cfg = {"task_completion_guidance": task_completion_guidance}
-        agent_cfg.update(extra_cfg)
+    def _make_agent(self, model="anthropic/claude-opus-4.8", tools=("terminal", "web_search"), **agent_cfg):
         with (
-            patch(
-                "model_tools.get_tool_definitions",
-                return_value=_make_tool_defs("terminal", "web_search"),
-            ),
+            patch("model_tools.get_tool_definitions", return_value=_make_tool_defs(*tools) if tools else []),
             patch("model_tools.check_toolset_requirements", return_value={}),
             patch("agent.process_bootstrap.OpenAI"),
-            patch(
-                "hermes_cli.config.load_config",
-                return_value={"agent": agent_cfg},
-            ), patch(
-                "hermes_cli.config.load_config_readonly",
-                return_value={"agent": agent_cfg},
-            ),
+            patch("hermes_cli.config.load_config", return_value={"agent": agent_cfg}),
+            patch("hermes_cli.config.load_config_readonly", return_value={"agent": agent_cfg}),
         ):
             a = AIAgent(
                 model=model,
@@ -1050,46 +1036,27 @@ class TestTaskCompletionGuidance:
                 quiet_mode=True,
                 skip_context_files=True,
                 skip_memory=True,
+                **({} if tools else {"enabled_toolsets": []}),
             )
             a.client = MagicMock()
             return a
 
-    def test_default_injects_for_claude(self):
-        """The block must reach Claude by default — that's the
-        primary motivating model family."""
-        from agent.prompt_builder import TASK_COMPLETION_GUIDANCE
-        agent = self._make_agent(model="anthropic/claude-opus-4.8")
-        prompt = agent._build_system_prompt()
-        assert TASK_COMPLETION_GUIDANCE in prompt
+    def test_every_model_gets_it_once_right_after_the_identity(self):
+        from agent.prompt_builder import CREMA_METHOD_GUIDANCE, DEFAULT_AGENT_IDENTITY
+        for model in ("anthropic/claude-opus-4.8", "openai/gpt-4.1", "google/gemini-3-pro-preview"):
+            prompt = self._make_agent(model=model)._build_system_prompt()
+            assert prompt.startswith(DEFAULT_AGENT_IDENTITY + "\n\n" + CREMA_METHOD_GUIDANCE), model
+            assert prompt.count(CREMA_METHOD_GUIDANCE) == 1, model
 
+    def test_config_cannot_turn_it_off(self):
+        from agent.prompt_builder import CREMA_METHOD_GUIDANCE
+        agent = self._make_agent(task_completion_guidance=False)
+        assert CREMA_METHOD_GUIDANCE in agent._build_system_prompt()
 
-    def test_no_tools_no_injection(self):
-        """Same gate as tool_use_enforcement — no tools means no guidance.
-        The guidance refers to ``tool calls`` and ``tool output``; without
-        tools it would be advice for a capability the agent doesn't have."""
-        from agent.prompt_builder import TASK_COMPLETION_GUIDANCE
-        with (
-            patch("model_tools.get_tool_definitions", return_value=[]),
-            patch("model_tools.check_toolset_requirements", return_value={}),
-            patch("agent.process_bootstrap.OpenAI"),
-            patch(
-                "hermes_cli.config.load_config",
-                return_value={"agent": {"task_completion_guidance": True}},
-            ), patch(
-                "hermes_cli.config.load_config_readonly",
-                return_value={"agent": {"task_completion_guidance": True}},
-            ),
-        ):
-            a = AIAgent(
-                api_key="test-key-1234567890",
-                base_url="https://openrouter.ai/api/v1",
-                quiet_mode=True,
-                skip_context_files=True,
-                skip_memory=True,
-                enabled_toolsets=[],
-            )
-            a.client = MagicMock()
-            assert TASK_COMPLETION_GUIDANCE not in a._build_system_prompt()
+    def test_without_tools_too(self):
+        from agent.prompt_builder import CREMA_METHOD_GUIDANCE, DEFAULT_AGENT_IDENTITY
+        prompt = self._make_agent(tools=())._build_system_prompt()
+        assert prompt.startswith(DEFAULT_AGENT_IDENTITY + "\n\n" + CREMA_METHOD_GUIDANCE)
 
 
 class TestEnvironmentProbeIntegration:

@@ -36,7 +36,6 @@ def _agent_for(home: Path, **overrides):
         load_soul_identity=True,
         skip_context_files=True,
         valid_tool_names=[],
-        _task_completion_guidance=False,
         _tool_use_enforcement=False,
         _environment_probe=False,
         _kanban_worker_guidance="",

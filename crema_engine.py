@@ -79,7 +79,8 @@ async def main() -> None:
     async def knowledge_list(type: str = ""):
         store = KnowledgeStore.open()
         pages = await asyncio.to_thread(store.list, type or None)
-        return {"pages": pages, "last_daily": store.maintenance_value("last_daily"),
+        return {"pages": pages, "deleted": await asyncio.to_thread(store.list, deleted=True),
+                "last_daily": store.maintenance_value("last_daily"),
                 "meaning": await asyncio.to_thread(store.vector_status)}
 
     def knowledge_call(fn, *args, **kwargs):

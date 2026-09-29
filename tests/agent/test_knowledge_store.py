@@ -117,6 +117,25 @@ def test_a_page_the_agent_deleted_comes_back_and_a_purged_slug_is_free(store):
     assert store.write("reference/옛-주소", title="옛 사이트 주소", body="예전 주소는 old.example", sources=["chat:d"])["result"] == "created"
 
 
+def test_settings_lists_what_the_user_deleted_while_undo_still_brings_it_back(store):
+    for slug, title in (("feedback/보고서-말투", "보고서는 존댓말로"), ("reference/옛-주소", "옛 사이트 주소"),
+                        ("reference/새-주소", "새 사이트 주소"), ("project/세무", "세무 일정")):
+        store.write(slug, title=title, body=f"{title} 내용", sources=["chat:a"])
+    store.delete("reference/새-주소")
+    store.conn.execute("UPDATE pages SET deleted_at = deleted_at - 60 WHERE slug = 'reference/새-주소'")
+    store.delete("feedback/보고서-말투")  # Settings → 기억
+    store.delete("reference/옛-주소", by="agent")  # the agent may write it again itself
+    store.delete("project/세무")
+    store.conn.execute("UPDATE pages SET deleted_at = ? WHERE slug = 'project/세무'", (time.time() - 73 * 3600,))
+    deleted = store.list(deleted=True)  # over 72 hours is gone from view even before maintain() purges it
+    assert [p["slug"] for p in deleted] == ["feedback/보고서-말투", "reference/새-주소"]
+    assert deleted[0]["restorable_until"] - time.time() == pytest.approx(72 * 3600, abs=60)
+    assert store.list() == []
+    store.undo("feedback/보고서-말투")
+    assert [p["slug"] for p in store.list(deleted=True)] == ["reference/새-주소"]
+    assert [p["slug"] for p in store.list()] == ["feedback/보고서-말투"]
+
+
 def test_search_korean_short_words_titles_and_exact(store, cjk_so):
     store.write("incident/세금계산서-오류", title="세금계산서 발행 오류",
                 body="홈택스에서 세금계산서를 발행할 때 사업자번호 누락으로 실패했다. 거래처 정보를 고쳐 해결.", sources=["chat:a"])

@@ -472,16 +472,26 @@ class KnowledgeStore:
             self.conn.execute("UPDATE pages SET last_retrieved_at = ? WHERE id = ?", (time.time(), row["id"]))
             return self._page(row, full=True)
 
-    def list(self, type_: Optional[str] = None, include_deleted: bool = False) -> List[Dict[str, Any]]:
+    def list(self, type_: Optional[str] = None, deleted: bool = False) -> List[Dict[str, Any]]:
+        """Live pages, last changed first. With ``deleted``: the pages the user deleted that undo still
+        brings back (72 hours), last deleted first, each with ``restorable_until``."""
         where, args = ["1=1"], []
         if type_:
             where.append("type = ?")
             args.append(type_)
-        if not include_deleted:
+        if deleted:
+            where.append("deleted_at >= ?")
+            args.append(time.time() - PURGE_AFTER_S)
+        else:
             where.append("deleted_at IS NULL")
         with self.lock:
-            return [self._page(r, full=False) for r in self.conn.execute(
-                f"SELECT * FROM pages WHERE {' AND '.join(where)} ORDER BY updated_at DESC", args)]
+            rows = self.conn.execute(
+                f"SELECT * FROM pages WHERE {' AND '.join(where)} ORDER BY {'deleted_at' if deleted else 'updated_at'} DESC",
+                args).fetchall()
+            if not deleted:
+                return [self._page(r, full=False) for r in rows]
+            return [{**self._page(r, full=False), "restorable_until": r["deleted_at"] + PURGE_AFTER_S}
+                    for r in rows if json.loads(r["meta"]).get("deleted_by") != "agent"]
 
     def search(self, queries: List[str], limit: int = 8, type_: Optional[str] = None) -> List[Dict[str, Any]]:
         """GBrain's hybrid ranking: per query a word list (cjk_unicode61 BM25), a substring list

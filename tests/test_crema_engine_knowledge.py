@@ -143,3 +143,10 @@ def test_daily_pass_skips_ai_steps_in_light_mode(store, reviews, monkeypatch):
     api = FakeApi({"agent-client-a": (turns(4), time.time() - 3600)})
     report = crema_engine.daily_once(api)
     assert report["distilled"] == 0 and not reviews
+
+
+def test_free_plan_distills_nothing(store, reviews, monkeypatch):
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {"crema": {"free": True}})
+    assert crema_engine.distill(object(), "agent-client-free", "m", "p") == {"ran": False, "written": [], "skipped": "free"}
+    assert reviews == []
+

@@ -493,10 +493,11 @@ class KnowledgeStore:
             return [{**self._page(r, full=False), "restorable_until": r["deleted_at"] + PURGE_AFTER_S}
                     for r in rows if json.loads(r["meta"]).get("deleted_by") != "agent"]
 
-    def search(self, queries: List[str], limit: int = 8, type_: Optional[str] = None) -> List[Dict[str, Any]]:
+    def search(self, queries: List[str], limit: int = 8, type_: Optional[str] = None,
+               meaning: bool = True) -> List[Dict[str, Any]]:
         """GBrain's hybrid ranking: per query a word list (cjk_unicode61 BM25), a substring list
         (trigram BM25) and, with the model, a meaning list (cosine over chunk vectors, weighted
-        VECTOR_WEIGHT), fused by reciprocal rank (k=60); then title-phrase, backlink and status
+        VECTOR_WEIGHT; left out when ``meaning`` is false), fused by reciprocal rank (k=60); then title-phrase, backlink and status
         weights; an exact slug or title goes first. Best chunk per page."""
         queries = [q.strip() for q in queries if q and q.strip()][:3]
         if not queries:
@@ -505,7 +506,7 @@ class KnowledgeStore:
             fused: Dict[int, float] = {}
             best: Dict[int, tuple] = {}
             meaning_chunk: Dict[int, int] = {}
-            for ranked in self._vector_hits(queries, type_):
+            for ranked in (self._vector_hits(queries, type_) if meaning else []):
                 for position, (page_id, chunk_id) in enumerate(ranked):
                     fused[page_id] = fused.get(page_id, 0.0) + VECTOR_WEIGHT / (RRF_K + position + 1)
                     meaning_chunk.setdefault(page_id, chunk_id)

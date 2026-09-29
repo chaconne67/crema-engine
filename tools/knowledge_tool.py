@@ -53,6 +53,22 @@ def _mode() -> str:
     return value if value in _MODES else "balanced"
 
 
+def plan_free() -> bool:
+    """Crema's narrow free plan (config ``crema.free``, set by the app from the account's plan): the
+    notebook keeps what it has — read, think, search by words — but learns nothing new (no writes, no
+    distilling a quiet chat) and does not search by meaning. Those are part of the subscription."""
+    try:
+        from hermes_cli.config import load_config_readonly
+        return bool(((load_config_readonly() or {}).get("crema") or {}).get("free"))
+    except Exception:
+        return False
+
+
+FREE_REFUSAL = ("Saving to the knowledge notebook is part of the Crema subscription; on the free plan the notebook "
+                "keeps what it has and stays readable. Do not try again in this chat. If the user asked you to "
+                "remember something, tell them once that saving new knowledge needs the subscription.")
+
+
 def _aux_json(task: str, system: str, user: str, max_tokens: int = 1500) -> Any:
     """One auxiliary model call (the chat's own model unless an auxiliary one is set) returning JSON."""
     from agent.auxiliary_client import call_llm
@@ -90,7 +106,8 @@ def knowledge_search(args: Dict[str, Any], **_: Any) -> str:
     if not queries:
         return tool_error("queries: the question, plus up to two rephrasings")
     limit, rerank = _MODES[_mode()]
-    results = KnowledgeStore.open().search(queries, limit=limit, type_=args.get("type") or None)
+    results = KnowledgeStore.open().search(queries, limit=limit, type_=args.get("type") or None,
+                                           meaning=not plan_free())
     if rerank and len(results) > 3:
         results = _rerank(queries[0], results)
     return json.dumps({"results": results, "hint": "" if results else
@@ -105,6 +122,8 @@ def knowledge_get(args: Dict[str, Any], **_: Any) -> str:
 
 
 def knowledge_write(args: Dict[str, Any], **kw: Any) -> str:
+    if plan_free():
+        return tool_error(FREE_REFUSAL)
     store = KnowledgeStore.open()
     action = args.get("action") or "write"
     slug = args.get("slug") or ""
@@ -136,7 +155,7 @@ def knowledge_think(args: Dict[str, Any], **_: Any) -> str:
     if not question:
         return tool_error("question is required")
     store = KnowledgeStore.open()
-    hits = store.search([question] + list(args.get("rephrasings") or [])[:2], limit=12)
+    hits = store.search([question] + list(args.get("rephrasings") or [])[:2], limit=12, meaning=not plan_free())
     slugs = list(dict.fromkeys([h["slug"] for h in hits] + [s for h in hits[:3] for s in h.get("related", [])]))[:16]
     pages = []
     for slug in slugs:

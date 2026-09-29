@@ -195,8 +195,12 @@ def distill(api, session_id: str, model: str = "", provider: str = "") -> dict:
     from agent.knowledge_store import KnowledgeStore
     from hermes_cli.config import load_config_readonly
 
+    from tools.knowledge_tool import plan_free
+
     if not session_id.startswith(CHAT_PREFIX) or not _remembering(load_config_readonly() or {}):
         return {"ran": False, "written": []}
+    if plan_free():
+        return {"ran": False, "written": [], "skipped": "free"}
     store = KnowledgeStore.open()
     messages = api._ensure_session_db().get_messages_as_conversation(
         session_id, include_ancestors=True, repair_alternation=True)

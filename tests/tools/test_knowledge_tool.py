@@ -106,3 +106,29 @@ def test_memory_is_written_in_the_users_language():
     from agent.background_review import _MEMORY_REVIEW_PROMPT
     assert "language the user writes in" in MEMORY_SCHEMA["description"]
     assert "language the user writes in" in _MEMORY_REVIEW_PROMPT
+
+
+def _free(monkeypatch, free=True):
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {"crema": {"free": free}})
+
+
+def test_free_plan_keeps_the_notebook_but_writes_nothing_new(monkeypatch, store):
+    _seed(store)
+    _free(monkeypatch)
+    out = json.loads(kt.knowledge_write({"action": "write", "slug": "feedback/새것", "title": "t", "body": "b", "sources": ["x"]}))
+    assert "subscription" in out["error"] and not any(p["slug"] == "feedback/새것" for p in store.list())
+    assert json.loads(kt.knowledge_get({"slug": "incident/세금계산서-오류"}))["title"] == "세금계산서 발행 오류"
+
+
+def test_free_plan_searches_by_words_only(monkeypatch, store):
+    _seed(store)
+    seen = []
+    real = store.search
+    monkeypatch.setattr(store, "search", lambda *a, **kw: seen.append(kw.get("meaning", True)) or real(*a, **kw))
+    monkeypatch.setattr(kt, "_rerank", lambda question, results: results)
+    _free(monkeypatch)
+    assert json.loads(kt.knowledge_search({"queries": ["세금계산서"]}))["results"]
+    _free(monkeypatch, free=False)
+    kt.knowledge_search({"queries": ["세금계산서"]})
+    assert seen == [False, True]
+

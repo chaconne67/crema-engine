@@ -71,6 +71,9 @@ Both bind 127.0.0.1 only.
      model; `crema_engine.py` fills missing vectors at start; the quality floor
      `tests/agent/test_knowledge_meaning_quality.py` on `tests/fixtures/knowledge_eval_ko.json` runs when
      `CREMA_TEST_EMBED_MODEL` names the model (the Crema engine test workflow downloads it)
+   - the free plan (`crema.free`, set by the app from the account's plan; `tools/knowledge_tool.py` `plan_free`):
+     the notebook stays readable — get, think, search by words — but `knowledge_write` refuses, a quiet chat is
+     not distilled and search leaves out the meaning list (`KnowledgeStore.search(meaning=False)`)
 10. Crema's working method and default persona:
    - `agent/prompt_builder.py` `CREMA_METHOD_GUIDANCE`: how the agent works (honesty, changing things safely,
      smallest implementation, one success path, problem solving), in every prompt right after the identity,

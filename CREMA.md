@@ -78,7 +78,11 @@ Both bind 127.0.0.1 only.
      the method is not the user's to turn off. How the agent speaks stays in SOUL.md, the persona the user edits.
    - `hermes_cli/default_soul.py`: the Crema default persona (seeded SOUL.md) with the answer style; an
      unedited earlier Crema default is upgraded in place
-11. Removed (not used by the engine; nothing kept imports them):
+11. `hermes_cli/web_deps.py` `_server`: resolves a router helper's module through `importlib.import_module`
+   instead of a plain `sys.modules` read, so a route called while another worker thread is still importing
+   that module waits for it (the app's first `/api/env` after a start failed with "partially initialized
+   module 'hermes_cli.web_server_messaging'"); test `tests/hermes_cli/test_web_deps_import_race.py`
+12. Removed (not used by the engine; nothing kept imports them):
    - top level: `apps/ website/` (except `website/static/api/model-catalog.json`) `ui-tui/ web/ skills/ optional-skills/
      optional-mcps/ plugin-catalog/ evals/ scripts/ docker/ nix/ native/ (except native/fts5_cjk/) tests-js/ contributors/`,
      Docker/Nix/npm/lint files, translated READMEs, `batch_runner.py mini_swe_runner.py mcp_serve.py

@@ -11,18 +11,18 @@ module whose helper tests monkeypatch there.
 from __future__ import annotations
 
 import importlib
-import sys
 from typing import Any
 
 WEB_SERVER = "hermes_cli.web_server"
 
 
 def _server(module: str = WEB_SERVER):
-    """Return the live ``module`` (imported on demand)."""
-    mod = sys.modules.get(module)
-    if mod is None:  # pragma: no cover - routers are only mounted by web_server
-        mod = importlib.import_module(module)
-    return mod
+    """Return the live ``module`` (imported on demand). Through the import system, not a plain
+    ``sys.modules`` read: while another thread is still importing ``module`` (routes run in worker
+    threads, several at once when the app starts) the import lock makes this wait for the finished
+    module instead of returning the half-built one. A loaded module is the same object either way,
+    so monkeypatching it still wins."""
+    return importlib.import_module(module)
 
 
 def late(name: str, module: str = WEB_SERVER):

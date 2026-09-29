@@ -35,6 +35,7 @@ Both bind 127.0.0.1 only.
 | Past-chat search in Korean/CJK | the `cjk_unicode61` tokenizer (`native/fts5_cjk/`), built by Crema as `fts5_cjk.dll` and named in `HERMES_FTS5_CJK_SO`; chats saved before it are indexed when the engine starts | `crema_engine.py` |
 | Providers | every upstream provider that needs no extra package (Bedrock needs boto3 and Vertex google-auth, so both are left out) | provider plugins kept below; the Crema app hides only `moa` and `claude-code` |
 | Logins | only those made in Crema: other programs' logins (Claude Code, Codex CLI, GitHub CLI) are never borrowed | `auth.adopt_external_logins` default |
+| Shared files | chats that change the same file take turns: an order on the kanban board, a hand-over when the other chat is quiet and committed, else one judge call (the chat's model or `auxiliary.crema_turns`); a refused write waits for nothing, and the app starts the chat again | `agent/crema_file_turns.py`, `/api/crema/turns` |
 
 ## Changes from upstream
 
@@ -82,7 +83,15 @@ Both bind 127.0.0.1 only.
    instead of a plain `sys.modules` read, so a route called while another worker thread is still importing
    that module waits for it (the app's first `/api/env` after a start failed with "partially initialized
    module 'hermes_cli.web_server_messaging'"); test `tests/hermes_cli/test_web_deps_import_race.py`
-12. Removed (not used by the engine; nothing kept imports them):
+12. Chats that change the same file take turns (Crema plan `Crema-대화협업-계획-2026-09-29.md`):
+   - new: `agent/crema_file_turns.py` — the upstream kanban board (`hermes_cli/kanban_db.py`, kept whole; its
+     plugin, dispatcher and worker tools stay unused) holds each chat's current work, the order between chats
+     (links) and what happened (events); the rule runs in the `pre_tool_call` hook of `write_file`/`patch`,
+     records written files in `post_tool_call` (terminal commands in a Git folder after they run), tells a chat
+     its notes in `pre_llm_call`; `tests/agent/test_crema_file_turns.py`
+   - `crema_engine.py`: installs the hooks; `GET /api/crema/turns` (settle, then who waits, who the user must
+     order, whose turn came), `POST /api/crema/turns/woken|order|release`
+13. Removed (not used by the engine; nothing kept imports them):
    - top level: `apps/ website/` (except `website/static/api/model-catalog.json`) `ui-tui/ web/ skills/ optional-skills/
      optional-mcps/ plugin-catalog/ evals/ scripts/ docker/ nix/ native/ (except native/fts5_cjk/) tests-js/ contributors/`,
      Docker/Nix/npm/lint files, translated READMEs, `batch_runner.py mini_swe_runner.py mcp_serve.py

@@ -37,6 +37,10 @@ async def main() -> None:
     api = APIServerAdapter(PlatformConfig(enabled=True, extra={"key": token, "host": "127.0.0.1", "port": free_port()}))
     if not await api.connect():
         sys.exit("the run API did not start")
+    # Chats that change the same file take turns (agent/crema_file_turns.py).
+    from agent import crema_file_turns
+
+    crema_file_turns.install(api)
 
     import uvicorn
     from fastapi import FastAPI, HTTPException, Request
@@ -115,6 +119,30 @@ async def main() -> None:
         """A chat went quiet (Crema says when): keep what it taught, if anything."""
         return await asyncio.to_thread(
             distill, api, str(body.get("session_id") or ""), str(body.get("model") or ""), str(body.get("provider") or ""))
+
+    # Whose turn it is with a shared file: what the app shows and starts again (agent/crema_file_turns.py).
+    @settings.get("/api/crema/turns")
+    async def turns():
+        await asyncio.to_thread(crema_file_turns.settle)
+        return await asyncio.to_thread(crema_file_turns.state)
+
+    @settings.post("/api/crema/turns/woken")
+    async def turns_woken(body: dict):
+        await asyncio.to_thread(crema_file_turns.woken, str(body.get("session_id") or ""))
+        return {"ok": True}
+
+    @settings.post("/api/crema/turns/order")
+    async def turns_order(body: dict):
+        try:
+            await asyncio.to_thread(crema_file_turns.order, str(body.get("first") or ""), str(body.get("second") or ""))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"ok": True}
+
+    @settings.post("/api/crema/turns/release")
+    async def turns_release(body: dict):
+        await asyncio.to_thread(crema_file_turns.release, str(body.get("session_id") or ""))
+        return {"ok": True}
 
     @settings.middleware("http")
     async def only_crema(request: Request, call_next):

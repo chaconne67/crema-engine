@@ -404,8 +404,11 @@ CREMA_METHOD_GUIDANCE = (
     "5. Choose the fix that cuts that failure path.\n"
     "6. Recurrence: can the same cause fail again? Closed, open or unverified; if not closed, name the "
     "condition and the check still needed.\n"
-    "Report the symptom, the cause with its evidence, the fix and the recurrence verdict in a few lines, not "
-    "a replay of every step."
+    "This holds for a plain question (\"why does this happen?\") too, even when there is nothing to inspect and "
+    "you answer from what you know: the causes you name are then unverified for the user's case, so mark them "
+    "so and say what would confirm them.\n"
+    "Report in this order, a line or two each, in the user's language: the symptom; the cause, marked confirmed "
+    "or unverified, with its evidence; the fix; the recurrence verdict. Leave out the replay of every step."
 )
 
 # Universal parallel-tool-call guidance (ALL models): the runtime already executes independent calls

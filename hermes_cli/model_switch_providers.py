@@ -208,7 +208,7 @@ def prewarm_picker_cache_async() -> Optional["_threading.Thread"]:
     return t
 
 
-def _prefetch_provider_models_parallel(provider_slugs: list[str]) -> None:
+def _prefetch_provider_models_parallel(provider_slugs: list[str], *, revalidate: bool = False) -> None:
     """Fetch the provider catalogs the serial picker loop would block on, in parallel.
 
     Only providers the serial call cannot serve from disk are fetched — missing,
@@ -217,7 +217,10 @@ def _prefetch_provider_models_parallel(provider_slugs: list[str]) -> None:
     catalog is authoritative inside its own short native TTL, so prefetching either trades a
     non-blocking serial read for a parallel fetch the picker waits on. Each worker re-persists
     through the thread-safe ``update_provider_cache_entry`` so concurrent writes cannot
-    clobber each other."""
+    clobber each other. ``revalidate`` fetches every slug regardless of cache age, so a picker
+    that must offer newly released models never shows a stale catalog; it waits at most
+    ``_REVALIDATE_WAIT_SECONDS``, so a hung provider keeps its cached row (#114215) while its
+    fetch finishes in the background."""
     from hermes_cli.models import (
         _credential_fingerprint, _disk_serve_tier, _load_provider_models_cache,
         _normalized_cache_slug, cached_provider_model_ids)
@@ -232,8 +235,8 @@ def _prefetch_provider_models_parallel(provider_slugs: list[str]) -> None:
     cache = _load_provider_models_cache()
     for slug in provider_slugs:
         key = _normalized_cache_slug(slug)
-        if key and _disk_serve_tier(cache.get(key), _credential_fingerprint(key), now,
-                                    is_ollama=key == "ollama") is None:
+        if key and (revalidate or _disk_serve_tier(cache.get(key), _credential_fingerprint(key), now,
+                                                   is_ollama=key == "ollama") is None):
             stale_slugs.append(key)
 
     if not stale_slugs:
@@ -251,10 +254,16 @@ def _prefetch_provider_models_parallel(provider_slugs: list[str]) -> None:
         except Exception:
             pass  # best-effort; picker falls back to curated list
 
-    with concurrent.futures.ThreadPoolExecutor(
+    executor = concurrent.futures.ThreadPoolExecutor(
         max_workers=min(8, len(stale_slugs)), thread_name_prefix="model-cache-prefetch",
-    ) as executor:
-        list(executor.map(_fetch_one, stale_slugs))
+    )
+    futures = [executor.submit(_fetch_one, slug) for slug in stale_slugs]
+    concurrent.futures.wait(futures, timeout=_REVALIDATE_WAIT_SECONDS if revalidate else None)
+    executor.shutdown(wait=False)
+
+
+# Crema: how long a picker open waits for its live catalog revalidation.
+_REVALIDATE_WAIT_SECONDS = 5.0
 
 
 def _any_env(env_vars, read_env=os.environ.get) -> bool:
@@ -1174,7 +1183,7 @@ def list_authenticated_providers(
     max_models: int | None = None, current_model: str = "", refresh: bool = False,
     probe_custom_providers: bool = True, probe_current_custom_provider: bool = False,
     for_picker: bool = False, excluded_providers: list | None = None,
-    non_blocking_catalogs: bool = False) -> List[dict]:
+    non_blocking_catalogs: bool = False, revalidate_catalogs: bool = False) -> List[dict]:
     """Detect which providers have credentials and list their curated (not full models.dev) models.
 
     Returns dicts with ``slug`` (the --provider value), ``name``, ``is_current``,
@@ -1186,7 +1195,9 @@ def list_authenticated_providers(
     true, GUI false); ``probe_current_custom_provider`` probes only the selected custom endpoint.
     ``non_blocking_catalogs`` is the GUI read path (``model.options``): provider catalogs come from
     the disk cache only and stale/missing ones warm in the background, so a degraded provider
-    never stalls the picker (#114215)."""
+    never stalls the picker (#114215). ``revalidate_catalogs`` live-fetches every authenticated
+    provider catalog in parallel first, so the rows always carry the current model list (chat
+    ``/model``)."""
 
     from agent.models_dev import fetch_models_dev
     from hermes_cli.config import coerce_provider_id, stringify_provider_map
@@ -1228,11 +1239,11 @@ def list_authenticated_providers(
     # for <=3 providers (serial is fast enough; avoids thread-pool overhead). The GUI read path
     # collects nothing either: every cache-only row read spawns its own deduped background refresh,
     # so no thread pool is joined and no probe can hold up the response.
-    prefetch_slugs = ([] if (refresh or non_blocking_catalogs)
+    prefetch_slugs = ([] if (refresh or non_blocking_catalogs) and not revalidate_catalogs
                       else _collect_authed_provider_slugs(data, b.curated, excluded_providers or []))
-    if len(prefetch_slugs) > 3:
+    if prefetch_slugs and (revalidate_catalogs or len(prefetch_slugs) > 3):
         try:
-            _prefetch_provider_models_parallel(prefetch_slugs)
+            _prefetch_provider_models_parallel(prefetch_slugs, revalidate=revalidate_catalogs)
         except Exception:
             pass  # best-effort; serial path still works
 
@@ -1310,7 +1321,7 @@ def list_picker_providers(
     custom_providers: list | None = None, max_models: int | None = None, current_model: str = "",
     include_moa: bool = False, excluded_providers: list | None = None,
     non_blocking_catalogs: bool = False, probe_custom_providers: bool = True,
-    probe_current_custom_provider: bool = False) -> List[dict]:
+    probe_current_custom_provider: bool = False, revalidate_catalogs: bool = False) -> List[dict]:
     """Interactive-picker variant of :func:`list_authenticated_providers`.
 
     OpenRouter's list is replaced with :func:`hermes_cli.models.fetch_openrouter_models` (curated
@@ -1325,7 +1336,8 @@ def list_picker_providers(
         user_providers=user_providers, custom_providers=custom_providers, max_models=max_models,
         current_model=current_model, for_picker=True, excluded_providers=excluded_providers,
         non_blocking_catalogs=non_blocking_catalogs, probe_custom_providers=probe_custom_providers,
-        probe_current_custom_provider=probe_current_custom_provider)
+        probe_current_custom_provider=probe_current_custom_provider,
+        revalidate_catalogs=revalidate_catalogs)
     if include_moa:
         providers = _prepend_moa_picker_provider(providers, current_provider=current_provider)
 

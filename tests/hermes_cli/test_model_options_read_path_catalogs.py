@@ -88,3 +88,15 @@ def test_explicit_refresh_still_probes_providers(monkeypatch, tmp_path):
     assert _DEAD_PROVIDER in live_calls, "an explicit refresh must still probe provider catalogs"
     assert "live-model" in _row(payload, _DEAD_PROVIDER)["models"]
     _drain_background_warms()
+
+
+def test_normal_open_lists_live_models_on_its_first_open(monkeypatch, tmp_path):
+    """Crema: a normal open revalidates every authenticated catalog live first, so a newly
+    released model is offered on the first open, not only after a background warm."""
+    live_calls, _ = _picker_env(monkeypatch, tmp_path)
+
+    payload = build_model_options_payload(load_picker_context())
+
+    assert _DEAD_PROVIDER in live_calls
+    assert "live-model" in _row(payload, _DEAD_PROVIDER)["models"]
+    _drain_background_warms()

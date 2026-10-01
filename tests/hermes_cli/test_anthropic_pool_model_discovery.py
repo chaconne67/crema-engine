@@ -111,3 +111,30 @@ def test_anthropic_pool_api_key_overrides_conflicting_active_endpoint(monkeypatc
         )
     ]
     assert all(not url.startswith(active_endpoint) for url, _headers in requests)
+
+
+def test_anthropic_picker_renews_an_expired_pool_oauth_token(monkeypatch):
+    """Crema: the picker takes the OAuth token the way a chat does (pool select renews an expired
+    one), so an expired stored token still lists the account's models, not the curated fallback."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(models, "_get_model_config_dict", lambda: {"provider": "anthropic"})
+    monkeypatch.setattr(
+        "agent.anthropic_credentials.resolve_anthropic_token",
+        lambda: "sk-ant-oat01-expired",
+    )
+    renewed = SimpleNamespace(auth_type="oauth", access_token="sk-ant-oat01-renewed")
+    monkeypatch.setattr(
+        "agent.credential_pool.load_pool",
+        lambda provider: SimpleNamespace(select=lambda: renewed),
+    )
+    captured = {}
+
+    def _open(request, *, timeout):
+        captured["headers"] = {key.lower(): value for key, value in request.header_items()}
+        return _Response({"data": [{"id": "claude-opus-5-5"}]})
+
+    monkeypatch.setattr(models, "_urlopen_model_catalog_request", _open)
+
+    assert "claude-opus-5-5" in models.provider_model_ids("anthropic")
+    assert captured["headers"]["authorization"] == "Bearer sk-ant-oat01-renewed"

@@ -1937,13 +1937,17 @@ def cached_provider_model_ids(
         if fresh is None:
             # The live fetch degraded to the curated list; the account's real catalog is on disk.
             return [model for model in entry["models"] if not _model_requires_account_discovery(normalized, model)]
-        _store_cache_entry(normalized, fresh, cache)
+        # Reload under the lock: parallel prefetch workers each hold a stale snapshot, and writing
+        # it back would clobber the rows other workers just refreshed.
+        with _cache_write_lock:
+            _store_cache_entry(normalized, fresh)
         return list(live)
 
     if is_ollama:
         if _ollama_native_probe_reachable():
             # A reachable empty native catalog is authoritative; do not resurrect a stale disk catalog.
-            _store_cache_entry(normalized, _cache_entry(fp, [], now), cache)
+            with _cache_write_lock:
+                _store_cache_entry(normalized, _cache_entry(fp, [], now))
             return []
         # A failed/non-native probe is not authoritative: keep a stale catalog rather than blanking
         # the picker during a transient outage.
@@ -2018,6 +2022,18 @@ def _fetch_anthropic_models(
 
     resolved_base_url = base_url
     token = (api_key or "").strip() or resolve_anthropic_token()
+    if token and not api_key and _is_oauth_token(token):
+        # Crema: the picker runs in the engine that also chats, so take the OAuth token the way a chat
+        # does (pool select renews an expired one). The read-only token 401s once it expires, and the
+        # picker then lists only the curated fallback, without the account's new models.
+        try:
+            from agent.credential_pool import AUTH_TYPE_OAUTH, load_pool
+
+            entry = load_pool("anthropic").select()
+            if entry is not None and entry.auth_type == AUTH_TYPE_OAUTH and entry.access_token:
+                token = entry.access_token
+        except Exception:
+            pass
     if not token:
         # A pool credential and its endpoint are one security boundary — never pair the pool key
         # with a caller-provided endpoint.

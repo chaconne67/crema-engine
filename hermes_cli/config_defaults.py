@@ -1417,6 +1417,9 @@ DEFAULT_CONFIG = {
     # Skills — external skill directories shared across tools/agents. Paths are expanded (~, ${VAR})
     # and resolved; read-only — creation goes to ~/.hermes/skills/ unless create_dir redirects it.
     "skills": {
+        # Turns between automatic skill reviews; Crema: 0 - skills are reviewed when a chat goes quiet
+        # (crema_engine.py distill), where what changed is told and can be undone.
+        "creation_nudge_interval": 0,
         "external_dirs": [],   # e.g. ["~/.agents/skills", "/shared/team-skills"]
         # Where skill_manage-created skills go (empty = profile-local dir). When set, new skills
         # land here AND agent-facing instructions name this path; expanded (~, ${VAR}), relative to

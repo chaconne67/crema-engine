@@ -67,7 +67,8 @@ def reviews(monkeypatch, store):
     calls = []
 
     def spawn(agent, messages, review_memory=False, review_skills=False, focus=None, task_cfg=None, explicit=False):
-        calls.append({"messages": messages, "focus": focus, "extra": task_cfg.get("extra_tools"), "memory": review_memory})
+        calls.append({"messages": messages, "focus": focus, "extra": task_cfg.get("extra_tools"), "memory": review_memory,
+                      "skills": review_skills})
 
         def target():
             store.write("incident/세금-오류", title="세금계산서 오류", body="사업자번호 누락", sources=["chat:x"])
@@ -81,10 +82,43 @@ def test_a_quiet_chat_with_enough_new_turns_is_distilled_once(store, reviews):
     out = crema_engine.distill(api, "agent-client-a", model="m", provider="p")
     assert out["ran"] and out["written"][0]["slug"] == "incident/세금-오류"
     assert api.created[0]["requested_model"] == "m" and api._memory_sessions.checked_in
-    assert set(reviews[0]["extra"]) >= {"knowledge_search", "knowledge_write"} and reviews[0]["memory"]
+    assert set(reviews[0]["extra"]) >= {"knowledge_search", "knowledge_write"} and reviews[0]["memory"] and reviews[0]["skills"]
     assert "language the user writes in" in reviews[0]["focus"]
     # Nothing new since: not again.
     assert crema_engine.distill(api, "agent-client-a")["ran"] is False
+
+
+def test_a_review_tells_what_it_changed_in_memory_and_skills_and_each_can_be_undone(store, monkeypatch):
+    from hermes_constants import get_hermes_home
+
+    home = get_hermes_home()
+    (home / "memories").mkdir(parents=True, exist_ok=True)
+    (home / "memories" / "USER.md").write_text("이름: 주인님", encoding="utf-8")
+    old_skill = home / "skills" / "release-crema" / "SKILL.md"
+    old_skill.parent.mkdir(parents=True, exist_ok=True)
+    old_skill.write_text("릴리스 절차 v1", encoding="utf-8")
+
+    def spawn(agent, messages, **_):
+        def target():  # what a real review would do through its memory and skill tools
+            (home / "memories" / "USER.md").write_text("이름: 주인님\n선호: 결론 먼저", encoding="utf-8")
+            old_skill.write_text("릴리스 절차 v2", encoding="utf-8")
+            new_skill = home / "skills" / "gbrain-record" / "SKILL.md"
+            new_skill.parent.mkdir(parents=True, exist_ok=True)
+            new_skill.write_text("기록 전 본문 읽기", encoding="utf-8")
+        return target, "prompt"
+    monkeypatch.setattr("agent.background_review.spawn_background_review_thread", spawn)
+    out = crema_engine.distill(FakeApi({"agent-client-a": (turns(3), time.time())}), "agent-client-a")
+    assert [w["title"] for w in out["written"]] == ["나에 대한 기억"]
+    assert sorted(w["title"] for w in out["learned"]) == ["gbrain-record", "release-crema"]
+
+    for change in out["written"] + out["learned"]:
+        assert crema_engine.undo_review_change(change["slug"])["result"] == "reverted"
+    assert (home / "memories" / "USER.md").read_text(encoding="utf-8") == "이름: 주인님"
+    assert old_skill.read_text(encoding="utf-8") == "릴리스 절차 v1"
+    assert not (home / "skills" / "gbrain-record").exists()
+    # Undone once: the same slug is no longer known.
+    with pytest.raises(ValueError):
+        crema_engine.undo_review_change(out["written"][0]["slug"])
 
 
 def test_distilling_does_not_bring_back_a_page_the_user_deleted(store, monkeypatch):

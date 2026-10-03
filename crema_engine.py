@@ -112,7 +112,10 @@ async def main() -> None:
 
     @settings.post("/api/crema/knowledge/undo")
     async def knowledge_undo(body: dict):
-        return await asyncio.to_thread(knowledge_call, KnowledgeStore.open().undo, str(body.get("slug") or ""))
+        slug = str(body.get("slug") or "")
+        # A memory file or skill a quiet chat's review changed ("undo:<token>"), else a notebook page.
+        undo = undo_review_change if slug.startswith("undo:") else KnowledgeStore.open().undo
+        return await asyncio.to_thread(knowledge_call, undo, slug)
 
     @settings.post("/api/crema/distill")
     async def distill_chat(body: dict):
@@ -182,6 +185,77 @@ DISTILL_FOCUS = (
 )
 
 
+# What a quiet chat's review may change besides the notebook (docs Crema-자동작업-알림-원칙): the memory files
+# and the skills. Their texts are read before it runs, so Crema can say what changed and undo it.
+MEMORY_TITLES = {"USER.md": "나에 대한 기억", "MEMORY.md": "에이전트 메모"}
+UNDO_DIR = "crema-undo"
+
+
+def _review_texts() -> dict:
+    from hermes_constants import get_hermes_home
+
+    home = get_hermes_home()
+    paths = [home / "memories" / name for name in MEMORY_TITLES]
+    skills = home / "skills"
+    if skills.is_dir():
+        paths += sorted(skills.rglob("SKILL.md"))
+    return {str(path): path.read_text(encoding="utf-8") for path in paths if path.is_file()}
+
+
+def _review_changes(before: dict) -> tuple:
+    """What the review changed since `before`: memory files as written entries, skills as learned ones, each with
+    an undo slug ("undo:<token>") whose earlier text (None: the file is new) is kept under crema-undo/."""
+    import uuid
+
+    from hermes_constants import get_hermes_home
+
+    after = _review_texts()
+    undo_dir = get_hermes_home() / UNDO_DIR
+    written, learned = [], []
+    for path in sorted(set(before) | set(after)):
+        if before.get(path) == after.get(path):
+            continue
+        token = uuid.uuid4().hex
+        undo_dir.mkdir(parents=True, exist_ok=True)
+        (undo_dir / f"{token}.json").write_text(json.dumps({"path": path, "text": before.get(path)}, ensure_ascii=False), encoding="utf-8")
+        name = os.path.basename(path)
+        if name in MEMORY_TITLES:
+            written.append({"slug": f"undo:{token}", "title": MEMORY_TITLES[name]})
+        else:
+            learned.append({"slug": f"undo:{token}", "title": os.path.basename(os.path.dirname(path))})
+    return written, learned
+
+
+def undo_review_change(slug: str) -> dict:
+    """Puts back a memory file or skill as it was before a quiet chat's review: a new skill is removed."""
+    import re
+    import shutil
+
+    from hermes_constants import get_hermes_home
+
+    token = slug.removeprefix("undo:")
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise ValueError(f"no change {slug}")
+    record = get_hermes_home() / UNDO_DIR / f"{token}.json"
+    if not record.is_file():
+        raise ValueError(f"no change {slug}")
+    kept = json.loads(record.read_text(encoding="utf-8"))
+    path = kept["path"]
+    if kept["text"] is not None:
+        with open(path, "w", encoding="utf-8") as out:
+            out.write(kept["text"])
+    elif os.path.basename(path) == "SKILL.md":
+        shutil.rmtree(os.path.dirname(path), ignore_errors=True)
+    elif os.path.exists(path):
+        os.remove(path)
+    record.unlink()
+    if os.path.basename(path) == "SKILL.md":
+        from agent.prompt_builder import clear_skills_system_prompt_cache
+
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+    return {"slug": slug, "result": "reverted"}
+
+
 def _remembering(config: dict) -> bool:
     memory = config.get("memory") or {}
     return memory.get("memory_enabled", True) is not False or memory.get("user_profile_enabled", True) is not False
@@ -210,17 +284,20 @@ def distill(api, session_id: str, model: str = "", provider: str = "") -> dict:
                      and not any(m.get("role") == "tool" for m in fresh)):
         return {"ran": False, "written": []}
     started = time.time()
+    before = _review_texts()
     agent = api._create_agent(session_id=session_id, requested_model=model or None, requested_provider=provider or None)
     task_cfg = dict(_background_review_task_config())
     task_cfg["extra_tools"] = list(task_cfg.get("extra_tools") or []) + list(KNOWLEDGE_TOOLS)
+    # Skills are reviewed here too (skills.creation_nudge_interval is 0 in Crema): one place for what Crema learns.
     target, _ = spawn_background_review_thread(
-        agent, messages, review_memory=True, focus=DISTILL_FOCUS, task_cfg=task_cfg, explicit=True)
+        agent, messages, review_memory=True, review_skills=True, focus=DISTILL_FOCUS, task_cfg=task_cfg, explicit=True)
     try:
         target()
     finally:
         api._memory_sessions.checkin(agent)
     store.mark_distilled(session_id, len(messages))
-    return {"ran": True, "written": store.changed_since(started)}
+    memory, learned = _review_changes(before)
+    return {"ran": True, "written": store.changed_since(started) + memory, "learned": learned}
 
 
 DAILY_EVERY_S = 20 * 3600

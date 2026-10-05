@@ -214,6 +214,17 @@ def _handle_video_generate(args: Dict[str, Any], **_kw: Any) -> str:
         return _err(f"Provider '{pname}' error: {exc}", "provider_exception")
     if not isinstance(result, dict):
         return _err("Provider returned a non-dict result", "provider_contract")
+    # Crema: a video at a web link is kept on this computer, so the chat plays it in place (MEDIA:<path>) and it
+    # outlives the provider's expiring link; the link stays as public_url for edit/extend. On failure the link stands.
+    video = result.get("video")
+    if result.get("success") and isinstance(video, str) and video.lower().startswith(("http://", "https://")):
+        try:
+            from agent.video_gen_provider import save_url_video
+
+            result["video"] = str(save_url_video(video))
+            result.setdefault("public_url", video)
+        except Exception as exc:
+            logger.warning("video_gen: could not keep %s on this computer: %s", video, exc)
     return json.dumps(result)
 
 

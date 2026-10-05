@@ -18,6 +18,14 @@ def _reset_registry():
     video_gen_registry._reset_for_tests()
 
 
+@pytest.fixture(autouse=True)
+def _no_download(monkeypatch):
+    """No network in these tests: keeping a result's video locally fails, so its link stands."""
+    def fail(url, **_):
+        raise RuntimeError("no network in tests")
+    monkeypatch.setattr("agent.video_gen_provider.save_url_video", fail)
+
+
 class _RecordingProvider(VideoGenProvider):
     """Captures the kwargs the tool layer hands it."""
 
@@ -103,3 +111,25 @@ class TestUnifiedDispatch:
 
         self._run({"prompt": "a dog"}, configured="fake")
         assert "upscale" not in provider.last_kwargs
+
+
+def test_a_video_at_a_web_link_is_kept_locally_with_the_link_as_public_url(monkeypatch, tmp_path):
+    """Crema plays a kept file in place (MEDIA:<path>); the link stays for edit/extend."""
+    from tools import video_generation_tool as vgt
+
+    kept = tmp_path / "video_1.mp4"
+    calls = []
+
+    def save(url, **_):
+        calls.append(url)
+        kept.write_bytes(b"mp4")
+        return kept
+
+    monkeypatch.setattr("agent.video_gen_provider.save_url_video", save)
+    provider = _RecordingProvider()
+    monkeypatch.setattr(vgt, "_resolve_active_provider", lambda: provider)
+    result = json.loads(vgt._handle_video_generate({"prompt": "a cat"}))
+    assert calls == ["https://example.com/v.mp4"]
+    assert result["video"] == str(kept)
+    assert result["public_url"] == "https://example.com/v.mp4"
+

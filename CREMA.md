@@ -30,7 +30,7 @@ Both bind 127.0.0.1 only.
 
 | Area | Kept | How it is chosen |
 |---|---|---|
-| Tools | files, terminal/process, todo, web search/extract, image understanding, memory, past-chat search, skills (the agent writes and improves them) | `hermes-api-server` in `toolsets.py` |
+| Tools | files, terminal/process, todo, web search/extract, image understanding, memory, past-chat search, skills (the agent writes and improves them), a keyless backup ("백업해 줘") | `hermes-api-server` in `toolsets.py` |
 | Knowledge notebook | pages of what the agent learned working with the user, searched before work and written after (the method of GBrain, below); a quiet chat is distilled into it, and once a day while Crema is quiet the notebook is tidied | `knowledge` in `toolsets.py` (a direct surface in `tools/tool_search.py`, so never deferred); `knowledge.search_mode` light/balanced/thorough, `knowledge.nightly` |
 | Past-chat search in Korean/CJK | the `cjk_unicode61` tokenizer (`native/fts5_cjk/`), built by Crema as `fts5_cjk.dll` and named in `HERMES_FTS5_CJK_SO`; chats saved before it are indexed when the engine starts | `crema_engine.py` |
 | Providers | every upstream provider that needs no extra package (Bedrock needs boto3 and Vertex google-auth, so both are left out) | provider plugins kept below; the Crema app hides only `moa` and `claude-code` |
@@ -49,7 +49,8 @@ Both bind 127.0.0.1 only.
    it is complete, as the writer does; without it the dashboard's prefix search ("세금*") found nothing.
 7. `agent/learning_mutations.py` — a user's memory edit or delete holds the memory tool's file lock.
 8. `hermes_cli/backup.py`, `hermes_cli/subcommands/backup.py` — `--no-secrets` leaves out `.env`,
-   `auth.json` and the credential vault.
+   `auth.json` and the credential vault. `tools/crema_backup_tool.py` (new, `backup` toolset in `hermes-api-server`)
+   makes that backup when the user asks in the chat, in Documents\Crema 백업.
 9. The knowledge notebook (Crema's; the method of GBrain, github.com/garrytan/gbrain, MIT, at
    `e78f1c3` v0.59.0.0 — page model, whole-page writes with versions, content hashes, soft delete,
    CJK-aware chunking, rule-based links, reciprocal rank fusion with title/backlink weights, the

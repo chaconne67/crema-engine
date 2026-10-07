@@ -132,3 +132,14 @@ def test_free_plan_searches_by_words_only(monkeypatch, store):
     kt.knowledge_search({"queries": ["세금계산서"]})
     assert seen == [False, True]
 
+
+
+def test_write_keeps_where_a_file_is(store):
+    out = json.loads(kt.knowledge_write({"action": "write", "slug": "file/기획서", "title": "무료 연결 기획서",
+                                         "body": "무료 연결 단계", "location": r"C:\docs\plan.md"}, session_id="s"))
+    assert out["result"] == "created" and store.get("file/기획서")["location"] == r"C:\docs\plan.md"
+    assert "error" in kt.knowledge_write({"action": "write", "slug": "file/빈", "title": "t", "body": "b"}, session_id="s")
+
+
+def test_guidance_says_when_to_keep_a_file_and_how_to_link_it():
+    assert "file/" in kt.KNOWLEDGE_GUIDANCE and "link" in kt.KNOWLEDGE_GUIDANCE

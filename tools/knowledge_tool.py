@@ -35,6 +35,12 @@ KNOWLEDGE_GUIDANCE = (
     "After work, when you learned something reusable, write it with knowledge_write: a problem with its "
     "cause and fix (incident/), a correction the user made to your assumptions (feedback/), a decision and "
     "why (decision/), how a piece of their work is done (project/), or what you looked up (reference/). "
+    "Keep a file/ page for each document or material you made or substantially changed for the user, and for "
+    "one the user tells you about: its title, what it holds (a short summary of what it is about, its main points "
+    "and decisions, not the whole text) and its location — the full path on this computer, or user@host:/path "
+    "for a file on another computer. When a file moves or is renamed, write its page again with the new location. "
+    "When you point the user to a file page, show its link as a Markdown link [title](link), exactly as given; a "
+    "page with no link is on another computer, so show its location as code. "
     "One page per topic: search first and update the existing page instead of making a second one. Never "
     "store a whole conversation, secrets, or anything vague. "
     "Write every memory — knowledge pages, the memory tool's notes and the user profile — in the language "
@@ -135,7 +141,8 @@ def knowledge_write(args: Dict[str, Any], **kw: Any) -> str:
                 sources.append(f"chat:{session}")
             result = store.write(slug, title=args.get("title") or "", body=args.get("body") or "",
                                  sources=sources, authority=args.get("authority") or "agent_observed",
-                                 status=args.get("status") or "active", tags=args.get("tags"))
+                                 status=args.get("status") or "active", tags=args.get("tags"),
+                                 location=args.get("location"))
         elif action == "timeline":
             result = store.add_timeline(slug, args.get("summary") or "", date=args.get("date"),
                                         source=f"chat:{session}" if session else "")
@@ -190,7 +197,8 @@ registry.register(
     name="knowledge_search", toolset="knowledge", emoji="📓",
     schema={"name": "knowledge_search",
             "description": "Search your knowledge notebook of what you learned with this user. Use it before "
-                           "acting on a request. Results: slug, title, type, status, snippet, related slugs.",
+                           "acting on a request. Results: slug, title, type, status, snippet, related slugs; "
+                           "file pages also give location and, for a file on this computer, link.",
             "parameters": {"type": "object", "properties": {
                 "queries": _QUERIES,
                 "type": {"type": "string", "enum": list(TYPES), "description": "Only this kind of page."}},
@@ -223,6 +231,9 @@ registry.register(
                               "description": "user_said, agent_observed, or standing_instruction (a rule the "
                                              "user asked you to always follow)."},
                 "status": {"type": "string", "enum": list(STATUSES)},
+                "location": {"type": "string",
+                             "description": "file/ pages (required): where the file is — the full path on this "
+                                            "computer, or user@host:/path on another computer."},
                 "summary": {"type": "string", "description": "timeline: what happened."},
                 "date": {"type": "string", "description": "timeline: YYYY-MM-DD (today when left out)."},
                 "tags": {"type": "array", "items": {"type": "string"}}},

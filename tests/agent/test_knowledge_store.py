@@ -255,3 +255,47 @@ def test_no_model_means_keyword_search(store, meaning, monkeypatch):
     assert store.vector_status() == {"on": False, "chunks": 2, "vectors": 0}
     assert store.fill_vectors() == 0
     assert store.search(["와이파이"])[0]["evidence"] in ("title", "keyword")
+
+
+def test_file_pages_keep_where_the_file_is_and_are_found_by_its_name(store):
+    with pytest.raises(ValueError):
+        store.write("file/견적서", title="견적서", body="거래처 견적 정리", sources=["t"])
+    store.write("file/무료-연결-기획서", title="무료 모델 연결 기획서", body="OpenRouter와 Gemini 무료 연결 단계와 확인 방법",
+                sources=["t"], location=r"C:\Users\me\docs\free plan #2.md")
+    top = store.search(["free plan"])[0]
+    assert top["slug"] == "file/무료-연결-기획서" and top["location"] == r"C:\Users\me\docs\free plan #2.md"
+    assert top["link"] == "file:///C:/Users/me/docs/free%20plan%20%232.md"
+    page = store.get("file/무료-연결-기획서")
+    assert page["location"] == r"C:\Users\me\docs\free plan #2.md"
+    # Rewritten without a location (Settings → 기억 corrects only the text): the file stays where it was.
+    store.write("file/무료-연결-기획서", title="무료 모델 연결 기획서", body="무료 연결 단계", sources=["settings"])
+    assert store.get("file/무료-연결-기획서")["location"] == r"C:\Users\me\docs\free plan #2.md"
+    # Another computer's file: the location without a link.
+    store.write("file/서버-계획", title="서버 계획", body="배포 순서", sources=["t"],
+                location="chaconne@49.247.192.127:/home/chaconne/plan.md")
+    remote = store.get("file/서버-계획")
+    assert remote["location"] == "chaconne@49.247.192.127:/home/chaconne/plan.md" and "link" not in remote
+    assert "location" not in store.search(["배포"], type_="incident") and all(
+        "location" not in r for r in store.search(["단계"]) if not r["slug"].startswith("file/"))
+
+
+def test_moving_a_file_is_a_new_version_and_undo_puts_it_back(store):
+    store.write("file/견적서", title="거래처 견적서", body="단가와 수량", sources=["t"], location=r"C:\work\quotealpha.md")
+    assert store.write("file/견적서", title="거래처 견적서", body="단가와 수량", sources=["t"],
+                       location=r"C:\work\quotealpha.md")["result"] == "unchanged"
+    moved = store.write("file/견적서", title="거래처 견적서", body="단가와 수량", sources=["t"],
+                        location=r"D:\archive\proposalbeta.md")
+    assert moved["result"] == "updated" and moved["version"]
+    assert [r["slug"] for r in store.search(["proposalbeta"])] == ["file/견적서"]
+    assert store.search(["quotealpha"]) == []
+    store.undo("file/견적서")
+    assert store.get("file/견적서")["location"] == r"C:\work\quotealpha.md"
+    assert [r["slug"] for r in store.search(["quotealpha"])] == ["file/견적서"]
+    assert store.search(["proposalbeta"]) == []
+
+
+def test_pages_without_a_location_hash_as_before(store):
+    from agent.knowledge_store import _content_hash
+    store.write("incident/프린터", title="프린터", body="스풀러 재시작", sources=["t"])
+    row = store.conn.execute("SELECT content_hash FROM pages WHERE slug = 'incident/프린터'").fetchone()
+    assert row[0] == _content_hash("프린터", "incident", "스풀러 재시작", {"authority": "agent_observed", "status": "active"})

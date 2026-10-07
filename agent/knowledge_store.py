@@ -13,20 +13,22 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
 import sqlite3
 import threading
 import time
 import unicodedata
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Dict, Iterable, List, Optional
 
 from agent import knowledge_embed as embed
 
 logger = logging.getLogger(__name__)
 
-# Kinds of page, by slug prefix as in GBrain (the prefix is what classifies a page).
-TYPES = ("project", "incident", "feedback", "reference", "decision")
+# Kinds of page, by slug prefix as in GBrain (the prefix is what classifies a page). A file/ page is a
+# document or material the user has: what it holds, and where it is (meta "location").
+TYPES = ("project", "incident", "feedback", "reference", "decision", "file")
 AUTHORITIES = ("user_said", "agent_observed", "standing_instruction")
 STATUSES = ("active", "needs_review", "superseded")
 
@@ -138,6 +140,28 @@ def _content_hash(title: str, type_: str, body: str, meta: Dict[str, Any]) -> st
     return hashlib.sha256(json.dumps([title, type_, body, meta], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
+def _hashed(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """The meta that is part of a page's content: authority and status, and where a file is — a moved
+    file is a new version. Pages without a location hash as before."""
+    kept = {k: meta.get(k) for k in ("authority", "status")}
+    if meta.get("location"):
+        kept["location"] = meta["location"]
+    return kept
+
+
+def file_link(location: str) -> Optional[str]:
+    """A file:// link for a file on this computer; None for one elsewhere (user@host:/path)."""
+    if re.match(r"^[A-Za-z]:[\\/]", location):
+        return PureWindowsPath(location).as_uri()
+    if location.startswith("/") and os.name != "nt":
+        return PurePosixPath(location).as_uri()
+    return None
+
+
+def _file_name(location: str) -> str:
+    return re.split(r"[\\/:]", location.rstrip("\\/"))[-1]
+
+
 def _match_query(terms: Iterable[str]) -> str:
     """FTS5 query: every term quoted (no operators from user text), any of them may match."""
     return " OR ".join('"' + t.replace('"', '""') + '"' for t in terms)
@@ -194,10 +218,12 @@ class KnowledgeStore:
 
     def write(self, slug: str, *, title: str, body: str, type_: Optional[str] = None,
               sources: Optional[List[str]] = None, authority: str = "agent_observed",
-              status: str = "active", tags: Optional[List[str]] = None) -> Dict[str, Any]:
+              status: str = "active", tags: Optional[List[str]] = None,
+              location: Optional[str] = None) -> Dict[str, Any]:
         """Create or replace a whole page (GBrain put_page). The same content again is skipped; a
         replaced page keeps its previous version. ``sources`` say where it came from (a chat, a
-        file, an address) and are required. A page the agent deleted comes back when written again;
+        file, an address) and are required. ``location`` is where a file/ page's file is (required
+        for those; left out, the page keeps the one it had). A page the agent deleted comes back when written again;
         one the user deleted does not — only the user's undo brings it back."""
         slug = slugify(slug)
         if "/" not in slug or slug.split("/", 1)[0] not in TYPES:
@@ -225,7 +251,11 @@ class KnowledgeStore:
                                      "back (되돌리기, within 72 hours). Do not save it again, under this or another slug.")
             meta.update({"authority": authority, "status": status, "tags": sorted(set(tags or meta.get("tags", [])))})
             meta["sources"] = list(dict.fromkeys(meta.get("sources", []) + sources))[-20:]
-            digest = _content_hash(title, type_, body, {k: meta[k] for k in ("authority", "status")})
+            if (location or "").strip():
+                meta["location"] = location.strip()
+            if type_ == "file" and not meta.get("location"):
+                raise ValueError("location is required for a file/ page: where the file is (a full path, or user@host:/path)")
+            digest = _content_hash(title, type_, body, _hashed(meta))
             if row and row["content_hash"] == digest and row["deleted_at"] is None:
                 self.conn.execute("UPDATE pages SET confirmed_at = ?, meta = ? WHERE id = ?",
                                   (now, json.dumps(meta, ensure_ascii=False), row["id"]))
@@ -247,14 +277,14 @@ class KnowledgeStore:
                         "INSERT INTO pages (slug, type, title, body, meta, content_hash, created_at, updated_at, confirmed_at)"
                         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (slug, type_, title, body, json.dumps(meta, ensure_ascii=False), digest, now, now, now)).lastrowid
-                self._index(page_id, title, body)
+                self._index(page_id, title, body, meta.get("location", ""))
                 self.conn.execute("COMMIT")
             except BaseException:
                 self.conn.execute("ROLLBACK")
                 raise
         return {"slug": slug, "result": "updated" if row else "created", "version": version}
 
-    def _index(self, page_id: int, title: str, body: str) -> None:
+    def _index(self, page_id: int, title: str, body: str, location: str = "") -> None:
         old = self.conn.execute("SELECT id, text FROM chunks WHERE page_id = ?", (page_id,)).fetchall()
         for chunk in old:
             for table in ("chunks_word", "chunks_tri"):
@@ -264,7 +294,8 @@ class KnowledgeStore:
         timeline = "\n".join(f"{r['date']} {r['summary']}" for r in self.conn.execute(
             "SELECT date, summary FROM timeline WHERE page_id = ? ORDER BY date", (page_id,)))
         new = []
-        for idx, text in enumerate(chunk_text(f"{title}\n\n{body}") + chunk_text(timeline)):
+        heading = f"{title}\n{_file_name(location)}" if location else title  # a file is found by its name too
+        for idx, text in enumerate(chunk_text(f"{heading}\n\n{body}") + chunk_text(timeline)):
             chunk_id = self.conn.execute("INSERT INTO chunks (page_id, idx, text) VALUES (?, ?, ?)", (page_id, idx, text)).lastrowid
             for table in ("chunks_word", "chunks_tri"):
                 self.conn.execute(f"INSERT INTO {table}(rowid, text) VALUES (?, ?)", (chunk_id, text))
@@ -382,7 +413,7 @@ class KnowledgeStore:
                 (row["id"], date, summary, source)).rowcount
             if added:
                 self.conn.execute("UPDATE pages SET updated_at = ?, confirmed_at = ? WHERE id = ?", (time.time(), time.time(), row["id"]))
-                self._index(row["id"], row["title"], row["body"])
+                self._index(row["id"], row["title"], row["body"], json.loads(row["meta"]).get("location", ""))
         return {"slug": slug, "result": "added" if added else "unchanged"}
 
     def set_status(self, slug: str, status: str) -> Dict[str, Any]:
@@ -435,9 +466,9 @@ class KnowledgeStore:
             self.conn.execute(
                 "UPDATE pages SET title = ?, type = ?, body = ?, meta = ?, content_hash = ?, updated_at = ? WHERE id = ?",
                 (prev["title"], prev["type"], prev["body"], prev["meta"],
-                 _content_hash(prev["title"], prev["type"], prev["body"], {k: meta.get(k) for k in ("authority", "status")}),
+                 _content_hash(prev["title"], prev["type"], prev["body"], _hashed(meta)),
                  time.time(), row["id"]))
-            self._index(row["id"], prev["title"], prev["body"])
+            self._index(row["id"], prev["title"], prev["body"], meta.get("location", ""))
         return {"slug": slug, "result": "reverted"}
 
     def _live(self, slug: str) -> sqlite3.Row:
@@ -456,6 +487,11 @@ class KnowledgeStore:
             "updated": time.strftime("%Y-%m-%d", time.localtime(row["updated_at"])),
             "confirmed": time.strftime("%Y-%m-%d", time.localtime(row["confirmed_at"])),
         }
+        if meta.get("location"):
+            page["location"] = meta["location"]
+            link = file_link(meta["location"])
+            if link:
+                page["link"] = link
         if full:
             page["body"] = row["body"]
             page["timeline"] = [dict(r) for r in self.conn.execute(

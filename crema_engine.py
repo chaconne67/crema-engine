@@ -182,7 +182,8 @@ DISTILL_FOCUS = (
     "language the user writes in. For the knowledge notebook: search it first (knowledge_search), "
     "then create or update one page per topic with knowledge_write — a problem with its cause and fix "
     "(incident/), a correction the user made (feedback/), a decision and why (decision/), how part of "
-    "their work is done (project/), something looked up (reference/); link related pages as [[slug]]; "
+    "their work is done (project/), something looked up (reference/), a document or material made for or "
+    "named by the user with its location (file/); link related pages as [[slug]]; "
     "add a dated line (action=timeline) when an existing topic had a new event. Facts about the user "
     "go to the memory tool. Nothing reusable: say 'Nothing to save.' and stop."
 )

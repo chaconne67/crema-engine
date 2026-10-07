@@ -72,6 +72,10 @@ Both bind 127.0.0.1 only.
      model; `crema_engine.py` fills missing vectors at start; the quality floor
      `tests/agent/test_knowledge_meaning_quality.py` on `tests/fixtures/knowledge_eval_ko.json` runs when
      `CREMA_TEST_EMBED_MODEL` names the model (the Crema engine test workflow downloads it)
+   - file/ pages (Crema's): a document or material the user has, with `meta.location` (a full path, or
+     user@host:/path) — required for them, part of the content hash (a moved file is a new version), its
+     file name indexed with the title; reads give `location` and, for a file on this computer, a file://
+     `link` the app shows in its folder
    - the free plan (`crema.free`, set by the app from the account's plan; `tools/knowledge_tool.py` `plan_free`):
      the notebook stays readable — get, think, search by words — but `knowledge_write` refuses, a quiet chat is
      not distilled and search leaves out the meaning list (`KnowledgeStore.search(meaning=False)`)

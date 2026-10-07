@@ -47,7 +47,10 @@ async def main() -> None:
     from fastapi.responses import JSONResponse
     from hermes_cli.web_routers import audio, config_env, models, oauth, sessions, status, tools
 
+    from crema_free import create_router as free_connection_router
+
     settings = FastAPI()
+    settings.include_router(free_connection_router())
     for router in (oauth.router, config_env.config_router, config_env.router, models.router, audio.router):
         settings.include_router(router)
     # Of these routers only what Crema shows: what the agent remembers (memory cards and learned

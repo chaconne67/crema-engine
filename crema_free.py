@@ -22,7 +22,7 @@ PROVIDERS = {
                    "dots-studio/dots-3-note-preview:free"],
     },
     "gemini": {
-        "name": "Google Gemini", "env": "GEMINI_API_KEY",
+        "name": "Google Gemini", "env": "GOOGLE_API_KEY",
         "base": "https://generativelanguage.googleapis.com/v1beta/openai",
         "models": ["gemini-3.5-flash-lite"],
     },
@@ -33,7 +33,7 @@ def saved_key(provider):
     from hermes_cli.config import get_env_value
     key = get_env_value(PROVIDERS[provider]["env"]) or ""
     if provider == "gemini" and not key:
-        key = get_env_value("GOOGLE_API_KEY") or ""
+        key = get_env_value("GEMINI_API_KEY") or ""
     return key
 
 
@@ -54,6 +54,27 @@ def fingerprint(key):
     return hashlib.sha256(key.encode()).hexdigest()
 
 
+def runtime_matches(provider, model, key):
+    """Use the chat's actual resolver, including credential-pool rotation and endpoint overrides."""
+    from hermes_cli.runtime_provider import resolve_runtime_provider
+
+    def canonical(url):
+        return str(url or "").rstrip("/").removesuffix("/openai")
+
+    try:
+        runtime = resolve_runtime_provider(requested=provider, target_model=model)
+        expected = canonical(PROVIDERS[provider]["base"])
+        if (runtime.get("provider") != provider or runtime.get("api_key") != key
+                or canonical(runtime.get("base_url")) != expected):
+            return False
+        pool = runtime.get("credential_pool")
+        return not pool or all(entry.access_token == key and
+            (not entry.base_url or canonical(entry.base_url) == expected)
+            for entry in pool.entries())
+    except Exception:
+        return False
+
+
 def connection_status():
     receipts = read_receipts()
     rows = []
@@ -61,7 +82,8 @@ def connection_status():
         key = saved_key(provider)
         record = receipts.get(provider, {})
         valid = bool(key and record.get("fingerprint") == fingerprint(key)
-                     and record.get("model") in spec["models"])
+                     and record.get("model") in spec["models"]
+                     and runtime_matches(provider, record["model"], key))
         rows.append({"id": provider, "name": spec["name"], "models": spec["models"],
                      "has_key": bool(key), "verified": valid,
                      "model": record.get("model", "") if valid else "",
@@ -238,6 +260,8 @@ class FreeWizard:
                     await asyncio.to_thread(save_provider_env_credential, PROVIDERS[provider]["env"], key)
                 if saved_key(provider) != key:
                     return failure("save")
+                if not runtime_matches(provider, model, key):
+                    return failure("runtime")
                 records = read_receipts()
                 records[provider] = {"fingerprint": fingerprint(key), "model": model,
                                      "checked_at": time.time()}

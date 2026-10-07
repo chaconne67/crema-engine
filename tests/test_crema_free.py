@@ -113,6 +113,21 @@ async def test_existing_key_is_not_replaced_without_consent_and_rotation_invalid
 
 
 @pytest.mark.asyncio
+async def test_gemini_uses_runtime_key_order_and_invalidates_multi_key_rotation(upstream):
+    from hermes_cli.credential_lifecycle import save_provider_env_credential
+    from hermes_cli.runtime_provider import resolve_runtime_provider
+    assert (await free.FreeWizard().verify(payload("gemini")))["ok"]
+    runtime = resolve_runtime_provider(requested="gemini", target_model=payload("gemini")["model"])
+    assert runtime["api_key"] == free.saved_key("gemini") == "fake-key-for-tests"
+    assert free.connection_status()["providers"][1]["verified"]
+    # An alternate key may belong to a billed project. The real pool must not rotate to it.
+    save_provider_env_credential("GEMINI_API_KEY", "different-project-key")
+    assert free.saved_key("gemini") == "fake-key-for-tests"  # GOOGLE_API_KEY wins
+    assert not free.connection_status()["providers"][1]["verified"]
+    assert (await free.FreeWizard().verify(payload("gemini")))["error"] == "runtime"
+
+
+@pytest.mark.asyncio
 async def test_receipts_are_profile_scoped_a_b_a(upstream, tmp_path):
     from gateway.run import _profile_runtime_scope
     a, b = tmp_path / "A", tmp_path / "B"

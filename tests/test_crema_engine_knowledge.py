@@ -88,6 +88,36 @@ def test_a_quiet_chat_with_enough_new_turns_is_distilled_once(store, reviews):
     assert crema_engine.distill(api, "agent-client-a")["ran"] is False
 
 
+def test_a_review_that_fails_leaves_the_chat_to_be_distilled_again(store, monkeypatch):
+    """The review worker reports a failure (it catches the error itself); the chat is not marked done (audit ER-4)."""
+    monkeypatch.setattr("agent.background_review.spawn_background_review_thread",
+                        lambda agent, messages, **_: (lambda: False, "prompt"))
+    api = FakeApi({"agent-client-a": (turns(3), time.time())})
+    assert crema_engine.distill(api, "agent-client-a")["ran"] is False
+    assert store.distilled_count("agent-client-a") == 0
+    monkeypatch.setattr("agent.background_review.spawn_background_review_thread",
+                        lambda agent, messages, **_: (lambda: True, "prompt"))
+    assert crema_engine.distill(api, "agent-client-a")["ran"] is True
+    assert store.distilled_count("agent-client-a") == len(turns(3))
+
+
+def test_the_review_worker_says_whether_it_ran_to_its_end(monkeypatch):
+    from agent import background_review as br
+
+    class Agent:
+        provider = "p"
+        failures = []
+
+        def _emit_auxiliary_failure(self, what, error):
+            self.failures.append(what)
+
+    monkeypatch.setattr(br, "_parent_can_emit_tool_calls", lambda agent: True)
+    monkeypatch.setattr(br, "_run_review_fork", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("provider outage")), raising=False)
+    target, _ = br.spawn_background_review_thread(Agent(), turns(3), review_memory=True, task_cfg={})
+    assert target() is False
+    assert Agent.failures == ["background review"]
+
+
 def test_a_review_tells_what_it_changed_in_memory_and_skills_and_each_can_be_undone(store, monkeypatch):
     from hermes_constants import get_hermes_home
 

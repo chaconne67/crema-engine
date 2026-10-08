@@ -1211,17 +1211,18 @@ def _run_review_in_thread(
     agent: Any, messages_snapshot: List[Dict], prompt: str,
     task_cfg: Optional[Dict[str, Any]] = None, review_run: Optional[_BackgroundReviewRun] = None,
     review_memory: bool = False, explicit: bool = False,
-) -> None:
+) -> bool:
     """Daemon-thread worker: build the fork, run the prompt, surface the action summary via
     ``agent._safe_print`` / ``background_review_callback``. ``review_run`` (from
     :func:`prepare_background_review_run`) cancelled before the first provider call aborts
-    without entering ``run_conversation()``.
+    without entering ``run_conversation()``. True when the review ran to its end; False when it
+    was cancelled, skipped or failed, so a caller does not count those messages as reviewed.
 
     See #84423.
     """
     if review_run is not None and review_run.cancel_requested.is_set():
         finish_background_review_run(agent, review_run)
-        return
+        return False
     _set_thread_approval_callback(_bg_review_auto_deny)
     # A client that can't carry Hermes tool calls back would spawn a fork that cannot write
     # anything. Checked BEFORE the thread-scoped silence so the warning is not swallowed; cheap
@@ -1234,7 +1235,7 @@ def _run_review_in_thread(
             getattr(agent, "provider", "?"),
         )
         _set_thread_approval_callback(None)
-        return
+        return False
     st = _ReviewForkState()
     try:
         # Silence stdout/stderr for THIS thread only: a process-global redirect would blank every
@@ -1273,11 +1274,13 @@ def _run_review_in_thread(
         _log_review_completion(st.review_usage, _classify_review_result(actions))
         if actions:
             _publish_review_summary(agent, actions)
+        return True
     except Exception as e:
         logger.warning("Background memory/skill review failed: %s", e)
         if st.review_usage:
             _log_review_completion(st.review_usage, "error")
         agent._emit_auxiliary_failure("background review", e)
+        return False
     finally:
         # Safety net for the exception path (setup failures before the request-phase finally).
         # Both cleanups are identity-scoped and idempotent; re-enter thread-scoped silence so
@@ -1321,8 +1324,8 @@ def spawn_background_review_thread(
             f"focus — prioritize it over the general instructions above:\n{focus}"
         )
 
-    def _target() -> None:  # resolves _run_review_in_thread at call time (tests patch it)
-        _run_review_in_thread(
+    def _target() -> bool:  # resolves _run_review_in_thread at call time (tests patch it)
+        return _run_review_in_thread(
             agent, messages_snapshot, prompt, task_cfg=task_cfg, review_run=review_run,
             review_memory=review_memory, explicit=explicit)
 

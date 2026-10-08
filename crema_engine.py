@@ -296,12 +296,15 @@ def distill(api, session_id: str, model: str = "", provider: str = "") -> dict:
     target, _ = spawn_background_review_thread(
         agent, messages, review_memory=True, review_skills=True, focus=DISTILL_FOCUS, task_cfg=task_cfg, explicit=True)
     try:
-        target()
+        reviewed = target()
     finally:
         api._memory_sessions.checkin(agent)
-    store.mark_distilled(session_id, len(messages))
+    # A review that failed or did not run leaves these messages for the next try (audit ER-4); what it
+    # wrote before failing is still reported.
+    if reviewed is not False:
+        store.mark_distilled(session_id, len(messages))
     memory, learned = _review_changes(before)
-    return {"ran": True, "written": store.changed_since(started) + memory, "learned": learned}
+    return {"ran": reviewed is not False, "written": store.changed_since(started) + memory, "learned": learned}
 
 
 DAILY_EVERY_S = 20 * 3600

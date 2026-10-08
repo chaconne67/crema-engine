@@ -14,3 +14,11 @@ def test_keeps_replies_without_a_last_line_guess():
     assert drop_next_input(response_text="표시는 NEXT_INPUT: 처럼 씁니다") is None
     # A reply that is only the line is kept rather than stored empty.
     assert drop_next_input(response_text="NEXT_INPUT: 커밋해 줘") is None
+
+
+def test_drops_the_chat_title_line_with_it():
+    assert drop_next_input(response_text="옮겼습니다.\nCHAT_TITLE: 결제 화면 디자인 변경\nNEXT_INPUT: 커밋해 줘\n") == "옮겼습니다."
+    assert drop_next_input(response_text="옮겼습니다.\nCHAT_TITLE: -") == "옮겼습니다."
+    # Only the end lines: a third one up is the answer's own text.
+    assert drop_next_input(response_text="CHAT_TITLE: 설명\n본문\nNEXT_INPUT: -") == "CHAT_TITLE: 설명\n본문"
+    assert drop_next_input(response_text="CHAT_TITLE: 제목\nNEXT_INPUT: -") is None

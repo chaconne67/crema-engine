@@ -177,14 +177,14 @@ async def main() -> None:
     daily.cancel()
 
 
-# Crema asks a reply to end with the user's likely next input on its own line (the app's desktop.js
-# NEXT_INPUT_INSTRUCTION). The app takes it from the stream; the stored chat leaves it out so later
-# turns do not read old guesses.
-NEXT_INPUT_LINE = re.compile(r"(?:\A|\n)[ \t>*_`]*NEXT_INPUT:[^\n]*\s*\Z")
+# Crema asks a reply to end with lines of its own (the app's desktop.js): the chat's title (CHAT_TITLE, when
+# asked) and the user's likely next input (NEXT_INPUT). The app takes them from the stream; the stored chat
+# leaves them out so later turns do not read old guesses or titles.
+NEXT_INPUT_LINE = re.compile(r"(?:(?:\A|\n)[ \t>*_`]*(?:CHAT_TITLE|NEXT_INPUT):[^\n]*){1,2}\s*\Z")
 
 
 def drop_next_input(response_text: str = "", **_) -> str | None:
-    """The `transform_llm_output` hook: the reply without its last NEXT_INPUT line, or None to keep it."""
+    """The `transform_llm_output` hook: the reply without its end lines (CHAT_TITLE, NEXT_INPUT), or None to keep it."""
     text = NEXT_INPUT_LINE.sub("", response_text or "").rstrip()
     return text if text and text != (response_text or "").rstrip() else None
 

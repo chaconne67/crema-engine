@@ -49,6 +49,22 @@ class TestStripLineComment(unittest.TestCase):
         assert _strip_line_comment(line) == """echo "it's a test\""""
 
 
+class TestHashInsideAWord:
+    """A ``#`` inside a word or escaped is no comment for the shell: what follows still runs, so the
+    reviewer must see it (audit F8)."""
+
+    def test_hash_inside_a_word_keeps_the_rest(self):
+        line = "printf audit#fragment; python3 -c 'print(\"audit-tail\")'"
+        assert _strip_line_comment(line) == line
+
+    def test_escaped_hash_keeps_the_rest(self):
+        line = r"printf audit\#fragment; printf second"
+        assert _strip_line_comment(line) == line
+
+    def test_a_comment_after_a_word_still_goes(self):
+        assert _strip_line_comment("printf a#b; ls  # tidy up") == "printf a#b; ls"
+
+
 # ── _strip_shell_comments ────────────────────────────────────────────────
 
 

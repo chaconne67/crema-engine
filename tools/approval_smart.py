@@ -11,6 +11,7 @@ Inspired by OpenAI Codex's Smart Approvals guardian subagent.
 import logging
 import time
 from tools import approval_context as _ctx
+from tools.approval_detection import _scan_shell
 
 logger = logging.getLogger("tools.approval")
 
@@ -34,22 +35,12 @@ _VERDICTS = {"APPROVE": "approve", "DENY": "deny"}
 
 
 def _strip_line_comment(line: str) -> str:
-    """Remove a trailing ``# comment`` from one shell line, quote-aware
-    (``echo "hello # world"`` survives)."""
-    in_single = in_double = False
-    i = 0
-    while i < len(line):
-        ch = line[i]
-        if ch == "\\" and in_double and i + 1 < len(line):
-            i += 2  # skip escaped char inside double quotes
-            continue
-        if ch == "'" and not in_double:
-            in_single = not in_single
-        elif ch == '"' and not in_single:
-            in_double = not in_double
-        elif ch == "#" and not in_single and not in_double:
+    """Remove a trailing ``# comment`` from one shell line. A ``#`` starts a comment only where the shell
+    starts one: unquoted and at the start of a word (``echo "hello # world"``, ``printf a#b``, ``a\\#b`` all
+    survive). It is the detection scanner's own rule, so the reviewer sees every command that will run (audit F8)."""
+    for kind, i, _, _ in _scan_shell(line, comments=True):
+        if kind == "comment":
             return line[:i].rstrip()
-        i += 1
     return line
 
 

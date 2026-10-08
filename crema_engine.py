@@ -12,6 +12,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import socket
 import sys
 import time
@@ -41,6 +42,9 @@ async def main() -> None:
     from agent import crema_file_turns
 
     crema_file_turns.install(api)
+    from hermes_cli.plugins import get_plugin_manager
+
+    get_plugin_manager()._hooks.setdefault("transform_llm_output", []).append(drop_next_input)
 
     import uvicorn
     from fastapi import FastAPI, HTTPException, Request
@@ -171,6 +175,18 @@ async def main() -> None:
     await serving
     backfill.cancel()
     daily.cancel()
+
+
+# Crema asks a reply to end with the user's likely next input on its own line (the app's desktop.js
+# NEXT_INPUT_INSTRUCTION). The app takes it from the stream; the stored chat leaves it out so later
+# turns do not read old guesses.
+NEXT_INPUT_LINE = re.compile(r"(?:\A|\n)[ \t>*_`]*NEXT_INPUT:[^\n]*\s*\Z")
+
+
+def drop_next_input(response_text: str = "", **_) -> str | None:
+    """The `transform_llm_output` hook: the reply without its last NEXT_INPUT line, or None to keep it."""
+    text = NEXT_INPUT_LINE.sub("", response_text or "").rstrip()
+    return text if text and text != (response_text or "").rstrip() else None
 
 
 KNOWLEDGE_TOOLS = ("knowledge_search", "knowledge_get", "knowledge_write")

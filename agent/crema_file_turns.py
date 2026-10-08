@@ -60,6 +60,8 @@ _path_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 # tool_call_id -> Git state before a terminal command / what to tell the chat after it.
 _before_terminal: dict[str, dict[str, float]] = {}
 _after_terminal: dict[str, str] = {}
+# tool_call_id -> files a write claimed before it ran, given back when the write fails (audit ER-2).
+_claims: dict[str, list[str]] = {}
 
 
 class JudgeError(RuntimeError):
@@ -149,9 +151,36 @@ def _linked(conn, parent_id: str, child_id: str) -> bool:
     return parent_id in _kb().parent_ids(conn, child_id)
 
 
-def _together(conn, task, other) -> bool:
-    return any((e.payload or {}).get("with") == other.id for e in _kb().list_events(conn, task.id)
-               if e.kind == "crema_together")
+def _together(conn, task, other, path: str) -> bool:
+    """The pair was judged able to change ``path`` at the same time; another file is judged anew (audit ER-3)."""
+    return any((e.payload or {}).get("with") == other.id and _key((e.payload or {}).get("path", "")) == _key(path)
+               for e in _kb().list_events(conn, task.id) if e.kind == "crema_together")
+
+
+def _claim(path: str, session_id: str) -> bool:
+    """Holds ``path`` for this chat before its write runs; True when it was not held yet."""
+    conn = _board()
+    try:
+        me = _task_for(conn, session_id)
+        if _holds(conn, me, path):
+            return False
+        _add_event(conn, me.id, "crema_file", _file_event(path))
+        return True
+    finally:
+        conn.close()
+
+
+def _give_back(paths: list[str], session_id: str) -> None:
+    """Lets go of files a write claimed but did not change."""
+    if not paths:
+        return
+    conn = _board()
+    try:
+        me = _task_for(conn, session_id)
+        for path in paths:
+            _add_event(conn, me.id, "crema_let_go", _file_event(path))
+    finally:
+        conn.close()
 
 
 def _note(conn, task_id: str, text: str) -> None:
@@ -332,11 +361,19 @@ def before_tool(tool_name: str = "", args: Optional[dict] = None, session_id: st
         if state is not None and tool_call_id:
             _before_terminal[tool_call_id] = state
         return None
+    claimed = []
     for path in _written_paths(tool_name, args, task_id):
         with _path_locks[_key(path)]:
             refusal = _turn_for(path, chat, tool_name, args)
+            # Held from here, inside the lock: another chat that reaches this file before the write lands
+            # finds this chat holding it and takes its turn (audit ER-2).
+            if not refusal and _claim(path, chat):
+                claimed.append(path)
         if refusal:
+            _give_back(claimed, chat)
             return {"action": "block", "message": refusal}
+    if claimed and tool_call_id:
+        _claims[tool_call_id] = claimed
     return None
 
 
@@ -346,7 +383,7 @@ def _turn_for(path: str, session_id: str, tool_name: str, args: dict) -> Optiona
     try:
         for holder in _holders(conn, path, session_id):
             me = _task_for(conn, session_id)
-            if _linked(conn, me.id, holder.id) or _together(conn, me, holder):
+            if _linked(conn, me.id, holder.id) or _together(conn, me, holder, path):
                 continue
             if _linked(conn, holder.id, me.id):
                 return _wait(conn, me, holder, path, "", ask=False)
@@ -400,8 +437,10 @@ def after_tool(tool_name: str = "", args: Optional[dict] = None, result: Any = N
         return
     args, task_id, session_id = args or {}, task_id or session_id, chat
     if tool_name in WRITE_TOOLS:
+        claimed = _claims.pop(tool_call_id, [])
         try:
             if json.loads(result).get("error"):
+                _give_back(claimed, session_id)
                 return
         except (TypeError, ValueError, AttributeError):
             return
@@ -423,7 +462,7 @@ def after_tool(tool_name: str = "", args: Optional[dict] = None, result: Any = N
                 _add_event(conn, me.id, "crema_file", _file_event(path))
         if tool_name == "terminal":
             clashes = [(p, h) for p in paths for h in _holders(conn, p, session_id)
-                       if not _linked(conn, me.id, h.id) and not _together(conn, me, h)]
+                       if not _linked(conn, me.id, h.id) and not _together(conn, me, h, p)]
             for path, holder in clashes:
                 _note(conn, holder.id, f"[Crema] A command in the chat '{_title(session_id)}' changed {path}, which "
                                        "this chat is changing. Read it again before changing it.")

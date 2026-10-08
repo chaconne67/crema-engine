@@ -173,6 +173,44 @@ def test_together_is_judged_once_for_the_pair(api, judge, repo):
     assert len(judge.calls) == 1
 
 
+def test_two_chats_reaching_a_new_file_before_either_writes_take_turns(api, judge, repo):
+    """The first chat holds the file from the moment it may write, so the second is judged (audit ER-2)."""
+    notes = repo.path / "notes.md"
+    api.replying(A)
+    api.replying(B)
+    first = {"path": str(notes), "content": "A\n"}
+    assert turns.before_tool("write_file", first, session_id=A, task_id=A, tool_call_id="a1") is None
+    judge.replies.append({"decision": "a_first", "reason": "먼저 시작한 대화입니다."})
+    refusal = turns.before_tool("write_file", {"path": str(notes), "content": "B\n"}, session_id=B, task_id=B,
+                                tool_call_id="b1")
+    assert refusal and "'보고서'" in refusal["message"]
+    assert len(judge.calls) == 1
+
+
+def test_a_write_that_fails_gives_its_file_back(api, judge, repo):
+    notes = repo.path / "notes.md"
+    api.replying(A)
+    args = {"path": str(notes), "content": "A\n"}
+    assert turns.before_tool("write_file", args, session_id=A, task_id=A, tool_call_id="a1") is None
+    turns.after_tool("write_file", args, json.dumps({"error": "disk full"}), session_id=A, task_id=A, tool_call_id="a1")
+    assert write(B, notes, "B\n") is None
+    assert judge.calls == []
+
+
+def test_together_on_one_file_is_judged_again_on_another(api, judge, repo):
+    """Being judged able to share report.py says nothing about another file (audit ER-3)."""
+    report, other = repo.path / "report.py", repo.path / "other.py"
+    write(A, report, "v2\n")
+    write(A, other, "o1\n")
+    api.replying(A)
+    judge.replies.append({"decision": "together", "reason": "서로 다른 함수입니다."})
+    assert write(B, report, "v3\n") is None
+    judge.replies.append({"decision": "a_first", "reason": "같은 줄을 고칩니다."})
+    assert "'보고서'" in write(B, other, "o2\n")
+    assert len(judge.calls) == 2
+    assert other.read_text(encoding="utf-8") == "o1\n"
+
+
 def test_ask_user_waits_for_the_users_order(api, judge, repo):
     report = repo.path / "report.py"
     write(A, report, "v2\n")

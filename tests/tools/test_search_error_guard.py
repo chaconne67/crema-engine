@@ -86,6 +86,21 @@ class TestSearchErrorGuard:
         assert not res.matches
 
 
+    def test_files_only_keeps_a_path_with_spaces(self, method, tmp_path):
+        """A matching file whose path has a space is listed, not dropped as a diagnostic (audit F6)."""
+        (tmp_path / "space name.txt").write_text("spaceneedle\n")
+        (tmp_path / "plain.txt").write_text("spaceneedle\n")
+        # Searched relative to the folder: a path with -<digits> (pytest-123) would hide the bug behind another rule.
+        res = _search(_ops(tmp_path), method, "spaceneedle", ".", output_mode="files_only")
+        assert res.error is None
+        assert sorted(os.path.basename(f) for f in res.files) == ["plain.txt", "space name.txt"]
+        assert res.total_count == 2
+
+    def test_files_only_hard_error_is_surfaced(self, method, match_tree):
+        res = _search(_ops(match_tree), method, "[", match_tree, output_mode="files_only")
+        assert res.error is not None and "Search failed" in res.error
+        assert not res.files
+
     def test_count_mode_with_partial_error(self, method, partial_error_tree):
         res = _search(_ops(partial_error_tree), method, "needle",
                       partial_error_tree, output_mode="count")
@@ -120,6 +135,11 @@ class TestSplitToolDiagnostics:
         assert payload.strip() == ""
         assert "regex parse error" in diagnostics
 
+
+    def test_files_only_pure_error_has_empty_payload(self):
+        out = "rg: regex parse error:\n    (?:[)\n       ^\nerror: unclosed character class\n"
+        diagnostics, payload = _split_tool_diagnostics(out, files_only=True)
+        assert payload.strip() == ""
 
     def test_context_lines_and_separator_are_payload(self):
         out = "a.py:5:hit\na.py-6-after\n--\nb.py:9:hit\n"

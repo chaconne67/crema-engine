@@ -124,11 +124,13 @@ def _search_stdout_and_limit(result: ExecuteResult) -> tuple[str, Optional[str]]
 _SEARCH_OUTPUT_RE = re.compile(r'^([A-Za-z]:)?[^\s:][^\n]*?[:\-]\d|^[^\s:][^\s]*$')
 
 
-def _split_tool_diagnostics(output: str) -> tuple[str, str]:
+def _split_tool_diagnostics(output: str, files_only: bool = False) -> tuple[str, str]:
     """Separate rg/grep diagnostic lines from real match output → ``(diagnostics, payload)``.
     ``_exec`` merges stderr into stdout; classifying by SHAPE lets the exit-2 guard
     tell a pure failure (no payload) from a partial one (one unreadable file, others
-    matched) and guarantees error text is never parsed as a match."""
+    matched) and guarantees error text is never parsed as a match. ``files_only`` (``-l``) output is
+    one path per line, spaces and all (``Google Drive/a.txt``): there every unindented line
+    that is not the tool's own message is a path (audit F6)."""
     diagnostics: list[str] = []
     payload: list[str] = []
     for line in output.split('\n'):
@@ -137,7 +139,8 @@ def _split_tool_diagnostics(output: str) -> tuple[str, str]:
         # Prefix check first: a match path can contain "-<digit>" (".../pytest-686/...").
         if line.lstrip().startswith(("rg: ", "grep: ")):
             diagnostics.append(line)
-        elif line == "--" or _SEARCH_OUTPUT_RE.match(line):
+        elif line == "--" or _SEARCH_OUTPUT_RE.match(line) or (
+                files_only and not line[0].isspace() and not line.startswith("error: ")):
             payload.append(line)
         else:
             diagnostics.append(line)
@@ -203,7 +206,7 @@ def _parse_search_output(result, output_mode: str, limit: int, offset: int,
     errors (one unreadable file), so an error is surfaced only when exit==2 AND no
     usable payload remains. ``warning`` is attached to files_only/content results."""
     stdout, limit_reason = _search_stdout_and_limit(result)
-    diagnostics, payload = _split_tool_diagnostics(stdout)
+    diagnostics, payload = _split_tool_diagnostics(stdout, files_only=output_mode == "files_only")
     if result.exit_code == 2 and not payload.strip():
         error_msg = diagnostics.strip() or result.stdout.strip() or "Search error"
         return SearchResult(error=f"Search failed: {error_msg}", total_count=0)

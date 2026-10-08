@@ -2410,3 +2410,51 @@ def test_run_backup_prunes_older_default_named_zips_but_not_others(tmp_path, mon
     kept = sorted(p.name for p in tmp_path.glob("hermes-backup-*.zip"))
     assert len(kept) == 2 and kept[0] == "hermes-backup-2026-01-04-000000.zip"
     assert (tmp_path / "my-archive.zip").exists()
+
+
+def test_keyless_backup_leaves_out_every_credential_and_keeps_the_settings(tmp_path, monkeypatch):
+    """``--no-secrets`` (Crema's backup): no credential store, token folder or inline key in the zip,
+    while config.yaml's ordinary settings and ${VAR} references stay restorable."""
+    import yaml
+
+    from hermes_cli.backup import run_backup
+
+    home = tmp_path / ".hermes"
+    for rel, text in {
+        "config.yaml": yaml.safe_dump({
+            "model": {"default": "m1", "provider": "custom", "api_key": "plain-inline-key"},
+            "auxiliary": {"vision": {"api_key": "${VISION_KEY}", "model": "v1"}},
+            "mcp_servers": {"s": {"headers": {"Authorization": "Bearer opaque-token"}}},
+            "display": {"theme": "dark"},
+        }),
+        ".env": "OPENROUTER_API_KEY=k\n",
+        "auth.json": "{}",
+        ".anthropic_oauth.json": '{"access_token": "a"}',
+        "mcp-tokens/srv.json": '{"access_token": "a", "refresh_token": "r"}',
+        "profiles/work/mcp-tokens/srv.json": '{"access_token": "a"}',
+        "profiles/work/config.yaml": yaml.safe_dump({"model": {"api_key": "profile-key", "default": "m2"}}),
+        "memories/MEMORY.md": "keep me",
+    }.items():
+        (home / rel).parent.mkdir(parents=True, exist_ok=True)
+        (home / rel).write_text(text, encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    out_zip = tmp_path / "backup.zip"
+    assert run_backup(Namespace(output=str(out_zip), no_secrets=True)) is True
+    with zipfile.ZipFile(out_zip) as zf:
+        names = {name.replace("\\", "/") for name in zf.namelist()}
+        config = yaml.safe_load(zf.read("config.yaml"))
+        profile_config = yaml.safe_load(zf.read("profiles/work/config.yaml"))
+        everything = b"".join(zf.read(name) for name in zf.namelist())
+
+    assert {"config.yaml", "profiles/work/config.yaml", "memories/MEMORY.md"} <= names
+    assert not names & {".env", "auth.json", ".anthropic_oauth.json"}
+    assert not any("mcp-tokens/" in name for name in names)
+    assert config["model"] == {"default": "m1", "provider": "custom", "api_key": ""}
+    assert config["auxiliary"]["vision"] == {"api_key": "${VISION_KEY}", "model": "v1"}
+    assert config["mcp_servers"]["s"]["headers"]["Authorization"] == ""
+    assert config["display"] == {"theme": "dark"}
+    assert profile_config["model"] == {"api_key": "", "default": "m2"}
+    for secret in (b"plain-inline-key", b"opaque-token", b"profile-key", b"refresh_token"):
+        assert secret not in everything

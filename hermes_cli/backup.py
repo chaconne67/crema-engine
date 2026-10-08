@@ -27,6 +27,7 @@ from utils import (
 )
 
 from hermes_cli.sizefmt import format_bytes as _format_size
+from agent.file_safety import _CREDENTIAL_FILE_NAMES as _GUARDED_CREDENTIAL_FILES, _READ_DENIED_DIRS as _GUARDED_CREDENTIAL_DIRS
 
 logger = logging.getLogger(__name__)
 
@@ -132,8 +133,12 @@ _IMPORT_SKIP_NAMES = {"gateway_state.json", "gateway.pid", "cron.pid", "gateway.
 # IS included in backups (user-entered secrets, not regenerable — unlike the
 # excluded browser-profile/ snapshot) but must come back owner-only.
 _SECRET_FILE_NAMES = {".env", "auth.json", "state.db", "vault.key", "vault.json.enc"}
-# Left out by ``--no-secrets``: the credentials among them (state.db is the chats, not a credential).
-_CREDENTIAL_FILE_NAMES = _SECRET_FILE_NAMES - {"state.db"}
+# Left out by ``--no-secrets``: the credentials among them (state.db is the chats, not a credential), the
+# credential stores the read guard protects (agent/file_safety.py: .anthropic_oauth.json, auth.lock, Google
+# OAuth, …), matched by name, and its whole credential folders (mcp-tokens/, vault/, …) at any depth.
+# config.yaml stays, with its credential values emptied (_config_without_credentials).
+_CREDENTIAL_FILE_NAMES = (_SECRET_FILE_NAMES - {"state.db"}) | {Path(name).name for name in _GUARDED_CREDENTIAL_FILES}
+_CREDENTIAL_DIR_NAMES = frozenset(name for name, *_ in _GUARDED_CREDENTIAL_DIRS)
 
 # Reserved archive subtree for memory-provider state OUTSIDE HERMES_HOME (e.g. ~/.honcho, via
 # MemoryProvider.backup_paths()), stored and restored relative to the user's home; paths not
@@ -670,6 +675,20 @@ def _collect_external_entries() -> tuple[list[tuple[Path, str]], list[str]]:
     return external_to_add, skipped_external
 
 
+def _config_without_credentials(path: Path) -> Optional[str]:
+    """A config.yaml for the keyless backup: every credential value emptied (keys and ${VAR}
+    references stay, so a restore keeps the settings and only asks for the secrets again).
+    None when it cannot be read as YAML — then it is left out rather than copied with its keys."""
+    import yaml
+    from hermes_cli.config import redact_config_value
+
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return None
+    return yaml.safe_dump(redact_config_value(data, mask=lambda _: ""), allow_unicode=True, sort_keys=False)
+
+
 def run_backup(args) -> bool:
     """Create a zip backup of the Hermes home directory.
 
@@ -700,15 +719,19 @@ def _run_backup_locked(args, hermes_root: Path) -> bool:
     print(f"Scanning {display_hermes_home()} ...")
     skipped_dirs: set = set()
     files_to_add: list[tuple[Path, Path]] = list(_iter_backup_files(hermes_root, out_path, skipped_dirs))
+    configs: list[tuple[Path, Optional[str]]] = []  # --no-secrets: (rel, config.yaml without its credentials)
     if getattr(args, "no_secrets", False):
-        files_to_add = [(f, rel) for f, rel in files_to_add if rel.name not in _CREDENTIAL_FILE_NAMES]
+        files_to_add = [(f, rel) for f, rel in files_to_add
+                        if rel.name not in _CREDENTIAL_FILE_NAMES and not _CREDENTIAL_DIR_NAMES & set(rel.parts[:-1])]
+        configs = [(rel, _config_without_credentials(f)) for f, rel in files_to_add if rel.name == "config.yaml"]
+        files_to_add = [(f, rel) for f, rel in files_to_add if rel.name != "config.yaml"]
     external_to_add, skipped_external = _collect_external_entries()
-    if not files_to_add and not external_to_add:
+    if not files_to_add and not external_to_add and not configs:
         logger.info("backup phase=scan status=empty duration_ms=%.1f", (time.monotonic() - scan_started) * 1000)
         print("No files to back up.")
         return True
 
-    file_count = len(files_to_add) + len(external_to_add)
+    file_count = len(files_to_add) + len(external_to_add) + len(configs)
     logger.info("backup phase=scan status=complete duration_ms=%.1f files=%d",
                 (time.monotonic() - scan_started) * 1000, file_count)
     logger.info("backup phase=archive status=started files=%d", file_count)
@@ -726,6 +749,11 @@ def _run_backup_locked(args, hermes_root: Path) -> bool:
             zf, files_to_add, out_path, on_progress=_progress, track_bytes=True,
             on_db_failure=lambda rel: errors.append(f"{rel}: SQLite safe copy failed"),
             on_error=lambda rel, exc: errors.append(f"{rel}: {exc}"))
+        for rel, text in configs:
+            if text is None:
+                errors.append(f"{rel}: left out — could not be read to take its credentials out")
+            else:
+                zf.writestr(str(rel), text)
         # External memory-provider state never includes ``.db`` files in practice, so a
         # straight zf.write is fine.
         for abs_path, arcname in external_to_add:

@@ -2800,22 +2800,24 @@ def _is_secret_config_key(key: str) -> bool:
     return leaf in _SECRET_CONFIG_KEYS or leaf.endswith(_SECRET_CONFIG_KEY_SUFFIXES)
 
 
-def redact_config_value(value: Any, _depth: int = 0) -> Any:
+def redact_config_value(value: Any, _depth: int = 0, mask: Any = None) -> Any:
     """Copy of ``value`` with credential-shaped keys masked. ``print`` bypasses the logging
-    redactor and opaque tokens miss the vendor-prefix regexes, so structural masking is required."""
+    redactor and opaque tokens miss the vendor-prefix regexes, so structural masking is required.
+    ``mask`` replaces each credential value (default: the display mask; the keyless backup empties them)."""
     from agent.redact import mask_secret
 
+    mask = mask or mask_secret
     if _depth > 20:  # bound recursion for pathological/cyclic configs
         return value
     if isinstance(value, dict):
         return {
-            k: mask_secret(v)
+            k: mask(v)
             if isinstance(k, str) and _is_secret_config_key(k) and isinstance(v, str) and v
             and not _ENV_PLACEHOLDER_RE.match(v)
-            else redact_config_value(v, _depth + 1)
+            else redact_config_value(v, _depth + 1, mask)
             for k, v in value.items()}
     if isinstance(value, list):
-        return [redact_config_value(v, _depth + 1) for v in value]
+        return [redact_config_value(v, _depth + 1, mask) for v in value]
     return value
 
 

@@ -466,6 +466,45 @@ class TestValidationPhase:
         assert "already exists" in result.error
         assert "validation failed" in result.error.lower()
 
+    def test_add_or_move_onto_a_file_that_is_not_text_fails(self):
+        """A file that exists but reads back as an error (UTF-16, binary) is still there: an Add or
+        a Move onto it must fail rather than replace it unread. Only "File not found" frees a path."""
+        written, moved = {}, []
+
+        class FakeFileOps:
+            def read_file_raw(self, path):
+                if path in ("notes.txt", "old.txt"):
+                    return SimpleNamespace(content=None, error="Binary file (UTF-16 text)")
+                if path == "unprobed.txt":
+                    return SimpleNamespace(content=None, error="Environment unavailable")
+                return SimpleNamespace(content=None, error=f"File not found: {path}")
+
+            def write_file(self, path, content):
+                written[path] = content
+                return SimpleNamespace(error=None)
+
+            def move_file(self, src, dst):
+                moved.append((src, dst))
+                return SimpleNamespace(error=None)
+
+        def run(patch):
+            ops, err = parse_v4a_patch(patch)
+            assert err is None
+            return apply_v4a_operations(ops, FakeFileOps())
+
+        for target in ("notes.txt", "unprobed.txt"):
+            result = run(f"*** Begin Patch\n*** Add File: {target}\n+replacement\n*** End Patch")
+            assert result.success is False
+            assert "already exists" in result.error
+        result = run("*** Begin Patch\n*** Move File: draft.md -> old.txt\n*** End Patch")
+        assert result.success is False
+        assert "already exists" in result.error
+        assert written == {} and moved == []
+
+        # A path that is really free still takes an Add.
+        assert run("*** Begin Patch\n*** Add File: fresh.txt\n+new\n*** End Patch").success is True
+        assert written == {"fresh.txt": "new"}
+
     def test_delete_then_add_same_path_still_validates(self):
         """A patch that deletes a file and re-adds the same path (a legitimate
         rewrite idiom) must not trip the Add-onto-existing guard: the earlier

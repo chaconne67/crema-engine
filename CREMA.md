@@ -106,6 +106,9 @@ Both bind 127.0.0.1 only.
      told after each tool step (`transform_tool_result`) as well as at a turn's start; `POST /api/crema/chats`
      (the sidebar's chats, kept in `crema-chats.json`), `GET /api/crema/turns` also lists messages that ask to
      start a chat and messages read but not shown, `POST /api/crema/turns/shown`
+   - the files a reply wrote (Crema plan `Crema-파일-링크-계획-2026-10-09.md`): every write of `write_file`/`patch`
+     (made or changed) and every file a terminal command changed in a Git folder is a `crema_wrote` event;
+     `GET /api/crema/files?session_id=&since=` lists those still there, for the app's line under the reply
 13. Removed (not used by the engine; nothing kept imports them):
    - top level: `apps/ website/` (except `website/static/api/model-catalog.json`) `ui-tui/ web/ skills/ optional-skills/
      optional-mcps/ plugin-catalog/ evals/ scripts/ docker/ nix/ native/ (except native/fts5_cjk/) tests-js/ contributors/`,

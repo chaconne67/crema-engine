@@ -402,3 +402,39 @@ def test_titles_come_from_the_sidebar(api, sidebar):
     turns.set_chats([{"id": "a", "session": A, "title": "새 이름", "project": ""}])
     assert turns._title(A) == "새 이름"
     assert turns._title(B) == "메일"  # not in the sidebar list: the engine session's title
+
+
+# ── the files a reply wrote (files_since) ────────────────────────────────────
+
+
+def wrote(session, path, content="x\n", call="c"):
+    """A write_file call through both hooks with its tool call id, as the engine runs it."""
+    args = {"path": str(path), "content": content}
+    assert turns.before_tool("write_file", args, session_id=session, task_id=session, tool_call_id=call) is None
+    path.write_text(content, encoding="utf-8")
+    turns.after_tool("write_file", args, json.dumps({"bytes_written": len(content)}), session_id=session, task_id=session,
+                     tool_call_id=call)
+
+
+def test_files_since_lists_what_the_chat_made_or_changed_once_each(api, judge, repo):
+    memo, report = repo.path / "메모.txt", repo.path / "report.py"
+    wrote(A, memo, "첫 줄\n", "w1")
+    wrote(A, memo, "둘째 줄\n", "w2")
+    wrote(A, report, "v2\n", "w3")
+    assert turns.files_since(A, 0) == [{"path": str(memo), "made": True}, {"path": str(report), "made": False}]
+    # Another chat's files are not this chat's; a later reply starts empty.
+    assert turns.files_since(B, 0) == []
+    import time
+    assert turns.files_since(A, int(time.time()) + 2) == []
+    # A file gone since is left out.
+    memo.unlink()
+    assert turns.files_since(A, 0) == [{"path": str(report), "made": False}]
+    assert turns.files_since("not-a-crema-chat", 0) == []
+
+
+def test_files_since_lists_a_terminal_commands_files_without_saying_made(api, judge, repo):
+    args = {"command": "echo x > notes.md", "workdir": str(repo.path)}
+    turns.before_tool("terminal", args, session_id=A, task_id=A, tool_call_id="t9")
+    (repo.path / "notes.md").write_text("x\n", encoding="utf-8")
+    turns.after_tool("terminal", args, "ok", session_id=A, task_id=A, tool_call_id="t9")
+    assert turns.files_since(A, 0) == [{"path": str((repo.path / "notes.md").resolve()), "made": None}]

@@ -66,6 +66,8 @@ _before_terminal: dict[str, dict[str, float]] = {}
 _after_terminal: dict[str, str] = {}
 # tool_call_id -> files a write claimed before it ran, given back when the write fails (audit ER-2).
 _claims: dict[str, list[str]] = {}
+# tool_call_id -> {path: whether it existed before the write} (made or changed, for the files a reply wrote).
+_existed: dict[str, dict[str, bool]] = {}
 
 
 class JudgeError(RuntimeError):
@@ -369,7 +371,9 @@ def before_tool(tool_name: str = "", args: Optional[dict] = None, session_id: st
             _before_terminal[tool_call_id] = state
         return None
     claimed = []
+    existed = {}
     for path in _written_paths(tool_name, args, task_id):
+        existed[path] = os.path.exists(path)
         with _path_locks[_key(path)]:
             refusal = _turn_for(path, chat, tool_name, args)
             # Held from here, inside the lock: another chat that reaches this file before the write lands
@@ -381,6 +385,8 @@ def before_tool(tool_name: str = "", args: Optional[dict] = None, session_id: st
             return {"action": "block", "message": refusal}
     if claimed and tool_call_id:
         _claims[tool_call_id] = claimed
+    if tool_call_id:
+        _existed[tool_call_id] = existed
     return None
 
 
@@ -443,8 +449,10 @@ def after_tool(tool_name: str = "", args: Optional[dict] = None, result: Any = N
     if not chat:
         return
     args, task_id, session_id = args or {}, task_id or session_id, chat
+    existed = {}
     if tool_name in WRITE_TOOLS:
         claimed = _claims.pop(tool_call_id, [])
+        existed = _existed.pop(tool_call_id, {})
         try:
             if json.loads(result).get("error"):
                 _give_back(claimed, session_id)
@@ -467,6 +475,10 @@ def after_tool(tool_name: str = "", args: Optional[dict] = None, result: Any = N
         for path in paths:
             if not _holds(conn, me, path):
                 _add_event(conn, me.id, "crema_file", _file_event(path))
+            # Every write, for the files this reply made or changed (files_since); a terminal command's files
+            # are known only as changed in Git, not whether they are new.
+            made = (not existed[path]) if path in existed else None
+            _add_event(conn, me.id, "crema_wrote", _file_event(path, made=made))
         if tool_name == "terminal":
             clashes = [(p, h) for p in paths for h in _holders(conn, p, session_id)
                        if not _linked(conn, me.id, h.id) and not _together(conn, me, h, p)]
@@ -703,6 +715,30 @@ def state() -> dict:
         return {"waiting": waiting, "ask": ask, "wake": wake, **({"received": received} if received else {})}
     finally:
         conn.close()
+
+
+def files_since(session_id: str, since: int) -> list[dict]:
+    """The files the chat wrote from ``since`` (epoch seconds) that are still there, each once in the order first
+    written: ``made`` true when the write created it, false when it changed one, None when not known (a terminal
+    command in Git). For the line under a reply in the app."""
+    chat = _chat(session_id)
+    if not chat:
+        return []
+    conn = _board()
+    try:
+        writes = sorted((e for e in _session_events(conn, chat) if e.kind == "crema_wrote" and e.created_at >= since),
+                        key=lambda e: e.id)
+    finally:
+        conn.close()
+    files: dict[str, dict] = {}
+    for event in writes:
+        payload = event.payload or {}
+        seen = files.get(payload.get("key"))
+        if seen is None:
+            files[payload.get("key")] = {"path": payload.get("path"), "made": payload.get("made")}
+        elif seen["made"] is None:
+            seen["made"] = payload.get("made")
+    return [item for item in files.values() if item["path"] and os.path.exists(item["path"])]
 
 
 def woken(session_id: str) -> None:

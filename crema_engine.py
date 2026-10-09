@@ -161,6 +161,11 @@ async def main() -> None:
         await asyncio.to_thread(crema_file_turns.set_chats, list(body.get("chats") or []))
         return {"ok": True}
 
+    # The files a chat wrote during a reply (agent/crema_file_turns.py files_since): the line under it in the app.
+    @settings.get("/api/crema/files")
+    async def files_written(session_id: str = "", since: int = 0):
+        return {"files": await asyncio.to_thread(crema_file_turns.files_since, session_id, since)}
+
     @settings.post("/api/crema/turns/shown")
     async def turns_shown(body: dict):
         await asyncio.to_thread(crema_file_turns.shown, str(body.get("session_id") or ""), int(body.get("upto") or 0))

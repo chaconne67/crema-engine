@@ -82,7 +82,8 @@ Both bind 127.0.0.1 only.
      not distilled and search leaves out the meaning list (`KnowledgeStore.search(meaning=False)`)
 10. Crema's working method and default persona:
    - `agent/prompt_builder.py` `CREMA_METHOD_GUIDANCE`: how the agent works (honesty, changing things safely,
-     smallest implementation, one success path, problem solving), in every prompt right after the identity,
+     smallest implementation, one success path, problem solving, a message the user sends while it works —
+     now, or after the current work when the user says so), in every prompt right after the identity,
      for every model, with or without tools; `agent/system_prompt.py` `_guidance_parts` puts it first. It
      replaces upstream `TASK_COMPLETION_GUIDANCE`, and its `agent.task_completion_guidance` switch is gone:
      the method is not the user's to turn off. How the agent speaks stays in SOUL.md, the persona the user edits.

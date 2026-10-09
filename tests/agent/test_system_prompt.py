@@ -48,6 +48,15 @@ def test_crema_method_follows_a_user_written_persona():
     assert stable.startswith("You are Luna. Speak warmly.\n\n" + CREMA_METHOD_GUIDANCE)
 
 
+def test_crema_method_says_how_to_take_a_message_sent_while_working():
+    """Crema sends what the user writes during a reply into it (/steer); the method says when to do it now
+    and when after the current work (Crema plan Crema-작업중-끼어들기-계획-2026-10-09.md)."""
+    from agent.prompt_builder import CREMA_METHOD_GUIDANCE, STEER_MARKER_OPEN
+    assert "out-of-band user message" in CREMA_METHOD_GUIDANCE
+    assert "OUT-OF-BAND USER MESSAGE" in STEER_MARKER_OPEN
+    assert "first finish and report the current work, then do it" in CREMA_METHOD_GUIDANCE
+
+
 def _captured_context_cwd(agent):
     """The cwd build_system_prompt_parts hands to build_context_files_prompt."""
     captured = {}

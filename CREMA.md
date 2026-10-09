@@ -36,6 +36,7 @@ Both bind 127.0.0.1 only.
 | Providers | every upstream provider that needs no extra package (Bedrock needs boto3 and Vertex google-auth, so both are left out) | provider plugins kept below; the Crema app hides only `moa` and `claude-code` |
 | Logins | only those made in Crema: other programs' logins (Claude Code, Codex CLI, GitHub CLI) are never borrowed | `auth.adopt_external_logins` default |
 | Shared files | chats that change the same file take turns: an order on the kanban board, a hand-over when the other chat is quiet and committed, else one judge call (the chat's model or `auxiliary.crema_turns`); a refused write waits for nothing, and the app starts the chat again | `agent/crema_file_turns.py`, `/api/crema/turns` |
+| Messages between chats | a chat lists the user's other chats and sends one a message (the `crema_chats` tool): a replying chat reads it after its current tool step, an idle one when it next works, or now when the sender asks to wake it (the app starts it) | `crema_chats` in `toolsets.py`; `agent/crema_file_turns.py` notes, `/api/crema/chats` |
 
 ## Changes from upstream
 
@@ -99,6 +100,11 @@ Both bind 127.0.0.1 only.
      its notes in `pre_llm_call`; `tests/agent/test_crema_file_turns.py`
    - `crema_engine.py`: installs the hooks; `GET /api/crema/turns` (settle, then who waits, who the user must
      order, whose turn came), `POST /api/crema/turns/woken|order|release`
+   - messages between chats (Crema plan `Crema-대화간-메시지-계획-2026-10-09.md`): new `tools/crema_chats_tool.py`
+     (`crema_chats` toolset in `hermes-api-server`); the notes of `agent/crema_file_turns.py` are the mailbox,
+     told after each tool step (`transform_tool_result`) as well as at a turn's start; `POST /api/crema/chats`
+     (the sidebar's chats, kept in `crema-chats.json`), `GET /api/crema/turns` also lists messages that ask to
+     start a chat and messages read but not shown, `POST /api/crema/turns/shown`
 13. Removed (not used by the engine; nothing kept imports them):
    - top level: `apps/ website/` (except `website/static/api/model-catalog.json`) `ui-tui/ web/ skills/ optional-skills/
      optional-mcps/ plugin-catalog/ evals/ scripts/ docker/ nix/ native/ (except native/fts5_cjk/) tests-js/ contributors/`,

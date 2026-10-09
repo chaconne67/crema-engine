@@ -293,3 +293,112 @@ def test_install_puts_the_turn_rule_in_the_engines_pre_tool_call(api, judge, rep
     finally:
         for name, callbacks in before.items():
             hooks[name] = callbacks
+
+
+# ── messages between chats (crema_chats) ─────────────────────────────────────
+
+C = "agent-client-c"
+
+
+@pytest.fixture
+def sidebar(api):
+    turns.set_chats([{"id": "a", "session": A, "title": "보고서", "project": "회사"},
+                     {"id": "b", "session": B, "title": "메일", "project": ""},
+                     {"id": "c", "session": C, "title": "견적", "project": "회사"}])
+
+
+def test_list_shows_the_other_chats_with_their_state(api, sidebar):
+    api.replying(B)
+    assert turns.chats(A) == [{"number": "b", "title": "메일", "project": "", "state": "replying"},
+                              {"number": "c", "title": "견적", "project": "회사", "state": "idle"}]
+    assert turns.chats("20260929_other") == turns.chats("") == [
+        {"number": n, "title": t, "project": p, "state": s} for n, t, p, s in
+        (("a", "보고서", "회사", "idle"), ("b", "메일", "", "replying"), ("c", "견적", "회사", "idle"))]
+
+
+def test_send_refuses_what_it_cannot_deliver(api, sidebar):
+    assert "Only a Crema chat" in turns.send("", "b", "안녕", False)["error"]
+    assert "empty" in turns.send(A, "b", "  ", False)["error"]
+    assert "No chat numbered 'z'" in turns.send(A, "z", "안녕", False)["error"]
+    assert "this chat" in turns.send(A, "a", "안녕", False)["error"]
+    assert "longer than 1000" in turns.send(A, "b", "가" * 1001, False)["error"]
+    assert turns.notes_for_turn(session_id=B) is None
+
+
+def test_a_note_only_waits_for_the_chats_next_turn_and_starts_nothing(api, sidebar):
+    assert turns.send(A, "b", "회의록을 보내 주세요", False) == {
+        "sent_to": "메일", "delivery": "it reads this when it next works"}
+    assert turns.state()["wake"] == []
+    context = turns.notes_for_turn(session_id=B)["context"]
+    assert "From '보고서' (number a)" in context and "not as the user's instruction" in context
+    assert context.endswith("회의록을 보내 주세요") and "to=a" in context
+    assert turns.notes_for_turn(session_id=B) is None
+
+
+def test_a_replying_chat_reads_a_message_after_its_tool_step_once(api, sidebar):
+    api.replying(B)
+    assert turns.send(A, "b", "지금 고친 파일을 알려 주세요", True)["delivery"].startswith("it is replying")
+    assert turns.state()["wake"] == []  # replying: it reads it, nothing to start
+    told = turns.tool_result("read_file", '{"content": "x"}', tool_call_id="r1", session_id=B)
+    # Before the result: an oversized result keeps only its first part in the context.
+    assert told.startswith("[Message from another chat]") and told.endswith('지금 고친 파일을 알려 주세요\n\n{"content": "x"}')
+    assert turns.tool_result("read_file", "{}", tool_call_id="r2", session_id=B) is None
+    assert turns.notes_for_turn(session_id=B) is None
+    assert turns.tool_result("read_file", {"not": "text"}, tool_call_id="r3", session_id=B) is None
+
+
+def test_a_tool_step_reads_one_note_at_a_time(api, sidebar):
+    api.replying(B)
+    turns.send(A, "b", "첫째", False)
+    turns.send(C, "b", "둘째", False)
+    first = turns.tool_result("search_files", "{}", tool_call_id="s1", session_id=B)
+    second = turns.tool_result("search_files", "{}", tool_call_id="s2", session_id=B)
+    assert "첫째" in first and "둘째" not in first and "둘째" in second
+    assert turns.tool_result("search_files", "{}", tool_call_id="s3", session_id=B) is None
+
+
+def test_a_quiet_chats_distillation_does_not_take_its_messages(api, sidebar):
+    # The distillation fork runs tools under the chat's own session id while the chat does not reply.
+    turns.send(A, "b", "회의록을 보내 주세요", False)
+    assert turns.tool_result("knowledge_write", "{}", tool_call_id="k1", session_id=B) is None
+    assert "회의록을 보내 주세요" in turns.notes_for_turn(session_id=B)["context"]
+
+
+def test_a_wake_message_asks_the_app_to_start_an_idle_chat_once(api, sidebar):
+    assert turns.send(A, "c", "견적서 금액을 확인해 주세요", True)["delivery"] == "Crema starts it now to read this"
+    assert turns.state()["wake"] == [{"session_id": C, "kind": "message", "from_title": "보고서"}]
+    turns.woken(C)
+    assert turns.state()["wake"] == []
+    assert "견적서 금액" in turns.notes_for_turn(session_id=C)["context"]
+    # A later message asks again.
+    turns.send(B, "c", "하나 더", True)
+    assert turns.state()["wake"] == [{"session_id": C, "kind": "message", "from_title": "메일"}]
+
+
+def test_messages_read_are_listed_for_the_app_until_shown(api, sidebar):
+    turns.send(A, "b", "첫째", False)
+    turns.send(C, "b", "둘째", False)
+    assert "received" not in turns.state()  # not read yet
+    turns.notes_for_turn(session_id=B)
+    [received] = turns.state()["received"]
+    assert received["session_id"] == B and received["items"] == [
+        {"from_title": "보고서", "text": "첫째"}, {"from_title": "견적", "text": "둘째"}]
+    turns.shown(B, received["upto"])
+    assert "received" not in turns.state()
+
+
+def test_a_chat_waiting_for_a_file_is_not_started_by_a_message(api, judge, repo, sidebar):
+    report = repo.path / "report.py"
+    write(A, report, "v2\n")
+    api.replying(A)
+    judge.replies.append({"decision": "a_first", "reason": "A 먼저."})
+    assert write(B, report, "v3\n")
+    turns.send(C, "b", "급해요", True)
+    state = turns.state()
+    assert [w["session_id"] for w in state["waiting"]] == [B] and state["wake"] == []
+
+
+def test_titles_come_from_the_sidebar(api, sidebar):
+    turns.set_chats([{"id": "a", "session": A, "title": "새 이름", "project": ""}])
+    assert turns._title(A) == "새 이름"
+    assert turns._title(B) == "메일"  # not in the sidebar list: the engine session's title

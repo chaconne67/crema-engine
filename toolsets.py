@@ -135,6 +135,8 @@ TOOLSETS = {
                                                                                "knowledge_write", "knowledge_think"]),
     # Crema: "백업해 줘" (tools/crema_backup_tool.py), since Settings has no 기억 section.
     "backup": _ts("Back up chats, memory and settings into one file without keys", ["crema_backup"]),
+    # Crema: messages between the user's chats (tools/crema_chats_tool.py).
+    "crema_chats": _ts("List the user's other chats and send one a message", ["crema_chats"]),
     "context_engine": _ts("Runtime tools exposed by the active context engine"),
     "session_search": _ts("Search and recall past conversations with summarization", ["session_search"]),
     "connections": _ts("Remote connector discovery, execution, and account authorization", ["manage_connections"]),
@@ -211,11 +213,12 @@ TOOLSETS = {
     ),
     # Crema: the tools the Crema app offers (see CREMA.md); add a tool here when Crema adopts it.
     "hermes-api-server": _ts(
-        "Crema — files, terminal, todo, web, image understanding, memory, past chats, skills and the knowledge notebook",
+        "Crema — files, terminal, todo, web, image understanding, memory, past chats, skills, the knowledge notebook "
+        "and messages to other chats",
         ["read_file", "write_file", "patch", "search_files", "terminal", "process_manage",
          "todo_list", "web_search", "web_extract", "vision_analyze",
          "memory", "session_search", "skills_list", "skill_view", "skill_manage",
-         "knowledge_search", "knowledge_get", "knowledge_write", "knowledge_think", "crema_backup"],
+         "knowledge_search", "knowledge_get", "knowledge_write", "knowledge_think", "crema_backup", "crema_chats"],
     ),
     "hermes-cli": _bundle("Full interactive CLI toolset - all default tools plus cronjob management"),
 

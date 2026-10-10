@@ -214,3 +214,108 @@ def test_free_plan_distills_nothing(store, reviews, monkeypatch):
     assert crema_engine.distill(object(), "agent-client-free", "m", "p") == {"ran": False, "written": [], "skipped": "free"}
     assert reviews == []
 
+
+
+# -- the daily pass on each chat's own model, and the notebook upkeep (Crema-업그레이드-승인-흐름 3-2) --------------
+
+
+def test_daily_pass_distills_each_left_chat_on_its_own_model(store, reviews, monkeypatch):
+    now = time.time()
+    api = FakeApi({f"agent-client-{i}": (turns(4), now - 3600 - i) for i in range(12)})
+    rows = api.db.list_sessions_rich()
+    for i, row in enumerate(rows):
+        row.update(model=f"model-{i}", billing_provider="openai-codex")
+    monkeypatch.setattr(api.db, "list_sessions_rich", lambda **_: rows)
+    report = crema_engine.daily_once(api, now)
+    assert report["distilled"] == crema_engine.DAILY_MAX_CHATS == 10
+    assert [c["requested_model"] for c in api.created] == [f"model-{i}" for i in range(10)]
+    assert {c["requested_provider"] for c in api.created} == {"openai-codex"}
+
+
+@pytest.fixture()
+def judge(monkeypatch):
+    """The auxiliary model, faked: answers by the system prompt it gets and records the calls."""
+    calls, answers = [], {}
+
+    def aux(task, system, user, max_tokens=1500):
+        calls.append({"task": task, "user": user})
+        answer = answers.get(task)
+        return answer(user) if callable(answer) else answer
+    monkeypatch.setattr("tools.knowledge_tool._aux_json", aux)
+    return calls, answers
+
+
+def test_upkeep_marks_disagreeing_pages_for_a_check_and_never_merges(store, judge):
+    calls, answers = judge
+    store.write("decision/세금계산서-발행일", title="세금계산서 발행일", body="매달 10일에 발행한다", sources=["chat:a"])
+    store.write("decision/세금계산서-발행", title="세금계산서 발행", body="매달 25일에 발행한다", sources=["chat:b"])
+    answers["knowledge_upkeep"] = {"same_topic": True, "contradicts": True, "why": "발행일이 10일과 25일로 다르다"}
+    report = crema_engine.notebook_upkeep(store, time.time())
+    assert report["conflicts"] == 1 and report["merge_candidates"] == 0
+    for slug, other in (("decision/세금계산서-발행일", "decision/세금계산서-발행"), ("decision/세금계산서-발행", "decision/세금계산서-발행일")):
+        page = store.get(slug)
+        assert page["status"] == "needs_review"
+        assert any(f"[[{other}]]" in t["summary"] and "10일과 25일" in t["summary"] for t in page["timeline"])
+    assert len(store.list()) == 2  # both pages are still there
+    # The same pair with the same text is not judged again.
+    n = len(calls)
+    crema_engine.notebook_upkeep(store, time.time())
+    assert len(calls) == n
+
+
+def test_upkeep_marks_a_close_page_as_a_merge_candidate_only(store, judge):
+    calls, answers = judge
+    store.write("incident/vpn-끊김", title="VPN 끊김", body="공유기 재시작으로 해결", sources=["chat:a"])
+    store.write("incident/vpn-연결-오류", title="VPN 연결 오류", body="공유기를 껐다 켜서 해결", sources=["chat:b"])
+    answers["knowledge_upkeep"] = {"same_topic": True, "contradicts": False, "why": "같은 VPN 문제와 해결"}
+    report = crema_engine.notebook_upkeep(store, time.time())
+    assert report["merge_candidates"] == 1 and report["conflicts"] == 0
+    statuses = {p["slug"]: p["status"] for p in store.list()}
+    assert sorted(statuses.values()) == ["active", "needs_review"]
+
+
+def test_upkeep_writes_a_pattern_only_from_two_or_more_real_pages(store, judge):
+    calls, answers = judge
+    for i, body in enumerate(["표는 굵은 제목 없이", "보고는 결론부터", "보고는 결론을 먼저"]):
+        store.write(f"feedback/지적-{i}", title=f"지적 {i}", body=body, sources=[f"chat:{i}"])
+    answers["knowledge_upkeep"] = {"same_topic": False, "contradicts": False, "why": ""}
+    answers["knowledge_patterns"] = {"patterns": [
+        {"title": "결론부터 보고", "body": "보고는 결론을 먼저 쓴다.", "slugs": ["feedback/지적-1", "feedback/지적-2", "feedback/없는-쪽"]},
+        {"title": "한 쪽만", "body": "근거가 하나뿐", "slugs": ["feedback/지적-0"]},
+    ]}
+    report = crema_engine.notebook_upkeep(store, time.time())
+    assert report["patterns"] == 1
+    page = store.get("feedback/결론부터-보고")
+    assert "[[feedback/지적-1]]" in page["body"] and "[[feedback/지적-2]]" in page["body"]
+    assert "없는-쪽" not in page["body"] and page["authority"] == "agent_observed"
+    # Nothing new since: the patterns are not looked for again, and the pattern page is not its own evidence.
+    n = len([c for c in calls if c["task"] == "knowledge_patterns"])
+    crema_engine.notebook_upkeep(store, time.time())
+    assert len([c for c in calls if c["task"] == "knowledge_patterns"]) == n
+    # Something new: the patterns are read again, with the recorded one named so it is updated, not doubled.
+    store.write("feedback/지적-3", title="지적 3", body="결론을 맨 위에", sources=["chat:3"])
+    crema_engine.notebook_upkeep(store, time.time())
+    last = [c for c in calls if c["task"] == "knowledge_patterns"][-1]
+    assert "Patterns already recorded: 결론부터 보고" in last["user"] and "[feedback/결론부터-보고]" not in last["user"]
+
+
+def test_upkeep_stays_within_its_daily_calls(store, judge):
+    calls, answers = judge
+    for i in range(20):
+        store.write(f"reference/자료-{i}", title=f"자료 {i}", body=f"내용 {i}", sources=["t"])
+    answers["knowledge_upkeep"] = {"same_topic": False, "contradicts": False, "why": ""}
+    crema_engine.notebook_upkeep(store, time.time())
+    assert len(calls) <= crema_engine.UPKEEP_MAX_CHECKS
+
+
+def test_daily_pass_has_no_upkeep_on_the_free_plan_or_in_light_mode(store, reviews, judge, monkeypatch):
+    calls, answers = judge
+    store.write("decision/a", title="A 결정", body="10일", sources=["t"])
+    store.write("decision/a-2", title="A 결정 다시", body="25일", sources=["t"])
+    answers["knowledge_upkeep"] = {"same_topic": True, "contradicts": True, "why": "다름"}
+    for config in ({"crema": {"free": True}}, {"knowledge": {"search_mode": "light"}}):
+        store.set_maintenance_value("last_daily", {"at": 0})
+        monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda config=config: config)
+        report = crema_engine.daily_once(FakeApi({"agent-client-a": (turns(1), time.time() - 3600)}))
+        assert "conflicts" not in report
+    assert calls == []

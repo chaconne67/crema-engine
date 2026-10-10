@@ -375,10 +375,12 @@ def daily_once(api, now: float = None) -> dict:
     report = store.maintain(review=tidy)
     report["distilled"] = 0
     if tidy and knowledge.get("search_mode", "balanced") != "light":
+        tried = 0  # attempts, not successes: a failing provider must not run through every chat (GBrain 6e1e82628)
         for chat in chats:
-            if report["distilled"] >= DAILY_MAX_CHATS or now - float(chat.get("last_active") or 0) > 7 * 86400:
+            if tried >= DAILY_MAX_CHATS or now - float(chat.get("last_active") or 0) > 7 * 86400:
                 break
             if int(chat.get("message_count") or 0) > store.distilled_count(chat["id"]):
+                tried += 1
                 # The chat's own model and provider (the sessions table keeps them), as a quiet chat is distilled.
                 if distill(api, chat["id"], str(chat.get("model") or ""), str(chat.get("billing_provider") or "")).get("ran"):
                     report["distilled"] += 1

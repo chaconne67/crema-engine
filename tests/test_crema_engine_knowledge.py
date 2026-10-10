@@ -319,3 +319,13 @@ def test_daily_pass_has_no_upkeep_on_the_free_plan_or_in_light_mode(store, revie
         report = crema_engine.daily_once(FakeApi({"agent-client-a": (turns(1), time.time() - 3600)}))
         assert "conflicts" not in report
     assert calls == []
+
+
+def test_daily_pass_counts_attempts_so_a_failing_provider_stops_at_the_cap(store, monkeypatch):
+    now = time.time()
+    api = FakeApi({f"agent-client-{i}": (turns(4), now - 3600 - i) for i in range(30)})
+    attempts = []
+    monkeypatch.setattr(crema_engine, "distill", lambda api, sid, *a: attempts.append(sid) or {"ran": False})
+    report = crema_engine.daily_once(api, now)
+    assert len(attempts) == crema_engine.DAILY_MAX_CHATS and report["distilled"] == 0
+    assert all(store.distilled_count(sid) == 0 for sid in attempts)  # left for another day

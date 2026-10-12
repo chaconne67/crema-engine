@@ -33,6 +33,19 @@ def test_write_adds_this_chat_as_a_source(store):
     assert store.get("feedback/존댓말")["sources"] == ["chat:agent-client-x"]
 
 
+@pytest.mark.parametrize("typo", [{"dates": "2026-10-01"}, {"authoritiy": "user_said"}, {"unknown": None}])
+def test_write_rejects_undeclared_arguments_before_saving(store, typo):
+    _seed(store)
+    before = store.get("incident/세금계산서-오류")
+    out = json.loads(kt.knowledge_write({"action": "timeline", "slug": "incident/세금계산서-오류",
+                                         "summary": "다시 발생", **typo}, session_id="agent-client-x"))
+    assert next(iter(typo)) in out["error"]
+    assert store.get("incident/세금계산서-오류") == before
+    out = json.loads(kt.knowledge_write({"action": "write", "slug": "reference/새-주소", "title": "t",
+                                         "body": "b", "sources": [], **typo}))
+    assert "error" in out and "error" in json.loads(kt.knowledge_get({"slug": "reference/새-주소"}))
+
+
 def test_write_errors_are_tool_errors():
     out = json.loads(kt.knowledge_write({"action": "write", "slug": "people/x", "title": "t", "body": "b"}))
     assert "error" in out

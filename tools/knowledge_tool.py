@@ -130,6 +130,9 @@ def knowledge_get(args: Dict[str, Any], **_: Any) -> str:
 def knowledge_write(args: Dict[str, Any], **kw: Any) -> str:
     if plan_free():
         return tool_error(FREE_REFUSAL)
+    unknown = sorted(set(args) - set(registry.get_schema("knowledge_write")["parameters"]["properties"]))
+    if unknown:  # a misspelt name (dates for date) would otherwise be saved as if left out
+        return tool_error(f"unknown argument(s): {', '.join(unknown)}; nothing was saved")
     store = KnowledgeStore.open()
     action = args.get("action") or "write"
     slug = args.get("slug") or ""

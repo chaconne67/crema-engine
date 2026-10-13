@@ -324,15 +324,21 @@ def _replace_skill_dir(skill_src: Path, dest: Path) -> None:
 def _update_existing_skill(st: _SyncState, skill_name: str, skill_src: Path, dest: Path, bundled_hash: str) -> None:
     """Handle a skill that is in the manifest AND on disk."""
     origin_hash = st.manifest.get(skill_name, "")
-    if origin_hash and bundled_hash == origin_hash:  # bundled unchanged: skip without hashing the user copy
+    # Crema: an essential skill is the installed version itself, so its copy is compared on every sync.
+    essential = skill_name in ESSENTIAL_SKILLS
+    if origin_hash and bundled_hash == origin_hash and not essential:  # bundled unchanged: skip without hashing the user copy
         st.skipped += 1
         return
     user_hash = _dir_hash(dest)
-    if not origin_hash:  # v1 migration: baseline from user's copy (can't tell edit from upstream)
+    if essential and user_hash == bundled_hash:
+        st.manifest[skill_name] = bundled_hash
+        st.skipped += 1
+        return
+    if not origin_hash and not essential:  # v1 migration: baseline from user's copy (can't tell edit from upstream)
         st.manifest[skill_name] = user_hash
         st.skipped += 1
         return
-    if not _matches_origin_hash(dest, origin_hash, user_hash):
+    if not essential and not _matches_origin_hash(dest, origin_hash, user_hash):
         st.user_modified.append(skill_name)
         st.say(f"  ~ {skill_name} (user-modified, skipping)")
         return
@@ -397,6 +403,8 @@ def sync_skills(quiet: bool = False) -> dict:
             _install_new_skill(st, skill_name, skill_src, dest, bundled_hash)
         elif dest.exists():
             _update_existing_skill(st, skill_name, skill_src, dest, bundled_hash)
+        elif skill_name in ESSENTIAL_SKILLS:  # Crema: a deleted essential skill comes back
+            _install_new_skill(st, skill_name, skill_src, dest, bundled_hash)
         else:
             st.skipped += 1  # in manifest but not on disk — user deleted it
     # Clean manifest entries for skills removed upstream. Skipped when opted out: bundled_skills

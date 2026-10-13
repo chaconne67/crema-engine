@@ -37,6 +37,7 @@ Both bind 127.0.0.1 only.
 | Logins | only those made in Crema: other programs' logins (Claude Code, Codex CLI, GitHub CLI) are never borrowed | `auth.adopt_external_logins` default |
 | Shared files | chats that change the same file take turns: an order on the kanban board, a hand-over when the other chat is quiet and committed, else one judge call (the chat's model or `auxiliary.crema_turns`); a refused write waits for nothing, and the app starts the chat again | `agent/crema_file_turns.py`, `/api/crema/turns` |
 | Messages between chats | a chat lists the user's other chats and sends one a message (the `crema_chats` tool): a replying chat reads it after its current tool step, an idle one when it next works, or now when the sender asks to wake it (the app starts it) | `crema_chats` in `toolsets.py`; `agent/crema_file_turns.py` notes, `/api/crema/chats` |
+| Crema's manual | the built-in skill `crema-guide`: how Crema's screens, settings, engine, account and updates work, read by the agent when the user asks about Crema; each release ships its own, and an edited or deleted copy is put back at start | `skills/crema-guide/`, seeded by `crema_engine.py` |
 
 ## Changes from upstream
 
@@ -110,7 +111,7 @@ Both bind 127.0.0.1 only.
      (made or changed) and every file a terminal command changed in a Git folder is a `crema_wrote` event;
      `GET /api/crema/files?session_id=&since=` lists those still there, for the app's line under the reply
 13. Removed (not used by the engine; nothing kept imports them):
-   - top level: `apps/ website/` (except `website/static/api/model-catalog.json`) `ui-tui/ web/ skills/ optional-skills/
+   - top level: `apps/ website/` (except `website/static/api/model-catalog.json`) `ui-tui/ web/ skills/ (Crema's own is item 14) optional-skills/
      optional-mcps/ plugin-catalog/ evals/ scripts/ docker/ nix/ native/ (except native/fts5_cjk/) tests-js/ contributors/`,
      Docker/Nix/npm/lint files, translated READMEs, `batch_runner.py mini_swe_runner.py mcp_serve.py
      toolset_distributions.py trajectory_compressor.py setup-hermes.sh`
@@ -125,6 +126,17 @@ Both bind 127.0.0.1 only.
      removed feature). The tests of kept files that still check a removed feature are listed in the
      Crema repo's `scripts/engine-tests/known-pruned-failures.txt`, which the engine test comparison
      (`.github/workflows/engine-tests.yml` there) reports apart from new failures
+14. Crema's manual as a built-in skill (Crema plan `Crema-기본-설명서-스킬-계획-2026-10-11.md`):
+   - new: `skills/crema-guide/` — `SKILL.md` (what Crema is, how to use the manual, which reference answers what)
+     and `references/*.md` (screens, settings, models and connections, memory and the notebook, chats together,
+     the engine, account/updates/data, troubleshooting), in Korean as the app is. A change to what users see or
+     do in Crema (app or engine) updates it in the same work; the Crema plans' `crema/AGENTS.md` says so
+   - `crema_engine.py`: `sync_skills()` (upstream `tools/skills_sync.py`, which only the gateway and the CLI
+     called) at start, so the bundled skills reach `HERMES_HOME/skills`
+   - `agent/skill_utils.py`: `crema-guide` in `ESSENTIAL_SKILLS` (never disabled or deleted by the agent)
+   - `tools/skills_sync.py`: an essential skill's copy is compared with the bundled one on every sync and put
+     back when edited or deleted — upstream keeps a user-modified bundled skill and stops updating it, which
+     would freeze the manual at the first edit the agent makes; tests in `tests/tools/test_skills_sync.py`
 
 Kept code still mentions many removed features (browser, memory, delegation, …) through imports that
 are either lazy or guarded; those modules stay until the code that names them is gone.

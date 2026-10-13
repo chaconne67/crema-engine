@@ -989,3 +989,78 @@ class TestCallTimeDirResolution:
                 ss._rmtree_writable(foreign)
         finally:
             reset_hermes_home_override(token)
+
+
+class TestCremaEssentialSkill:
+    """Crema: the essential `crema-guide` manual is the installed version — an edited or deleted copy
+    comes back on the next sync, while other bundled skills keep the upstream rules."""
+
+    def _bundled(self, tmp_path):
+        bundled = tmp_path / "bundled_skills"
+        (bundled / "crema-guide" / "references").mkdir(parents=True)
+        (bundled / "crema-guide" / "SKILL.md").write_text("---\nname: crema-guide\n---\n# Manual v1")
+        (bundled / "crema-guide" / "references" / "a.md").write_text("A v1")
+        (bundled / "plain").mkdir()
+        (bundled / "plain" / "SKILL.md").write_text("---\nname: plain\n---\n# Plain")
+        return bundled
+
+    def _sync(self, bundled, skills_dir):
+        with patch("tools.skills_sync._get_bundled_dir", return_value=bundled), \
+                patch("tools.skills_sync._get_optional_dir", return_value=bundled.parent / "optional-skills"), \
+                patch("tools.skills_sync.SKILLS_DIR", skills_dir), \
+                patch("tools.skills_sync.MANIFEST_FILE", skills_dir / ".bundled_manifest"):
+            return sync_skills(quiet=True)
+
+    def test_edited_copy_is_put_back_and_other_skills_keep_edits(self, tmp_path):
+        bundled, skills_dir = self._bundled(tmp_path), tmp_path / "user_skills"
+        assert set(self._sync(bundled, skills_dir)["copied"]) == {"crema-guide", "plain"}
+        (skills_dir / "crema-guide" / "references" / "a.md").write_text("edited by the agent")
+        (skills_dir / "plain" / "SKILL.md").write_text("---\nname: plain\n---\n# Mine")
+
+        result = self._sync(bundled, skills_dir)
+
+        assert result["updated"] == ["crema-guide"]
+        assert _dir_hash(skills_dir / "crema-guide") == _dir_hash(bundled / "crema-guide")
+        assert "Mine" in (skills_dir / "plain" / "SKILL.md").read_text()
+        # Unchanged since: nothing to do.
+        assert self._sync(bundled, skills_dir)["updated"] == []
+
+    def test_deleted_copy_comes_back_and_other_deletions_hold(self, tmp_path):
+        bundled, skills_dir = self._bundled(tmp_path), tmp_path / "user_skills"
+        self._sync(bundled, skills_dir)
+        shutil.rmtree(skills_dir / "crema-guide")
+        shutil.rmtree(skills_dir / "plain")
+
+        result = self._sync(bundled, skills_dir)
+
+        assert result["copied"] == ["crema-guide"]
+        assert (skills_dir / "crema-guide" / "SKILL.md").exists()
+        assert not (skills_dir / "plain").exists()
+
+    def test_new_release_replaces_an_edited_copy(self, tmp_path):
+        bundled, skills_dir = self._bundled(tmp_path), tmp_path / "user_skills"
+        self._sync(bundled, skills_dir)
+        (skills_dir / "crema-guide" / "SKILL.md").write_text("---\nname: crema-guide\n---\n# edited")
+        (bundled / "crema-guide" / "SKILL.md").write_text("---\nname: crema-guide\n---\n# Manual v2")
+
+        result = self._sync(bundled, skills_dir)
+
+        assert result["updated"] == ["crema-guide"]
+        assert "Manual v2" in (skills_dir / "crema-guide" / "SKILL.md").read_text()
+        assert _read_skill_name(skills_dir / "crema-guide" / "SKILL.md", "") == "crema-guide"
+
+    def test_repository_ships_the_manual_with_a_whole_index_description(self):
+        from agent.skill_utils import ESSENTIAL_SKILLS, SKILL_PROMPT_DESC_LIMIT, parse_frontmatter
+
+        found = dict(_discover_bundled_skills(_get_bundled_dir()))
+        assert "crema-guide" in found and "crema-guide" in ESSENTIAL_SKILLS
+        frontmatter = parse_frontmatter((found["crema-guide"] / "SKILL.md").read_text(encoding="utf-8"))[0]
+        # The skills index cuts a longer description, and the index line is how the agent knows to open it.
+        assert 0 < len(frontmatter["description"]) <= SKILL_PROMPT_DESC_LIMIT
+        # Windows tar.exe, which unpacks the bundle (Crema's build-engine.ps1) and a quick apply, fails on
+        # non-ASCII file names: the manual's are ASCII, its text Korean.
+        assert all(p.name.isascii() for p in found["crema-guide"].rglob("*")), "non-ASCII file name"
+        # Every reference the manual routes to is shipped with it.
+        body = (found["crema-guide"] / "SKILL.md").read_text(encoding="utf-8")
+        for name in __import__("re").findall(r"\]\(references/([^)#]+)", body):
+            assert (found["crema-guide"] / "references" / name).is_file(), name

@@ -31,6 +31,14 @@ async def main() -> None:
 
     # Only the packages bundled with Crema (the `crema` extra); never install more at run time.
     os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
+    # Crema's built-in skills (skills/: the crema-guide manual) into the engine folder as installed;
+    # a chat can work without them, so a failure is logged and the engine starts.
+    try:
+        from tools.skills_sync import sync_skills
+
+        sync_skills(quiet=True)
+    except Exception:
+        logging.getLogger(__name__).warning("syncing the built-in skills failed", exc_info=True)
 
     from gateway.config import PlatformConfig
     from gateway.platforms.api_server import APIServerAdapter

@@ -30,7 +30,7 @@ Both bind 127.0.0.1 only.
 
 | Area | Kept | How it is chosen |
 |---|---|---|
-| Tools | files, terminal/process, todo, web search/extract, image understanding, memory, past-chat search, skills (the agent writes and improves them), a keyless backup ("백업해 줘") | `hermes-api-server` in `toolsets.py` |
+| Tools | files, terminal/process, todo, web search/extract, image understanding, memory, past-chat search, skills (the agent writes and improves them), a keyless backup ("백업해 줘"); image and video generation when the app's 부가 기능 연동 connects them | `hermes-api-server` in `toolsets.py`; the app adds `image_gen`/`video_gen` to `platform_toolsets.api_server` |
 | Knowledge notebook | pages of what the agent learned working with the user, searched before work and written after (the method of GBrain, below); a quiet chat is distilled into it, and once a day while Crema is quiet the notebook is tidied | `knowledge` in `toolsets.py` (a direct surface in `tools/tool_search.py`, so never deferred); `knowledge.search_mode` light/balanced/thorough, `knowledge.nightly` |
 | Past-chat search in Korean/CJK | the `cjk_unicode61` tokenizer (`native/fts5_cjk/`), built by Crema as `fts5_cjk.dll` and named in `HERMES_FTS5_CJK_SO`; chats saved before it are indexed when the engine starts | `crema_engine.py` |
 | Providers | every upstream provider that needs no extra package (Bedrock needs boto3 and Vertex google-auth, so both are left out) | provider plugins kept below; the Crema app hides only `moa` and `claude-code` |
@@ -116,9 +116,9 @@ Both bind 127.0.0.1 only.
      optional-mcps/ plugin-catalog/ evals/ scripts/ docker/ nix/ native/ (except native/fts5_cjk/) tests-js/ contributors/`,
      Docker/Nix/npm/lint files, translated READMEs, `batch_runner.py mini_swe_runner.py mcp_serve.py
      toolset_distributions.py trajectory_compressor.py setup-hermes.sh`
-   - `tools/`: `xai_video_tools.py video_generation_tool.py` (their `plugins/video_gen/` was removed)
+   - `tools/`: `xai_video_tools.py`
    - `plugins/`: `disk-cleanup google_meet hermes-achievements kanban security-guidance spotify observability
-     teams_pipeline platforms image_gen video_gen cron_providers`, the memory providers under `plugins/memory/`,
+     teams_pipeline platforms cron_providers`, the memory providers under `plugins/memory/`,
      and the model providers `bedrock vertex` (they need packages the bundle does not carry; the other
      providers were cut at first and restored on 2026-09-26)
    - `scripts/` except `run_tests_parallel.py`, upstream's per-file test runner the tests rely on for
@@ -127,6 +127,9 @@ Both bind 127.0.0.1 only.
      removed feature). The tests of kept files that still check a removed feature are listed in the
      Crema repo's `scripts/engine-tests/known-pruned-failures.txt`, which the engine test comparison
      (`.github/workflows/engine-tests.yml` there) reports apart from new failures
+   - brought back on 2026-09-27 (1a85b8bbf1): `tools/video_generation_tool.py` and the image/video backends
+     Crema's connected Providers drive — `plugins/image_gen/` (openai-codex, openai, openrouter, xai) and
+     `plugins/video_gen/` (openrouter, xai)
 14. Crema's manual as a built-in skill (Crema plan `Crema-기본-설명서-스킬-계획-2026-10-11.md`):
    - new: `skills/crema-guide/` — `SKILL.md` (what Crema is, how to use the manual, which reference answers what)
      and `references/*.md` (screens, settings, models and connections, memory and the notebook, chats together,
@@ -144,6 +147,11 @@ Both bind 127.0.0.1 only.
    (`~/.voicetype/control.json`); `tools/tool_search.py` keeps it out of the catalog stubs (`thock` in
    `_DIRECT_SURFACE_TOOLSETS`), since the agent must notice a misheard word in any message; tests in
    `tests/tools/test_thock_heard_tool.py`
+
+16. Review prompts without Hermes' CLI (Crema plan `Crema-기본-설명서-스킬-계획-2026-10-11.md`):
+   `agent/background_review.py`'s skill and combined review prompts name `crema-guide` as the bundled
+   skill and no longer tell the reviewer to recommend `hermes skills install` / `hermes curator pin|adopt`,
+   commands a Crema user has no way to run
 
 Kept code still mentions many removed features (browser, memory, delegation, …) through imports that
 are either lazy or guarded; those modules stay until the code that names them is gone.

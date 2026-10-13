@@ -139,7 +139,10 @@ def _core_tool_names() -> frozenset[str]:
 # answers the user's install request with a tool_search round trip.
 _DIRECT_SURFACE_TOOLSETS = frozenset({"desktop_ui", "project", "setup",
                                       # Crema: the agent searches its notebook before every task.
-                                      "knowledge"})
+                                      "knowledge",
+                                      # Crema: a misheard word is noticed in every message, which a
+                                      # catalog stub's 60 characters cannot say (thock_heard).
+                                      "thock"})
 
 # Event-triggered tools deferred BY DEFAULT (a catalog stub suffices). Keep the curated
 # list in DEFAULT_CONFIG so config discovery and runtime behavior cannot drift. An explicit

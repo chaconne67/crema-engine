@@ -37,6 +37,7 @@ Both bind 127.0.0.1 only.
 | Logins | only those made in Crema: other programs' logins (Claude Code, Codex CLI, GitHub CLI) are never borrowed | `auth.adopt_external_logins` default |
 | Shared files | chats that change the same file take turns: an order on the kanban board, a hand-over when the other chat is quiet and committed, else one judge call (the chat's model or `auxiliary.crema_turns`); a refused write waits for nothing, and the app starts the chat again | `agent/crema_file_turns.py`, `/api/crema/turns` |
 | Messages between chats | a chat lists the user's other chats and sends one a message (the `crema_chats` tool): a replying chat reads it after its current tool step, an idle one when it next works, or now when the sender asks to wake it (the app starts it) | `crema_chats` in `toolsets.py`; `agent/crema_file_turns.py` notes, `/api/crema/chats` |
+| Words Thock misheard | when a word in the user's message is clearly a similar-sounding word from the one meant, the agent tells Thock the pair (the `thock_heard` tool); Thock counts it like the user's own fix, only when the word is in its dictations of the last 30 minutes | `thock` in `toolsets.py`; the app names the built-in Thock's folder in `CREMA_THOCK_HOME` |
 | Crema's manual | the built-in skill `crema-guide`: how Crema's screens, settings, engine, account and updates work, read by the agent when the user asks about Crema; each release ships its own, and an edited or deleted copy is put back at start | `skills/crema-guide/`, seeded by `crema_engine.py` |
 
 ## Changes from upstream
@@ -137,6 +138,12 @@ Both bind 127.0.0.1 only.
    - `tools/skills_sync.py`: an essential skill's copy is compared with the bundled one on every sync and put
      back when edited or deleted — upstream keeps a user-modified bundled skill and stops updating it, which
      would freeze the manual at the first edit the agent makes; tests in `tests/tools/test_skills_sync.py`
+15. Words Thock misheard (Thock plan `Thock-잘못-들은-말-배우기-계획-2026-10-13.md`): new `tools/thock_heard_tool.py`
+   (`thock` toolset in `hermes-api-server`) posts `{wrong, right}` to Thock's `POST /api/heard`, with the port and
+   token of the built-in Thock (`embedded.json` in `CREMA_THOCK_HOME`) or else a Thock running on its own
+   (`~/.voicetype/control.json`); `tools/tool_search.py` keeps it out of the catalog stubs (`thock` in
+   `_DIRECT_SURFACE_TOOLSETS`), since the agent must notice a misheard word in any message; tests in
+   `tests/tools/test_thock_heard_tool.py`
 
 Kept code still mentions many removed features (browser, memory, delegation, …) through imports that
 are either lazy or guarded; those modules stay until the code that names them is gone.

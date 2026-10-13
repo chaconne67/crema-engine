@@ -81,7 +81,7 @@
 | API 키 / 구독 로그인 | `engine\.env` / `engine\auth.json` |
 | 첨부 파일 사본 | `engine\cache\documents\` |
 | 엔진 로그 | `engine\engine.log`, `engine\logs\agent.log`, `engine\logs\errors.log` |
-| 내장 Thock 데이터 | `thock\` |
+| Thock 데이터(내장·따로 설치 공통) | `%USERPROFILE%\.voicetype\` |
 | 대화 목록·화면 설정 | 앱의 WebView 저장소 |
 | Crema 로그인 | Windows 자격 증명 관리자 `agent-client` / `crema-account` |
 | 받은 업데이트 파일 | `%TEMP%\CremaUpdate\` |

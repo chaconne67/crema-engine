@@ -38,7 +38,7 @@
 - 직접 업데이트를 확인하는 버튼은 없다. 확인이나 받기에 실패해도 따로 알리지 않고 다음에 다시 시도한다.
 - 지금 앱 판을 늘 보여 주는 곳은 없다. `/status`의 "엔진 v…"는 엔진 번호라서 Crema 판(예: 0.2.38)과 다르다.
 - 0.2.17 이하 판은 업데이트 주소가 달라서 `https://crema-agent.site/download/`에서 한 번 직접 받아 설치해야 한다.
-- 내장 Thock이 새 판을 내면 Crema도 새 판으로 함께 나온다.
+- Thock은 Crema에 들어 있지 않아 Crema와 따로 업데이트된다([models-and-connections.md](models-and-connections.md#음성-입력)).
 - Crema가 업데이트되면 이 설명서도 그 판 내용으로 바뀐다.
 
 ## 판별 주요 변화
@@ -64,7 +64,7 @@
 - 설치 파일: `https://crema-agent.site/download/`의 `Crema-setup-x64.exe`. Windows만 지원한다.
 - 코드 서명이 없어서 "Windows의 PC 보호" 경고가 뜬다. **추가 정보 → 실행**을 누른다.
 - 설치하는 동안 Crema가 켜져 있으면 문제가 생길 수 있다. Crema를 끈 뒤 다시 설치한다.
-- 설치 위치는 `%LOCALAPPDATA%\Crema`이다. 그 안에 앱, 엔진(`engine\`), Thock(`thock\`)이 들어 있다.
+- 설치 위치는 `%LOCALAPPDATA%\Crema`이다. 그 안에 앱과 엔진(`engine\`)이 들어 있다. Thock은 따로 설치된다.
 - 제거는 Windows 설정의 앱 목록에서 한다.
 
 ## 데이터 저장 위치
@@ -81,7 +81,7 @@
 | API 키 / 구독 로그인 | `engine\.env` / `engine\auth.json` |
 | 첨부 파일 사본 | `engine\cache\documents\` |
 | 엔진 로그 | `engine\engine.log`, `engine\logs\agent.log`, `engine\logs\errors.log` |
-| Thock 데이터(내장·따로 설치 공통) | `%USERPROFILE%\.voicetype\` |
+| Thock 데이터 | `%USERPROFILE%\.voicetype\` |
 | 대화 목록·화면 설정 | 앱의 WebView 저장소 |
 | Crema 로그인 | Windows 자격 증명 관리자 `agent-client` / `crema-account` |
 | 받은 업데이트 파일 | `%TEMP%\CremaUpdate\` |
@@ -93,6 +93,6 @@
 - 대화에서 "백업해 줘"라고 말한다. 다른 폴더를 말하면 거기에 만든다.
 - 기본 위치: `문서\Crema 백업\crema-backup-날짜-시각.zip`. 문서 폴더가 OneDrive로 옮겨져 있으면 그곳을 따른다.
 - 들어가는 것: 엔진 쪽 대화 원문, 지식 노트, 기억, 페르소나, 스킬, 엔진 설정(키 값은 지움), 첨부 사본과 만든 그림·영상
-- 빠지는 것: API 키, 로그인 정보, 이전 백업, 캐시, 앱의 대화 목록·제목·프로젝트 목록·화면 설정(앱 저장소에 있음), 내장 Thock 자료
+- 빠지는 것: API 키, 로그인 정보, 이전 백업, 캐시, 앱의 대화 목록·제목·프로젝트 목록·화면 설정(앱 저장소에 있음), Thock 자료
 - 일부 파일을 읽지 못하면 그 부분을 빼고 "불완전"이라고 알린다.
 - 앱에는 백업을 되살리는 복원 기능이 없다.

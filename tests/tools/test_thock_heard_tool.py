@@ -38,34 +38,24 @@ def call(wrong="수옥", right="쏙"):
     return json.loads(registry.dispatch("thock_heard", {"wrong": wrong, "right": right}))
 
 
-def test_the_built_in_thock_hears_it_first(thock, tmp_path, monkeypatch):
-    (tmp_path / "embedded.json").write_text(json.dumps({"port": thock["port"], "token": "built-in"}))
-    home = tmp_path / "home"
-    (home / ".voicetype").mkdir(parents=True)
-    (home / ".voicetype" / "control.json").write_text(json.dumps({"port": 1, "token": "own"}))
-    monkeypatch.setenv("CREMA_THOCK_HOME", str(tmp_path))
-    monkeypatch.setenv("HOME", str(home))
-    assert call() == {"learned": True}
-    assert thock["posts"] == [("/api/heard", "built-in", {"wrong": "수옥", "right": "쏙"})]
+def links(home, port, token="own"):
+    (home / ".voicetype").mkdir(parents=True, exist_ok=True)
+    (home / ".voicetype" / "control.json").write_text(json.dumps({"port": port, "token": token}))
 
 
-def test_a_thock_running_on_its_own_when_the_built_in_one_does_not_answer(thock, tmp_path, monkeypatch):
-    (tmp_path / "embedded.json").write_text(json.dumps({"port": 1, "token": "built-in"}))  # left by one that ended
-    home = tmp_path / "home"
-    (home / ".voicetype").mkdir(parents=True)
-    (home / ".voicetype" / "control.json").write_text(json.dumps({"port": thock["port"], "token": "own"}))
-    monkeypatch.setenv("CREMA_THOCK_HOME", str(tmp_path))
-    monkeypatch.setenv("HOME", str(home))
-    assert call() == {"learned": True}
-    assert [post[1] for post in thock["posts"]] == ["own"]
-
-
-def test_no_thock_or_one_without_the_route_says_to_carry_on(thock, tmp_path, monkeypatch):
+def test_the_pcs_thock_hears_it(thock, tmp_path, monkeypatch):
+    links(tmp_path, thock["port"])
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("CREMA_THOCK_HOME", raising=False)
+    assert call() == {"learned": True}
+    assert thock["posts"] == [("/api/heard", "own", {"wrong": "수옥", "right": "쏙"})]
+
+
+def test_no_thock_one_that_ended_or_one_without_the_route_says_to_carry_on(thock, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
     assert "error" in call()
-    (tmp_path / "embedded.json").write_text(json.dumps({"port": thock["port"], "token": "t"}))
-    monkeypatch.setenv("CREMA_THOCK_HOME", str(tmp_path))
+    links(tmp_path, 1)  # left by a Thock that ended
+    assert "error" in call()
+    links(tmp_path, thock["port"])
     thock["status"] = 404  # a Thock older than /api/heard
     assert "error" in call()
 

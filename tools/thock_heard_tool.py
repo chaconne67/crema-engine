@@ -3,7 +3,6 @@ the pair like the user's own fix in a field, only when the word is in one of its
 from __future__ import annotations
 
 import json
-import os
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict
@@ -11,28 +10,16 @@ from typing import Any, Dict
 from tools.registry import registry, tool_error
 
 
-def _links():
-    """Thock's settings page port and token: the built-in one's (the app passes its folder), else a Thock running
-    on its own. A file whose port nothing answers on was left by a Thock that ended."""
-    folder = os.environ.get("CREMA_THOCK_HOME")
-    files = ([Path(folder) / "embedded.json"] if folder else []) + [Path.home() / ".voicetype" / "control.json"]
-    for file in files:
-        try:
-            yield json.loads(file.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-
-
 def thock_heard(args: Dict[str, Any], **_: Any) -> str:
+    """Sent to the PC's one Thock, through its settings page port and token (~/.voicetype/control.json)."""
     body = json.dumps({"wrong": args.get("wrong", ""), "right": args.get("right", "")}).encode("utf-8")
-    for link in _links():
-        try:
-            request = urllib.request.Request(f"http://127.0.0.1:{link['port']}/api/heard", body,
-                                             {"X-Token": link["token"], "Content-Type": "application/json"})
-            return json.dumps({"learned": bool(json.load(urllib.request.urlopen(request, timeout=3))["learned"])})
-        except (OSError, ValueError, KeyError, TypeError):  # not running, signed out, or a Thock without /api/heard
-            continue
-    return tool_error("Thock did not take it (not running here, or too old); carry on")
+    try:
+        link = json.loads((Path.home() / ".voicetype" / "control.json").read_text(encoding="utf-8"))
+        request = urllib.request.Request(f"http://127.0.0.1:{link['port']}/api/heard", body,
+                                         {"X-Token": link["token"], "Content-Type": "application/json"})
+        return json.dumps({"learned": bool(json.load(urllib.request.urlopen(request, timeout=3))["learned"])})
+    except (OSError, ValueError, KeyError, TypeError):  # no Thock, one that ended, signed out, or one without /api/heard
+        return tool_error("Thock did not take it (not running here, or too old); carry on")
 
 
 registry.register(

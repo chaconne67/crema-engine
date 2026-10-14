@@ -14,8 +14,8 @@
 |---|---|---|
 | 무료 | 0원 | 첫 로그인부터 한 달. 프로와 같은 기능(음성 입력 포함) |
 | 기본 | 4,900원 | Crema 전체. 음성 입력 없음 |
-| 프로 | 9,900원 | Crema + Thock 음성 입력(베이직) |
-| 프리미엄 | 14,900원 | Crema + Thock 음성 입력(프리미엄) + 기억 서버 백업(아직 준비 중) |
+| 프로 | 9,900원 | Crema + Thock 음성 입력 |
+| 프리미엄 | 14,900원 | Crema + Thock 음성 입력 + 기억 서버 백업(아직 준비 중) |
 
 - 모든 플랜에서 AI 사용료는 연결한 AI 계정에서 따로 나간다.
 - 앱 안에서는 아직 결제하거나 플랜을 바꿀 수 없다. 다른 플랜 칸에는 "곧 열립니다"가 보인다.
@@ -81,7 +81,7 @@
 | API 키 / 구독 로그인 | `engine\.env` / `engine\auth.json` |
 | 첨부 파일 사본 | `engine\cache\documents\` |
 | 엔진 로그 | `engine\engine.log`, `engine\logs\agent.log`, `engine\logs\errors.log` |
-| 내장 Thock 데이터 | `thock\` |
+| Thock 데이터(내장·따로 설치 공통) | `%USERPROFILE%\.voicetype\` |
 | 대화 목록·화면 설정 | 앱의 WebView 저장소 |
 | Crema 로그인 | Windows 자격 증명 관리자 `agent-client` / `crema-account` |
 | 받은 업데이트 파일 | `%TEMP%\CremaUpdate\` |

@@ -32,7 +32,7 @@
 
 자세한 내용: [models-and-connections.md](models-and-connections.md#이미지동영상웹-검색)
 
-그 아래 **메일 연결**: 연결된 메일 주소마다 "연결됨"과 **연결 끊기**, 그리고 **메일 추가**(메일 주소 → **연결 시작** → 연결 안내). 자세한 내용: [models-and-connections.md](models-and-connections.md#메일-연결)
+그 아래 **메일 연결**: 연결된 메일 주소마다 "연결됨"과 **연결 끊기**, 그리고 **메일 추가**(메일 주소 → **연결 시작** → 연결 안내, 지메일은 구글 캘린더·드라이브도 함께). 자세한 내용: [models-and-connections.md](models-and-connections.md#메일-연결)
 
 그 아래 **업무 서비스 연결** 목록: 서비스마다 **연결**, 또는 "연결됨"과 **연결 끊기**. 자세한 내용: [models-and-connections.md](models-and-connections.md#업무-서비스-연결)
 

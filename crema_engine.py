@@ -88,7 +88,7 @@ async def main() -> None:
 
     import uvicorn
     from fastapi import FastAPI, HTTPException, Request
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import HTMLResponse, JSONResponse
     from hermes_cli.web_routers import audio, config_env, mcp, models, oauth, sessions, status, tools
 
     from crema_free import create_router as free_connection_router
@@ -226,6 +226,40 @@ async def main() -> None:
     async def mail_remove(body: dict):
         return await asyncio.to_thread(crema_mail_tool.remove, str(body.get("address") or ""))
 
+    # A Gmail address (tools/crema_google.py): the user's own Google app signs Crema in. Started with its id and
+    # secret (the consent page's address back), followed until done, and Google's way back to this server.
+    from tools import crema_google
+
+    @settings.post("/api/crema/google/connect")
+    async def google_connect(body: dict, request: Request):
+        try:
+            return crema_google.start(str(body.get("address") or ""), str(body.get("client_id") or ""),
+                                      str(body.get("client_secret") or ""), str(request.base_url))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @settings.get("/api/crema/google/flows/{flow_id}")
+    async def google_flow(flow_id: str):
+        return crema_google.status(flow_id)
+
+    @settings.get(crema_google.CALLBACK)
+    async def google_back(code: str = "", state: str = "", error: str = ""):
+        how = await asyncio.to_thread(crema_google.finish, code, state, error)
+        page = {
+            "done": ("구글 연결을 마쳤습니다", "메일·캘린더·드라이브를 Crema에서 쓸 수 있습니다."),
+            "denied": ("허용하지 않았습니다", "Crema로 돌아가면 허용 화면을 다시 열어 드립니다."),
+            "scopes": ("권한이 빠졌습니다", "메일·캘린더·드라이브를 모두 체크해야 합니다. Crema로 돌아가 다시 허용해 주세요."),
+            "account": ("다른 계정으로 허용했습니다", "Crema에 넣은 지메일 주소의 구글 계정으로 허용해 주세요."),
+            "unknown": ("로그인 시간이 지났습니다", "Crema로 돌아가 다시 연결해 주세요."),
+        }.get(how, ("연결하지 못했습니다", "Crema로 돌아가 다시 연결해 주세요."))
+        return HTMLResponse(mcp._sign_in_page(*page, ok=how == "done"), status_code=200 if how == "done" else 400)
+
+    # 「Crema 열기」 on a sign-in's page: Crema, reading this output, brings its window forward (src-tauri lib.rs).
+    @settings.get("/api/crema/front")
+    async def front():
+        print(json.dumps({"front": True}), flush=True)
+        return {"ok": True}
+
     @settings.post("/api/crema/services/sync")
     async def services_sync():
         await asyncio.to_thread(sync_services)
@@ -239,9 +273,11 @@ async def main() -> None:
     @settings.middleware("http")
     async def only_crema(request: Request, call_next):
         given = request.headers.get("X-Hermes-Session-Token", "")
-        # The browser comes back from a service's sign-in page without the token; that route takes only
-        # the one-time state of a sign-in Crema started.
-        back = request.method == "GET" and request.url.path.startswith(SIGN_IN_RETURN.removesuffix("{server_name:path}"))
+        # The browser comes back from a service's or Google's sign-in page without the token; those routes take
+        # only the one-time state of a sign-in Crema started. The page's 「Crema 열기」 only brings Crema forward.
+        path = request.url.path
+        back = request.method == "GET" and (path.startswith(SIGN_IN_RETURN.removesuffix("{server_name:path}"))
+                                            or path in (crema_google.CALLBACK, "/api/crema/front"))
         if not back and not hmac.compare_digest(given.encode(), token.encode()):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
         return await call_next(request)

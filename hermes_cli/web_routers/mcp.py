@@ -357,12 +357,59 @@ async def mcp_oauth_callback(
         )
     if error:
         return HTMLResponse(_sign_in_page("연결하지 못했습니다", "Crema로 돌아가 다시 연결해 주세요."), status_code=400)
-    return HTMLResponse(_sign_in_page("로그인했습니다", "이 탭을 닫고 Crema로 돌아가세요."))
+    return HTMLResponse(_sign_in_page("로그인했습니다", "Crema로 돌아가면 바로 쓸 수 있습니다.", ok=True))
 
 
-def _sign_in_page(title: str, line: str) -> str:
-    """What the browser shows after a service's sign-in, in Crema's words (Crema engine)."""
-    return f'<!doctype html><meta charset="utf-8"><title>Crema</title><h1>{title}</h1><p>{line}</p>'
+# Crema's logo (docs/icons/crema-c-bubble.svg in the app), for the page a sign-in comes back to.
+_LOGO = '<svg class="logo" viewBox="0 0 1024 1024" aria-hidden="true"><defs><radialGradient id="crema" cx=".42" cy=".38" r=".72"><stop offset="0" stop-color="#f6d19a"/><stop offset=".5" stop-color="#d99a55"/><stop offset="1" stop-color="#9a5527"/></radialGradient><clipPath id="bubble"><path d="M512 196C720 196 852 320 852 488S720 780 512 780C468 780 428 775 392 764L262 836C244 846 226 828 234 810L280 710C210 654 172 578 172 488 172 320 304 196 512 196Z"/></clipPath></defs><rect width="1024" height="1024" rx="228" fill="#f5ebdd"/><g clip-path="url(#bubble)"><rect width="1024" height="1024" fill="#3b1f10"/><path d="M150 420C300 370 420 470 560 420 690 374 790 440 880 410V150H150Z" fill="url(#crema)"/><path d="M150 420C300 370 420 470 560 420 690 374 790 440 880 410" fill="none" stroke="#f6d19a" stroke-width="22" opacity=".8"/><circle cx="380" cy="300" r="22" fill="#fde9c6" opacity=".7"/><circle cx="640" cy="330" r="14" fill="#fde9c6" opacity=".6"/></g></svg>'
+
+
+def _sign_in_page(title: str, line: str, ok: bool = False) -> str:
+    """What the browser shows after a service's or Google's sign-in, in Crema's words and colors (Crema engine):
+    a card in the middle with the logo, a mark for how it went, and 「Crema 열기」, which asks the engine
+    (/api/crema/front, crema_engine.py) to bring Crema's window forward. Light or dark as the PC is."""
+    mark = ('<path d="M7 12.5l3.2 3.2L17 9"/>' if ok else '<path d="M12 7.5v5.5"/><path d="M12 16.5v.01"/>')
+    return f"""<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Crema</title>
+<style>
+:root{{color-scheme:light dark;--page:#f2f0ed;--card:#fdfdfd;--ink:#202020;--muted:#6f6f6f;--hairline:#e4e1dc;--button:#202020;--on-button:#fff;--mark:{"#16a34a" if ok else "#b42318"}}}
+@media (prefers-color-scheme:dark){{:root{{--page:#1c1c1c;--card:#2b2b2b;--ink:#fff;--muted:#c8c8c8;--hairline:#3a3a3a;--button:#fff;--on-button:#202020;--mark:{"#4ade80" if ok else "#ff8c82"}}}}}
+*{{box-sizing:border-box}}
+body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px 16px;background:var(--page);color:var(--ink);
+font-family:"Nanum Gothic","Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;-webkit-font-smoothing:antialiased}}
+main{{width:min(380px,100%);padding:44px 32px 28px;text-align:center;background:var(--card);border:1px solid var(--hairline);
+border-radius:24px;box-shadow:0 20px 60px rgb(0 0 0/8%)}}
+.brand{{position:relative;width:72px;height:72px;margin:0 auto 24px}}
+.logo{{width:72px;height:72px;display:block;filter:drop-shadow(0 6px 14px rgb(58 31 16/18%))}}
+.mark{{position:absolute;right:-6px;bottom:-6px;width:28px;height:28px;padding:4px;border-radius:50%;background:var(--mark);
+box-shadow:0 0 0 3px var(--card);fill:none;stroke:#fff;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}}
+h1{{margin:0 0 10px;font-size:21px;font-weight:800;letter-spacing:-.02em}}
+p{{margin:0;color:var(--muted);font-size:15px;line-height:1.6;word-break:keep-all}}
+button{{width:100%;height:48px;margin-top:28px;border:0;border-radius:999px;background:var(--button);color:var(--on-button);
+font:inherit;font-size:15px;font-weight:700;cursor:pointer;transition:transform .15s ease,opacity .15s ease}}
+button:hover{{opacity:.9}}button:active{{transform:scale(.98)}}
+button:focus-visible{{outline:2px solid #9a5527;outline-offset:3px}}
+.note{{min-height:1.6em;margin-top:14px;font-size:13px}}
+</style>
+<main>
+<div class="brand">{_LOGO}<svg class="mark" viewBox="0 0 24 24" aria-hidden="true">{mark}</svg></div>
+<h1>{title}</h1>
+<p>{line}</p>
+<button type="button" id="open">Crema 열기</button>
+<p class="note" id="note" role="status"></p>
+</main>
+<script>
+document.getElementById("open").addEventListener("click", async () => {{
+  const note = document.getElementById("note");
+  try {{
+    if (!(await fetch("/api/crema/front")).ok) throw new Error();
+    note.textContent = "Crema를 앞으로 띄웠습니다. 이 탭은 닫아도 됩니다.";
+  }} catch {{
+    note.textContent = "Crema가 꺼져 있습니다. Crema를 켜 주세요.";
+  }}
+}});
+</script>
+</html>"""
 
 
 @router.put("/api/mcp/servers/{name}/enabled")

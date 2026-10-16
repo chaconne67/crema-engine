@@ -1,9 +1,10 @@
 """Crema: the user's mail (Crema plan 메일 연결 4-1, 2026-10-16). One way for every mail company: IMAP to read,
 SMTP to send, with the Python standard library. An account is its address and its company (the servers come from
-PROVIDERS, the user never types them); its password, an app password made at the company, stays in this engine's
-.env and never reaches the terminal's commands (tools/environments/local_env_policy.py). Settings → 메일 연결 adds
-and removes accounts (connect / remove, after a real sign-in); the `mail` tool works in them. Sending always asks
-the user first on an approval card, whatever the 명령 승인 chip says: a sent mail cannot be taken back."""
+PROVIDERS, the user never types them); its secret stays in this engine's .env and never reaches the terminal's
+commands (tools/environments/local_env_policy.py): an app password made at the company, or for Google (plan 4-3,
+2026-10-17) the user's own Google sign-in (tools/crema_google.py), which signs in with XOAUTH2 instead. Settings →
+메일 연결 adds and removes accounts (connect / remove, after a real sign-in); the `mail` tool works in them. Sending
+always asks the user first on an approval card, whatever the 명령 승인 chip says: a sent mail cannot be taken back."""
 from __future__ import annotations
 
 import base64
@@ -23,8 +24,12 @@ from typing import Any, Dict, List, Optional
 
 from tools.registry import registry, tool_error
 
-# Mail companies Crema connects with an app password: their servers (SSL), by the domains of their addresses.
+# Mail companies Crema connects: their servers (SSL), by the domains of their addresses. `sign_in: google`: the
+# account signs in with the user's Google sign-in (tools/crema_google.py), never an app password; Gmail keeps a
+# copy of what its SMTP sends (`keeps_sent`).
 PROVIDERS = {
+    "google": {"name": "구글", "domains": ("gmail.com", "googlemail.com"), "imap": ("imap.gmail.com", 993),
+               "smtp": ("smtp.gmail.com", 465), "sign_in": "google", "keeps_sent": True},
     "naver": {"name": "네이버", "domains": ("naver.com",), "imap": ("imap.naver.com", 993), "smtp": ("smtp.naver.com", 465)},
     "daum": {"name": "다음", "domains": ("daum.net", "hanmail.net"), "imap": ("imap.daum.net", 993), "smtp": ("smtp.daum.net", 465)},
     "kakao": {"name": "카카오", "domains": ("kakao.com",), "imap": ("imap.kakao.com", 993), "smtp": ("smtp.kakao.com", 465)},
@@ -117,12 +122,29 @@ def _password(address: str) -> str:
     return value
 
 
+def _google(account: Dict[str, str]) -> bool:
+    return PROVIDERS[account["provider"]].get("sign_in") == "google"
+
+
+def _xoauth2(address: str, token: Optional[str]) -> str:
+    """A Google sign-in for IMAP and SMTP (XOAUTH2): `token` is an access token, else the account's, refreshed."""
+    if not token:
+        from tools.crema_google import access_token
+
+        token = access_token(address)
+    return f"user={address}\x01auth=Bearer {token}\x01\x01"
+
+
 @contextmanager
 def _imap(account: Dict[str, str], password: Optional[str] = None):
+    """Signed in to the account's IMAP; `password` stands in for its kept one (for Google, an access token)."""
     host, port = PROVIDERS[account["provider"]]["imap"]
     imap = imaplib.IMAP4_SSL(host, port, timeout=TIMEOUT)
     try:
-        imap.login(account["address"], password or _password(account["address"]))
+        if _google(account):
+            imap.authenticate("XOAUTH2", lambda _: _xoauth2(account["address"], password).encode())
+        else:
+            imap.login(account["address"], password or _password(account["address"]))
         yield imap
     finally:
         try:
@@ -134,7 +156,10 @@ def _imap(account: Dict[str, str], password: Optional[str] = None):
 def _smtp(account: Dict[str, str], password: Optional[str] = None) -> smtplib.SMTP_SSL:
     host, port = PROVIDERS[account["provider"]]["smtp"]
     smtp = smtplib.SMTP_SSL(host, port, timeout=TIMEOUT)
-    smtp.login(account["address"], password or _password(account["address"]))
+    if _google(account):
+        smtp.auth("XOAUTH2", lambda challenge=None: _xoauth2(account["address"], password), initial_response_ok=True)
+    else:
+        smtp.login(account["address"], password or _password(account["address"]))
     return smtp
 
 
@@ -147,14 +172,13 @@ def _said(error: Exception) -> str:
 
 def connect(address: str, password: str) -> Dict[str, Any]:
     """Settings → 메일 연결 → 확인하고 연결: signs in to the company's IMAP and SMTP with the app password, and
-    keeps the account only when both let it in. reason: unknown (not a company Crema connects), login (refused:
-    IMAP not turned on at the company, or a wrong app password), server (could not reach it)."""
-    from hermes_cli.config import load_config, save_config, save_env_value
-
+    keeps the account only when both let it in. reason: unknown (not a company Crema connects with an app password;
+    Google connects through its own sign-in), login (refused: IMAP not turned on at the company, or a wrong app
+    password), server (could not reach it)."""
     address = (address or "").strip()
     password = re.sub(r"\s", "", password or "")  # an app password is often shown in groups with spaces
     provider = provider_of(address)
-    if not provider or "@" not in address:
+    if not provider or "@" not in address or PROVIDERS[provider].get("sign_in"):
         return {"ok": False, "reason": "unknown"}
     account = {"address": address, "provider": provider}
     try:
@@ -165,10 +189,18 @@ def connect(address: str, password: str) -> Dict[str, Any]:
         return {"ok": False, "reason": "login", "detail": _said(error)}
     except (OSError, smtplib.SMTPException) as error:
         return {"ok": False, "reason": "server", "detail": _said(error)}
-    save_env_value(secret_name(address), password)
+    return keep(address, provider, password)
+
+
+def keep(address: str, provider: str, secret: str) -> Dict[str, Any]:
+    """An account that signed in: its secret into .env (an app password, or a Google sign-in as JSON), the account
+    into the config, in place of one with the same address."""
+    from hermes_cli.config import load_config, save_config, save_env_value
+
+    save_env_value(secret_name(address), secret)
     config = load_config()
     kept = [item for item in config.get(CONFIG_KEY) or [] if isinstance(item, dict) and item.get("address", "").lower() != address.lower()]
-    config[CONFIG_KEY] = kept + [account]
+    config[CONFIG_KEY] = kept + [{"address": address, "provider": provider}]
     save_config(config)
     return {"ok": True, "address": address, "provider": provider}
 
@@ -408,9 +440,10 @@ def _addresses(value: Any) -> List[str]:
     return [address for _, address in getaddresses([str(item) for item in items]) if address]
 
 
-def ask_to_send(summary: str) -> Optional[str]:
-    """The approval card in the chat (as for a protected instruction file: every time, one mail, no "always"):
-    None once the user allows it, else why it was not sent."""
+def ask_to_send(summary: str, what: str = "메일 보내기", key: str = "mail_send") -> Optional[str]:
+    """The approval card in the chat (as for a protected instruction file: every time, one at a time, no "always"),
+    for something that reaches other people and cannot be taken back — a mail, or a calendar invite
+    (tools/crema_google.py): None once the user allows it, else why it was not sent."""
     from tools import approval
     from tools.approval_context import get_current_session_key
     from tools.approval_gateway_wait import _await_gateway_decision
@@ -421,7 +454,7 @@ def ask_to_send(summary: str) -> Optional[str]:
     if notify is None:
         return "not sent: there is no one here to approve it"
     decision = _await_gateway_decision(session_key, notify, {
-        "command": summary, "description": "메일 보내기", "pattern_key": "mail_send", "pattern_keys": ["mail_send"],
+        "command": summary, "description": what, "pattern_key": key, "pattern_keys": [key],
         "allow_permanent": False, "allow_session": False}, surface="gateway")
     if decision.get("notify_failed") or decision.get("cancelled"):
         return "not sent: the approval card could not be shown or was withdrawn"
@@ -489,14 +522,16 @@ def _send(account: Dict[str, str], args: Dict[str, Any]) -> Dict[str, Any]:
     finally:
         smtp.quit()
     kept = ""
-    try:  # the company's SMTP does not keep a copy: put it in 보낸메일함
-        with _imap(account) as imap:
-            sent = next((f["name"] for f in _folders(imap) if f.get("role") == "sent"), None)
-            if sent:
-                _check(*imap.append(_quoted(sent), "(\\Seen)", imaplib.Time2Internaldate(time.time()), message.as_bytes()), "append")
-                kept = sent
-    except (imaplib.IMAP4.error, OSError):
-        pass
+    # The company's SMTP does not keep a copy (Gmail's does): put it in 보낸메일함.
+    if not PROVIDERS[account["provider"]].get("keeps_sent"):
+        try:
+            with _imap(account) as imap:
+                sent = next((f["name"] for f in _folders(imap) if f.get("role") == "sent"), None)
+                if sent:
+                    _check(*imap.append(_quoted(sent), "(\\Seen)", imaplib.Time2Internaldate(time.time()), message.as_bytes()), "append")
+                    kept = sent
+        except (imaplib.IMAP4.error, OSError):
+            pass
     return {"sent": True, "to": to, "cc": cc, "subject": subject, **({"kept_in": kept} if kept else {})}
 
 

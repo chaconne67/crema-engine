@@ -11,6 +11,7 @@ Covers:
 
 import asyncio
 import hashlib
+import json
 import threading
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -550,6 +551,32 @@ class TestRunEvents:
         assert "abcdefghijklmnopqrstuvwxyz" not in event["preview"]
         assert len(event["preview"]) <= 500
         assert event["preview"].endswith("...")
+
+    @pytest.mark.asyncio
+    async def test_todo_list_completed_event_carries_the_whole_list(self, adapter):
+        loop = asyncio.get_running_loop()
+        adapter._run_streams["run_todo"] = asyncio.Queue()
+        callback = adapter._make_run_event_callback("run_todo", loop)
+        items = [{"id": str(n), "content": f"step {n} " + "y" * 80, "status": "pending"} for n in range(8)]
+        items[0]["status"] = "completed"
+        items[1].update(status="in_progress", content="use sk-abcdefghijklmnopqrstuvwxyz")
+        items[2]["parent"] = "1"
+
+        callback("tool.completed", "todo_list", duration=0.01, is_error=False,
+                 result=json.dumps({"todos": items, "revision": 3, "summary": {"total": 8}}))
+        event = await adapter._run_streams["run_todo"].get()
+
+        assert len(event["preview"]) <= 500
+        assert [item["status"] for item in event["todos"]][:3] == ["completed", "in_progress", "pending"]
+        assert len(event["todos"]) == 8
+        assert event["todos"][2]["parent"] == "1" and "parent" not in event["todos"][0]
+        assert "abcdefghijklmnopqrstuvwxyz" not in event["todos"][1]["content"]
+
+        # Another tool's result carries no list, nor does a todo_list error.
+        callback("tool.completed", "terminal", duration=0.01, is_error=False, result={"todos": items})
+        callback("tool.completed", "todo_list", duration=0.01, is_error=True, result="Error: TodoStore not initialized")
+        assert "todos" not in await adapter._run_streams["run_todo"].get()
+        assert "todos" not in await adapter._run_streams["run_todo"].get()
 
     @pytest.mark.asyncio
     async def test_events_stream_returns_completed(self, adapter):

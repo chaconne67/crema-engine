@@ -97,6 +97,21 @@ _FIXED_EVENT_FIELDS = {
 _TOOL_COMPLETED_PREVIEW_MAX_CHARS = 500
 
 
+def _todo_items(result: Any, redact_sensitive_text: Callable[..., str]) -> Optional[List[Dict[str, Any]]]:
+    """The whole todo list of a ``todo_list`` result, for a client that draws it as a checklist (the
+    bounded preview cuts it); None when the result is not one. Item text is redacted like the preview."""
+    try:
+        items = (json.loads(result) if isinstance(result, str) else result)["todos"]
+    except (TypeError, ValueError, KeyError):
+        return None
+    if not isinstance(items, list):
+        return None
+    return [
+        {"id": item.get("id"), "content": redact_sensitive_text(str(item.get("content", "")), force=True),
+         "status": item.get("status"), **({"parent": item["parent"]} if item.get("parent") else {})}
+        for item in items if isinstance(item, dict)]
+
+
 def _tool_completed_preview(result: Any, redact_sensitive_text: Callable[..., str]) -> str:
     """Bounded, secret-redacted result summary for the public run stream — redacted BEFORE
     truncation so a cut never leaves a secret's prefix on the wire."""
@@ -285,6 +300,10 @@ def _make_run_event_callback(self, run_id: str, loop: "asyncio.AbstractEventLoop
             if event_type == "tool.completed":
                 event_fields["preview"] = _tool_completed_preview(
                     kwargs.get("result"), redact_sensitive_text)
+                if tool_name == "todo_list":
+                    todos = _todo_items(kwargs.get("result"), redact_sensitive_text)
+                    if todos is not None:
+                        event_fields["todos"] = todos
             _push(_run_event(run_id, event_type, **event_fields))
         elif event_type in {"subagent.start", "subagent.complete"}:
             event = _run_event(run_id, event_type)

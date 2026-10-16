@@ -139,6 +139,8 @@ TOOLSETS = {
     "crema_chats": _ts("List the user's other chats and send one a message", ["crema_chats"]),
     # Crema: words Thock misheard in the user's message, for Thock to learn (tools/thock_heard_tool.py).
     "thock": _ts("Tell Thock a word it misheard in the user's message", ["thock_heard"]),
+    # Crema: the user's mail accounts, connected in Settings → 메일 연결 (tools/crema_mail_tool.py).
+    "mail": _ts("The user's mail: find, read, sort and send", ["mail"]),
     "context_engine": _ts("Runtime tools exposed by the active context engine"),
     "session_search": _ts("Search and recall past conversations with summarization", ["session_search"]),
     "connections": _ts("Remote connector discovery, execution, and account authorization", ["manage_connections"]),
@@ -216,12 +218,12 @@ TOOLSETS = {
     # Crema: the tools the Crema app offers (see CREMA.md); add a tool here when Crema adopts it.
     "hermes-api-server": _ts(
         "Crema — files, terminal, todo, web, image understanding, memory, past chats, skills, the knowledge notebook, "
-        "messages to other chats and words Thock misheard",
+        "messages to other chats, words Thock misheard and the user's mail",
         ["read_file", "write_file", "patch", "search_files", "terminal", "process_manage",
          "todo_list", "web_search", "web_extract", "vision_analyze",
          "memory", "session_search", "skills_list", "skill_view", "skill_manage",
          "knowledge_search", "knowledge_get", "knowledge_write", "knowledge_think", "crema_backup", "crema_chats",
-         "thock_heard"],
+         "thock_heard", "mail"],
     ),
     "hermes-cli": _bundle("Full interactive CLI toolset - all default tools plus cronjob management"),
 

@@ -210,6 +210,22 @@ async def main() -> None:
     async def files_written(session_id: str = "", since: int = 0):
         return {"files": await asyncio.to_thread(crema_file_turns.files_since, session_id, since)}
 
+    # Settings → 메일 연결 (tools/crema_mail_tool.py): the accounts, one connected after a real sign-in, one removed.
+    from tools import crema_mail_tool
+
+    @settings.get("/api/crema/mail")
+    async def mail_accounts():
+        providers = {key: {"name": item["name"], "domains": item["domains"]} for key, item in crema_mail_tool.PROVIDERS.items()}
+        return {"accounts": await asyncio.to_thread(crema_mail_tool.accounts), "providers": providers}
+
+    @settings.post("/api/crema/mail/connect")
+    async def mail_connect(body: dict):
+        return await asyncio.to_thread(crema_mail_tool.connect, str(body.get("address") or ""), str(body.get("password") or ""))
+
+    @settings.post("/api/crema/mail/remove")
+    async def mail_remove(body: dict):
+        return await asyncio.to_thread(crema_mail_tool.remove, str(body.get("address") or ""))
+
     @settings.post("/api/crema/services/sync")
     async def services_sync():
         await asyncio.to_thread(sync_services)

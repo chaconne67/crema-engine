@@ -193,6 +193,9 @@ def _is_hermes_internal_secret(key: str) -> bool:
     upper = key.upper()
     if upper.startswith("AUXILIARY_") and upper.endswith(("_API_KEY", "_BASE_URL")):
         return True
+    # Crema: the app passwords of the user's mail accounts (tools/crema_mail_tool.py), one name per address.
+    if upper.startswith("CREMA_MAIL_PASSWORD_"):
+        return True
     return upper.startswith("GATEWAY_RELAY_") and upper.endswith(("_SECRET", "_KEY", "_TOKEN"))
 
 

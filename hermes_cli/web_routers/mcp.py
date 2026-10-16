@@ -367,7 +367,8 @@ _LOGO = '<svg class="logo" viewBox="0 0 1024 1024" aria-hidden="true"><defs><rad
 def _sign_in_page(title: str, line: str, ok: bool = False) -> str:
     """What the browser shows after a service's or Google's sign-in, in Crema's words and colors (Crema engine):
     a card in the middle with the logo, a mark for how it went, and 「Crema 열기」, which asks the engine
-    (/api/crema/front, crema_engine.py) to bring Crema's window forward. Light or dark as the PC is."""
+    (/api/crema/front, crema_engine.py) to bring Crema's window forward, or, Crema closed meanwhile (no engine to
+    answer), opens crema:// (registered by the app) to start it. Light or dark as the PC is."""
     mark = ('<path d="M7 12.5l3.2 3.2L17 9"/>' if ok else '<path d="M12 7.5v5.5"/><path d="M12 16.5v.01"/>')
     return f"""<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Crema</title>
@@ -405,7 +406,8 @@ document.getElementById("open").addEventListener("click", async () => {{
     if (!(await fetch("/api/crema/front")).ok) throw new Error();
     note.textContent = "Crema를 앞으로 띄웠습니다. 이 탭은 닫아도 됩니다.";
   }} catch {{
-    note.textContent = "Crema가 꺼져 있습니다. Crema를 켜 주세요.";
+    location.href = "crema://open";
+    note.textContent = "Crema를 켜고 있습니다. 브라우저가 Crema를 열지 물으면 열기를 눌러 주세요.";
   }}
 }});
 </script>

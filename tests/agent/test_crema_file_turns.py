@@ -375,6 +375,31 @@ def test_a_wake_message_asks_the_app_to_start_an_idle_chat_once(api, sidebar):
     assert turns.state()["wake"] == [{"session_id": C, "kind": "message", "from_title": "메일"}]
 
 
+def test_an_answer_wakes_the_idle_chat_that_asked_but_an_answer_to_it_does_not(api, sidebar):
+    turns.send(A, "b", "ziin 최근 커밋을 알려 주세요", True)
+    turns.woken(B)
+    turns.notes_for_turn(session_id=B)
+    # B answers without wake: A asked and is idle, so Crema starts it to read the answer.
+    assert turns.send(B, "a", "b77b63f입니다", False)["delivery"] == "Crema starts it now to read this"
+    assert turns.state()["wake"] == [{"session_id": A, "kind": "message", "from_title": "메일"}]
+    turns.woken(A)
+    turns.notes_for_turn(session_id=A)
+    # A's thanks answer an answer: not woken on its own; nor is a second message B was not asked.
+    assert turns.send(A, "b", "고마워요", False)["delivery"] == "it reads this when it next works"
+    assert turns.send(B, "c", "참고로 알려 드려요", False)["delivery"] == "it reads this when it next works"
+    assert turns.state()["wake"] == []
+    # A new question from A is answered with a wake again.
+    turns.notes_for_turn(session_id=B)
+    turns.send(A, "b", "메시지도 알려 주세요", False)
+    assert turns.send(B, "a", "fix: ...", False)["delivery"] == "Crema starts it now to read this"
+    # A replying asker reads the answer after its tool step, nothing to start.
+    turns.woken(A)
+    turns.notes_for_turn(session_id=A)
+    turns.send(A, "b", "하나 더", False)
+    api.replying(A)
+    assert turns.send(B, "a", "네", False)["delivery"].startswith("it is replying")
+
+
 def test_messages_read_are_listed_for_the_app_until_shown(api, sidebar):
     turns.send(A, "b", "첫째", False)
     turns.send(C, "b", "둘째", False)

@@ -27,14 +27,18 @@ registry.register(
             "description": "Talk with the user's other Crema chats. list: the other chats (number, title, project, "
                            "replying or idle). send: a message to the chat with that number. Use it when the user "
                            "asks to tell or ask another chat something, or this work needs another chat's result. "
-                           "The other chat reads it after its current tool step if it is replying, else when it "
-                           "next works; set wake only when it must start on it now. A message from another chat "
-                           "says its number: answer with send to that number.",
+                           "A replying chat reads a message after its current tool step; an idle chat reads it only "
+                           "when it next works (the user writes to it, or a message wakes it). Your answer to a "
+                           "message a chat sent you wakes it on its own, as it waits for the answer; so after "
+                           "asking, you need not wait: the answer reaches this chat. For other messages, set wake "
+                           "when the other chat should act on it before the user next writes to it (a request or "
+                           "a question), and leave it off for information it can read later. A message from "
+                           "another chat says its number: answer with send to that number.",
             "parameters": {"type": "object", "properties": {
                 "action": {"type": "string", "enum": ["list", "send"]},
                 "to": {"type": "string", "description": "send: the chat's number from list"},
                 "message": {"type": "string", "description": "send: what to say, complete on its own"},
-                "wake": {"type": "boolean", "description": "send: start the other chat now if it is idle (default false)"},
+                "wake": {"type": "boolean", "description": "send: start the other chat now if it is idle (default false; an answer to its message wakes it anyway)"},
             }, "required": ["action"]}},
     handler=crema_chats,
 )

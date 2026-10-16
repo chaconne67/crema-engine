@@ -594,8 +594,22 @@ def chats(session_id: str) -> list[dict]:
             for row in _directory() if row["session"] != me]
 
 
+def _answers(conn, me: str, target: str) -> bool:
+    """Whether a message from ``me`` to ``target`` answers it: ``target``'s last message to ``me`` came after
+    ``me``'s last one to it and was not itself an answer (an answer to an answer is not one, so two chats do not
+    wake each other back and forth)."""
+    def last(session: str, sender: str):
+        return max((e for e in _session_events(conn, session)
+                    if e.kind == "crema_note" and (e.payload or {}).get("sender") == sender),
+                   key=lambda e: e.id, default=None)
+    asked, answered = last(me, target), last(target, me)
+    return bool(asked) and not asked.payload.get("reply") and (answered is None or asked.id > answered.id)
+
+
 def send(session_id: str, to: str, message: str, wake: bool) -> dict:
-    """Leaves ``message`` in chat ``to``'s mailbox; ``wake`` also starts that chat when it is idle (the app does)."""
+    """Leaves ``message`` in chat ``to``'s mailbox; ``wake`` also starts that chat when it is idle (the app does).
+    An answer to the chat's own message always wakes it (주인님 2026-10-16): it is waiting for it, and an idle
+    chat would read it only when the user next writes to it."""
     me = _chat(session_id)
     rows = _directory()
     to, message = str(to or "").strip(), str(message or "").strip()
@@ -617,7 +631,10 @@ def send(session_id: str, to: str, message: str, wake: bool) -> dict:
     head = MESSAGE_HEAD.format(title=_title(me), number=_number(mine) if mine else me.removeprefix(CHAT_PREFIX)[:8])
     conn = _board()
     try:
-        _note(conn, _task_for(conn, target).id, f"{head}\n{message}", message=message, sender=me, wake=bool(wake))
+        reply = _answers(conn, me, target)
+        wake = bool(wake) or reply
+        _note(conn, _task_for(conn, target).id, f"{head}\n{message}", message=message, sender=me, wake=wake,
+              **({"reply": True} if reply else {}))
     finally:
         conn.close()
     replying = _replying(target)

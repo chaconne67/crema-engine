@@ -18,10 +18,36 @@ import sys
 import time
 
 
+SIGN_IN_RETURN = "/api/mcp/oauth/callback/{server_name:path}"
+
+
 def free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+def sync_services() -> None:
+    """The services connected in Settings (config mcp_servers) in step with that list, as the gateway's
+    reconcile keeps them: one added is connected and its tools offered, one removed is cut off and its
+    sign-in (mcp-tokens/) forgotten, so 연결 끊기 leaves nothing behind. Run at start and after each 연결 or
+    연결 끊기, so a failed earlier try does not make it wait out a retry delay. No sign-in window opens from
+    here: Crema leads the sign-in itself (Settings → 연결)."""
+    from hermes_cli.mcp_config import _get_mcp_servers
+    from hermes_constants import get_hermes_home
+    from tools.mcp_oauth import suppress_interactive_oauth
+    from tools.mcp_oauth_manager import get_manager
+    from tools.mcp_tool_common import _core
+    from tools.mcp_tool_discovery import reconcile_mcp_servers_with_config
+    from tools.mcp_tool_lifecycle import _clear_connect_cooldowns
+
+    with _core._lock:
+        _clear_connect_cooldowns()
+    with suppress_interactive_oauth():
+        reconcile_mcp_servers_with_config()
+    signed_in = {path.name.split(".")[0] for path in (get_hermes_home() / "mcp-tokens").glob("*.json")}
+    for name in signed_in - set(_get_mcp_servers()):
+        get_manager().remove(name)
 
 
 async def main() -> None:
@@ -54,6 +80,8 @@ async def main() -> None:
     from agent import crema_file_turns
 
     crema_file_turns.install(api)
+    # The services connected in Settings, in the background so a slow one does not hold the engine.
+    asyncio.get_running_loop().run_in_executor(None, sync_services)
     from hermes_cli.plugins import get_plugin_manager
 
     get_plugin_manager()._hooks.setdefault("transform_llm_output", []).append(drop_next_input)
@@ -61,7 +89,7 @@ async def main() -> None:
     import uvicorn
     from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import JSONResponse
-    from hermes_cli.web_routers import audio, config_env, models, oauth, sessions, status, tools
+    from hermes_cli.web_routers import audio, config_env, mcp, models, oauth, sessions, status, tools
 
     from crema_free import create_router as free_connection_router
 
@@ -71,8 +99,12 @@ async def main() -> None:
         settings.include_router(router)
     # Of these routers only what Crema shows: what the agent remembers (memory cards and learned
     # skills, to read, edit and delete), the past-chat search, and the image and video model lists.
-    wanted = {"/api/learning/graph", "/api/learning/node", "/api/sessions/search", "/api/tools/toolsets/{name}/models"}
-    for router in (status.router, sessions.search_router, tools.router):
+    # And the services to connect (Settings → 업무 서비스 연결): the list, add and remove, the sign-in
+    # started, followed and cancelled, and the address the service's sign-in page comes back to.
+    wanted = {"/api/learning/graph", "/api/learning/node", "/api/sessions/search", "/api/tools/toolsets/{name}/models",
+              "/api/mcp/servers", "/api/mcp/servers/{name}", "/api/mcp/servers/{name}/auth",
+              "/api/mcp/oauth/flows/{flow_id}", SIGN_IN_RETURN}
+    for router in (status.router, sessions.search_router, tools.router, mcp.router):
         settings.router.routes.extend(route for route in router.routes if route.path in wanted)
 
     @settings.post("/api/crema/backup")
@@ -178,6 +210,11 @@ async def main() -> None:
     async def files_written(session_id: str = "", since: int = 0):
         return {"files": await asyncio.to_thread(crema_file_turns.files_since, session_id, since)}
 
+    @settings.post("/api/crema/services/sync")
+    async def services_sync():
+        await asyncio.to_thread(sync_services)
+        return {"ok": True}
+
     @settings.post("/api/crema/turns/shown")
     async def turns_shown(body: dict):
         await asyncio.to_thread(crema_file_turns.shown, str(body.get("session_id") or ""), int(body.get("upto") or 0))
@@ -186,7 +223,10 @@ async def main() -> None:
     @settings.middleware("http")
     async def only_crema(request: Request, call_next):
         given = request.headers.get("X-Hermes-Session-Token", "")
-        if not hmac.compare_digest(given.encode(), token.encode()):
+        # The browser comes back from a service's sign-in page without the token; that route takes only
+        # the one-time state of a sign-in Crema started.
+        back = request.method == "GET" and request.url.path.startswith(SIGN_IN_RETURN.removesuffix("{server_name:path}"))
+        if not back and not hmac.compare_digest(given.encode(), token.encode()):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
         return await call_next(request)
 

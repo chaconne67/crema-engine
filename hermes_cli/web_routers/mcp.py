@@ -347,17 +347,22 @@ async def mcp_oauth_callback(
         None,
     )
     if flow is None:
-        return HTMLResponse("<h1>OAuth flow expired</h1><p>Return to Hermes and try again.</p>", status_code=404)
+        return HTMLResponse(_sign_in_page("로그인 시간이 지났습니다", "Crema로 돌아가 다시 연결해 주세요."), status_code=404)
     try:
         flow.deliver_callback(code=code, state=state, error=error, iss=iss)
     except ValueError as exc:
         return HTMLResponse(
-            "<h1>OAuth callback rejected</h1><p>The callback was invalid or already used.</p>",
+            _sign_in_page("로그인을 받지 못했습니다", "이미 처리했거나 맞지 않는 로그인입니다. Crema로 돌아가 다시 연결해 주세요."),
             status_code=409 if "already received" in str(exc) else 400,
         )
     if error:
-        return HTMLResponse("<h1>Authorization failed</h1><p>Return to Hermes for details.</p>", status_code=400)
-    return HTMLResponse("<h1>Authorization received</h1><p>You can close this tab and return to Hermes.</p>")
+        return HTMLResponse(_sign_in_page("연결하지 못했습니다", "Crema로 돌아가 다시 연결해 주세요."), status_code=400)
+    return HTMLResponse(_sign_in_page("로그인했습니다", "이 탭을 닫고 Crema로 돌아가세요."))
+
+
+def _sign_in_page(title: str, line: str) -> str:
+    """What the browser shows after a service's sign-in, in Crema's words (Crema engine)."""
+    return f'<!doctype html><meta charset="utf-8"><title>Crema</title><h1>{title}</h1><p>{line}</p>'
 
 
 @router.put("/api/mcp/servers/{name}/enabled")

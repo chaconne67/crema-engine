@@ -24,13 +24,15 @@
 연결한 AI를 끊거나 지우는 화면은 없다.
 
 ## 부가 기능 연동
-접힌 카드 세 개가 있고, 각각 ON/OFF가 붙어 있다.
+위에 접힌 카드 세 개가 있고, 각각 ON/OFF가 붙어 있다.
 
 - **이미지 생성**
 - **동영상 생성**
 - **웹 검색**(늘 ON)
 
 자세한 내용: [models-and-connections.md](models-and-connections.md#이미지동영상웹-검색)
+
+그 아래 **업무 서비스 연결** 목록: 서비스마다 **연결**, 또는 "연결됨"과 **연결 끊기**. 자세한 내용: [models-and-connections.md](models-and-connections.md#업무-서비스-연결)
 
 ## 페르소나
 - 에이전트의 정체성과 말투를 담은 **SOUL.md**를 고치는 칸이다.

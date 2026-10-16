@@ -31,6 +31,10 @@ async def main() -> None:
 
     # Only the packages bundled with Crema (the `crema` extra); never install more at run time.
     os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
+    # The app answers approvals (approval.request on the run events -> POST /v1/runs/{id}/approval), as
+    # start_gateway() sets for the gateway; without it an api_server chat counts as unattended and every
+    # flagged command is blocked, in manual and smart alike.
+    os.environ["HERMES_EXEC_ASK"] = "1"
     # Crema's built-in skills (skills/: the crema-guide manual) into the engine folder as installed;
     # a chat can work without them, so a failure is logged and the engine starts.
     try:

@@ -20,9 +20,9 @@ Crema 안에서 에이전트를 돌리는 부분이 "엔진"이다.
 | 백업 | "백업해 줘" |
 | 다른 대화 목록·메시지 | [chats-together.md](chats-together.md) |
 | 이미지·동영상 생성 | 부가 기능 연동에서 서비스를 연결했을 때만 |
-| 메일 | 부가 기능 연동 › 메일 연결에서 연결한 메일만. 보내기는 매번 묻는다: [models-and-connections.md](models-and-connections.md#메일-연결) |
+| 메일 | 부가 기능 연동 › 메일 카드에서 연결한 메일만. 보내기는 매번 묻는다: [models-and-connections.md](models-and-connections.md#메일-연결) |
 | 구글 캘린더·드라이브 | 각각 연결했을 때만(지메일과 따로). 참석자에게 알림이 가는 일정 변경은 매번 묻는다: [models-and-connections.md](models-and-connections.md#구글-연결지메일캘린더드라이브) |
-| 업무 서비스(Notion·Jira·Dropbox 등) | 부가 기능 연동 › 업무 서비스 연결에서 연결한 서비스만: [models-and-connections.md](models-and-connections.md#업무-서비스-연결) |
+| 업무 서비스(Notion·Jira·Dropbox 등) | 부가 기능 연동의 영역 카드(일정, 문서 · 파일, 할 일 · 프로젝트 관리, 디자인 · 화이트보드)에서 연결한 서비스만: [models-and-connections.md](models-and-connections.md#업무-서비스-연결) |
 | 말하기(글을 소리로) | AI 연결에 OpenAI·Gemini·xAI API 키가 있으면 저절로 켜진다 |
 
 - 에이전트는 파일 도구로 엔진 설정 파일(`config.yaml`)을 고칠 수 없다.

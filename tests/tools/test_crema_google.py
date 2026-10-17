@@ -61,7 +61,7 @@ class FakeGoogle:
                                "scope": self.token_scope if self.token_scope is not None else asked,
                                "id_token": id_token(self.allowed_by)}).encode()
         assert token == FakeGmail.token
-        if url.endswith("/calendars/primary"):
+        if url.endswith("/users/me/calendarList/primary"):
             return json.dumps({"timeZone": "Asia/Seoul"}).encode()
         if "/events/ev1" in url and method == "GET":
             return json.dumps({"id": "ev1", "summary": "주간 회의", "attendees": [{"email": "me@gmail.com", "self": True},
@@ -122,7 +122,7 @@ def test_each_feature_asks_only_its_permission_and_the_account_keeps_what_it_has
     assert not google.connected("calendar")
     _, query, how = sign_in("calendar", "")
     assert how == "done" and query["login_hint"] == "me@gmail.com"
-    assert query["scope"] == "https://www.googleapis.com/auth/calendar openid email"
+    assert query["scope"] == f"{google.FEATURES['calendar']} openid email"
     assert google.accounts() == [{"address": "me@gmail.com", "features": ["calendar", "mail"]}]
     # Gmail taken away from the mail list: Calendar stays, with its sign-in.
     mail_tool.remove("me@gmail.com")
@@ -146,6 +146,10 @@ def test_a_permission_left_unchecked_or_another_account_is_not_kept(fake):
     found.token_scope = "openid email"
     started, _, how = sign_in()
     assert how == "scopes" and google.status(started["flow"])["reason"] == "scopes"
+    # Calendar asks two permissions: one of them left unchecked is not enough.
+    found.token_scope = "https://www.googleapis.com/auth/calendar.events openid email"
+    _, _, how = sign_in("calendar", "")
+    assert how == "scopes"
     found.token_scope = None
     found.allowed_by = "other@gmail.com"
     _, _, how = sign_in()

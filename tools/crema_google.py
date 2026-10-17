@@ -42,9 +42,11 @@ CALLBACK = "/api/crema/google/callback"
 # sign-in. Kept in main /srv/consolidation/secrets/crema-google-app.env, changed there and here together.
 CLIENT_ID = "380565197593-qfug92np3s0ai5r3jeffom522houf6hr.apps.googleusercontent.com"
 CLIENT_SECRET = "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"
-# The permission each feature asks for (Gmail's IMAP and SMTP take only the full mail scope), and who allowed it.
-FEATURES = {"mail": "https://mail.google.com/", "calendar": "https://www.googleapis.com/auth/calendar",
-            "drive": "https://www.googleapis.com/auth/drive"}
+# The permissions each feature asks for (Gmail's IMAP and SMTP take only the full mail scope; Calendar changes events
+# and lists the calendars; Drive reads the files there and adds new ones), and who allowed it.
+FEATURES = {"mail": "https://mail.google.com/",
+            "calendar": "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+            "drive": "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file"}
 IDENTITY = "openid email"
 CONFIG_KEY = "google_accounts"
 SECRET_PREFIX = "CREMA_GOOGLE_"
@@ -237,7 +239,7 @@ def _trade(flow: Dict[str, Any], code: str) -> str:
         return "google"
     except OSError:
         return "server"
-    if FEATURES[flow["feature"]] not in str(tokens.get("scope") or "").split() or not tokens.get("refresh_token"):
+    if not set(FEATURES[flow["feature"]].split()) <= set(str(tokens.get("scope") or "").split()) or not tokens.get("refresh_token"):
         return "scopes"
     address = _allowed_by(tokens)
     if not address or (flow["address"] and address.lower() != flow["address"].lower()):
@@ -350,8 +352,10 @@ def _calendar(args: Dict[str, Any]) -> Dict[str, Any]:
                                                    **({"primary": True} if c.get("primary") else {})} for c in found.get("items", [])]}
     calendar_id = urllib.parse.quote(str(args.get("calendar") or "primary"), safe="")
     base = f"{CALENDAR}/calendars/{calendar_id}"
+    # Its time zone, from the user's list of calendars (the calendar itself is not readable with these permissions).
+    listed = f"{CALENDAR}/users/me/calendarList/{calendar_id}"
     if action == "events":
-        zone = _json("GET", base, token=token).get("timeZone", "UTC")
+        zone = _json("GET", listed, token=token).get("timeZone", "UTC")
         query = {"singleEvents": "true", "orderBy": "startTime", "maxResults": str(max(1, min(int(args.get("limit") or 20), 50))),
                  "timeZone": zone, "timeMin": datetime.now().astimezone().isoformat(timespec="seconds")}
         # A day or a time asked about is this PC's (the user's) local time.
@@ -366,7 +370,7 @@ def _calendar(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"account": address, "time_zone": zone, "events": [_event(e) for e in found.get("items", [])]}
     if action not in ("create", "update", "delete"):
         raise ValueError(f"unknown action {action!r}")
-    zone = _json("GET", base, token=token).get("timeZone", "UTC")
+    zone = _json("GET", listed, token=token).get("timeZone", "UTC")
     event_id = str(args.get("event_id") or "").strip()
     before: Dict[str, Any] = {}
     if action != "create":

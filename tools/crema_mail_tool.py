@@ -157,6 +157,7 @@ def _smtp(account: Dict[str, str], password: Optional[str] = None) -> smtplib.SM
     host, port = PROVIDERS[account["provider"]]["smtp"]
     smtp = smtplib.SMTP_SSL(host, port, timeout=TIMEOUT)
     if _google(account):
+        smtp.ehlo()  # auth(), unlike login(), does not greet the server first; Gmail refuses it then (530)
         smtp.auth("XOAUTH2", lambda challenge=None: _xoauth2(account["address"], password), initial_response_ok=True)
     else:
         smtp.login(account["address"], password or _password(account["address"]))

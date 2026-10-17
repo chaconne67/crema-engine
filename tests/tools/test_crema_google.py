@@ -30,7 +30,12 @@ class FakeGmail:
             raise imaplib.IMAP4.error(b"[AUTHENTICATIONFAILED] Invalid credentials")
         return "OK", [b""]
 
+    def ehlo(self):
+        self.greeted = True
+
     def auth(self, mechanism, answer, initial_response_ok=True):
+        if not getattr(self, "greeted", False):  # as Gmail: AUTH before EHLO is refused
+            raise smtplib.SMTPSenderRefused(530, b"5.7.0 Must issue a STARTTLS command first", self.user)
         assert mechanism == "XOAUTH2" and answer() == f"user={self.user}\x01auth=Bearer {self.token}\x01\x01"
 
     def send_message(self, message, from_addr=None, to_addrs=None):

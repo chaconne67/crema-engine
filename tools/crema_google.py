@@ -1,14 +1,13 @@
-"""Crema: the user's Google account — Gmail, Calendar and Drive, each connected on its own (Crema plan 메일 연결 4-3,
-2026-10-17; 구글 기능별 연결, 2026-10-17).
+"""Crema: the user's Google account — Gmail, Calendar and Drive, each connected on its own (Crema plan 구글 연결 앱,
+2026-10-17).
 
-The user makes their own Google sign-in app once (an OAuth client of the Desktop kind, in a Google Cloud project of
-their own, published so Google does not cut it every 7 days); Crema's setup guide shows them where. `start` opens
-Google's consent page for one feature (FEATURES), with that app's id and secret or the app already kept; Google
-comes back to this engine's settings server (CALLBACK, served by crema_engine.py), `finish` trades the code for
-tokens, checks the feature's permission was given by the right account (and that Gmail lets the address in), and
-adds the feature to the account. The newest refresh token holds every permission the account gave (asked with
-include_granted_scopes), so one is kept per account. Nothing goes through Aishift: the app is the user's, and its
-id, secret and refresh token stay in this engine's .env (SECRET_PREFIX, never passed to the terminal), the account
+Crema's own Google sign-in app (CLIENT_ID, a Desktop client of the Google Cloud project crema-aishift, Aishift's)
+asks for the permission; the user only picks the account and allows. `start` opens Google's consent page for one
+feature (FEATURES); Google comes back to this engine's settings server (CALLBACK, served by crema_engine.py),
+`finish` trades the code for tokens, checks the feature's permission was given by the right account (and that
+Gmail lets the address in), and adds the feature to the account. The newest refresh token holds every permission
+the account gave (asked with include_granted_scopes), so one is kept per account. Nothing goes through Aishift:
+the refresh token stays in this engine's .env (SECRET_PREFIX, never passed to the terminal), the account
 and its features in the config (CONFIG_KEY). 연결 끊기 takes one feature away; with none left the account goes.
 
 Gmail is the `mail` tool (XOAUTH2 with `access_token`). Calendar and Drive are the `calendar` and `drive` tools,
@@ -39,6 +38,10 @@ from tools.registry import registry, tool_error
 AUTHORIZE = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN = "https://oauth2.googleapis.com/token"
 CALLBACK = "/api/crema/google/callback"
+# Crema's sign-in app. A Desktop client's secret is not a secret to Google (it ships in every copy); PKCE guards the
+# sign-in. Kept in main /srv/consolidation/secrets/crema-google-app.env, changed there and here together.
+CLIENT_ID = "380565197593-qfug92np3s0ai5r3jeffom522houf6hr.apps.googleusercontent.com"
+CLIENT_SECRET = "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"
 # The permission each feature asks for (Gmail's IMAP and SMTP take only the full mail scope), and who allowed it.
 FEATURES = {"mail": "https://mail.google.com/", "calendar": "https://www.googleapis.com/auth/calendar",
             "drive": "https://www.googleapis.com/auth/drive"}
@@ -142,15 +145,8 @@ def _save(address: str, features: List[str]) -> None:
 
 
 def state() -> Dict[str, Any]:
-    """Settings: the accounts and their features, and whether a sign-in app is kept (a further feature needs no
-    console setup then, only its API turned on in `project`, the number its client id starts with, and the
-    consent)."""
-    found = accounts()
-    try:
-        project = _grant(found[0]["address"])["client_id"].split("-")[0] if found else ""
-    except (LookupError, ValueError, KeyError):
-        project = ""
-    return {"accounts": found, "client": bool(project), "project": project}
+    """Settings: the accounts and their features."""
+    return {"accounts": accounts()}
 
 
 def remove(feature: str, address: str) -> Dict[str, Any]:
@@ -171,11 +167,10 @@ def drop(address: str, feature: str) -> None:
 
 # --- Signing in ---------------------------------------------------------------------------------------------------
 
-def start(feature: str, address: str, client_id: str, client_secret: str, base: str) -> Dict[str, str]:
-    """The consent page for one feature, coming back to `base` + CALLBACK: { flow, url }. Without an id and secret
-    the app kept is used (the account's own, else any kept). Gmail needs its address;
+def start(feature: str, address: str, base: str) -> Dict[str, str]:
+    """The consent page for one feature, coming back to `base` + CALLBACK: { flow, url }. Gmail needs its address;
     Calendar and Drive take the account kept, or the one the user allows with."""
-    address, client_id, client_secret = address.strip(), client_id.strip(), client_secret.strip()
+    address = address.strip()
     if feature not in FEATURES:
         raise ValueError(f"unknown feature {feature!r}")
     if feature == "mail" and mail.provider_of(address) != "google":
@@ -183,20 +178,12 @@ def start(feature: str, address: str, client_id: str, client_secret: str, base: 
     kept = accounts()
     if not address and kept:
         address = kept[0]["address"]
-    if not client_id or not client_secret:
-        # The app kept: the account's own, else any (one app signs in any of the user's Google accounts).
-        own = next((a for a in kept if a["address"].lower() == address.lower()), kept[0] if kept else None)
-        if own is None:
-            raise ValueError("the sign-in app's client id and secret are needed")
-        grant = _grant(own["address"])
-        client_id, client_secret = grant["client_id"], grant["client_secret"]
     verifier = secrets.token_urlsafe(48)
-    flow = {"feature": feature, "address": address, "client_id": client_id, "client_secret": client_secret,
-            "state": secrets.token_urlsafe(32), "verifier": verifier, "redirect": base.rstrip("/") + CALLBACK,
+    flow = {"feature": feature, "address": address, "state": secrets.token_urlsafe(32), "verifier": verifier, "redirect": base.rstrip("/") + CALLBACK,
             "status": "pending", "at": time.time()}
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
     url = AUTHORIZE + "?" + urllib.parse.urlencode({
-        "client_id": client_id, "redirect_uri": flow["redirect"], "response_type": "code",
+        "client_id": CLIENT_ID, "redirect_uri": flow["redirect"], "response_type": "code",
         "scope": f"{FEATURES[feature]} {IDENTITY}", "include_granted_scopes": "true", "access_type": "offline",
         "prompt": "consent", **({"login_hint": address} if address else {}), "state": flow["state"],
         "code_challenge": challenge, "code_challenge_method": "S256"})
@@ -244,7 +231,7 @@ def _trade(flow: Dict[str, Any], code: str) -> str:
     (and, for Gmail, Gmail lets the address in); else why not."""
     try:
         tokens = _json("POST", TOKEN, form={
-            "client_id": flow["client_id"], "client_secret": flow["client_secret"], "code": code,
+            "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET, "code": code,
             "code_verifier": flow["verifier"], "redirect_uri": flow["redirect"], "grant_type": "authorization_code"})
     except GoogleError:
         return "google"
@@ -266,7 +253,7 @@ def _trade(flow: Dict[str, Any], code: str) -> str:
     from hermes_cli.config import save_env_value
 
     save_env_value(_secret_name(address), json.dumps(
-        {"client_id": flow["client_id"], "client_secret": flow["client_secret"], "refresh_token": tokens["refresh_token"]}))
+        {"refresh_token": tokens["refresh_token"]}))
     before = next((a["features"] for a in accounts() if a["address"].lower() == address.lower()), [])
     _save(address, sorted({*before, flow["feature"]}))
     if flow["feature"] == "mail":
@@ -282,7 +269,7 @@ def access_token(address: str) -> str:
     if token and until - time.time() > 60:
         return token
     try:
-        found = _json("POST", TOKEN, form={"client_id": grant["client_id"], "client_secret": grant["client_secret"],
+        found = _json("POST", TOKEN, form={"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET,
                                            "refresh_token": grant["refresh_token"], "grant_type": "refresh_token"})
     except GoogleError as error:
         if error.reason == "invalid_grant":

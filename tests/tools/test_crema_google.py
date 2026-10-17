@@ -94,8 +94,8 @@ def fake(monkeypatch):
 FAKE = None
 
 
-def sign_in(feature="mail", address="me@gmail.com", client=("123-abc.apps.googleusercontent.com", "GOCSPX-secret"), **back):
-    started = google.start(feature, address, *client, "http://127.0.0.1:5555/")
+def sign_in(feature="mail", address="me@gmail.com", **back):
+    started = google.start(feature, address, "http://127.0.0.1:5555/")
     FAKE.consent = started["url"]
     query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(started["url"]).query))
     how = google.finish(back.get("code", "code-1"), back.get("state", query["state"]), back.get("error", ""))
@@ -109,18 +109,19 @@ def test_each_feature_asks_only_its_permission_and_the_account_keeps_what_it_has
     assert query["redirect_uri"] == "http://127.0.0.1:5555" + google.CALLBACK
     assert query["scope"] == "https://mail.google.com/ openid email" and query["include_granted_scopes"] == "true"
     assert query["access_type"] == "offline" and query["login_hint"] == "me@gmail.com" and query["code_challenge_method"] == "S256"
+    assert query["client_id"] == google.CLIENT_ID
     assert how == "done" and google.status(started["flow"]) == {"status": "done", "address": "me@gmail.com", "feature": "mail"}
     assert mail_tool.accounts() == [{"address": "me@gmail.com", "provider": "google"}]
-    assert google.state() == {"accounts": [{"address": "me@gmail.com", "features": ["mail"]}], "client": True, "project": "123"}
+    assert google.state() == {"accounts": [{"address": "me@gmail.com", "features": ["mail"]}]}
     kept = json.loads(get_env_value("CREMA_GOOGLE_ME_GMAIL_COM"))
-    assert kept == {"client_id": "123-abc.apps.googleusercontent.com", "client_secret": "GOCSPX-secret", "refresh_token": "1//refresh"}
+    assert kept == {"refresh_token": "1//refresh"}
     assert not get_env_value("CREMA_MAIL_PASSWORD_ME_GMAIL_COM")
     # A second coming back with the same state finds nothing to settle.
     assert google.finish("code-1", query["state"], "") == "unknown"
-    # Calendar next: no address and no app given, the account and its app kept are used; Gmail is not a calendar.
+    # Calendar next: no address given, the account kept is used; Gmail is not a calendar.
     assert not google.connected("calendar")
-    _, query, how = sign_in("calendar", "", ("", ""))
-    assert how == "done" and query["client_id"] == "123-abc.apps.googleusercontent.com" and query["login_hint"] == "me@gmail.com"
+    _, query, how = sign_in("calendar", "")
+    assert how == "done" and query["login_hint"] == "me@gmail.com"
     assert query["scope"] == "https://www.googleapis.com/auth/calendar openid email"
     assert google.accounts() == [{"address": "me@gmail.com", "features": ["calendar", "mail"]}]
     # Gmail taken away from the mail list: Calendar stays, with its sign-in.
@@ -131,16 +132,13 @@ def test_each_feature_asks_only_its_permission_and_the_account_keeps_what_it_has
     assert google.accounts() == [] and not get_env_value("CREMA_GOOGLE_ME_GMAIL_COM")
 
 
-def test_drive_alone_with_a_new_app_takes_the_account_that_allowed_it(fake):
+def test_drive_alone_takes_the_account_that_allowed_it(fake):
     found, _ = fake
     found.allowed_by = "work@gmail.com"
     _, query, how = sign_in("drive", "")
     assert how == "done" and "login_hint" not in query
     assert google.accounts() == [{"address": "work@gmail.com", "features": ["drive"]}] and mail_tool.accounts() == []
-    # Without an app given and none kept, there is nothing to sign in with.
-    google.remove("drive", "work@gmail.com")
-    with pytest.raises(ValueError):
-        google.start("calendar", "", "", "", "http://127.0.0.1:5555/")
+
 
 
 def test_a_permission_left_unchecked_or_another_account_is_not_kept(fake):

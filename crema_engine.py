@@ -227,8 +227,8 @@ async def main() -> None:
         return await asyncio.to_thread(crema_mail_tool.remove, str(body.get("address") or ""))
 
     # Google, one feature at a time (tools/crema_google.py): Gmail, Calendar, Drive. The accounts and their
-    # features; a feature's consent started (with the user's own app's id and secret, or the app kept), followed
-    # until done, and Google's way back to this server; a feature taken away.
+    # features; a feature's consent started with Crema's sign-in app, followed until done, and Google's way back
+    # to this server; a feature taken away.
     from tools import crema_google
 
     @settings.get("/api/crema/google")
@@ -239,7 +239,6 @@ async def main() -> None:
     async def google_connect(body: dict, request: Request):
         try:
             return await asyncio.to_thread(crema_google.start, str(body.get("feature") or "mail"), str(body.get("address") or ""),
-                                           str(body.get("client_id") or ""), str(body.get("client_secret") or ""),
                                            str(request.base_url))
         except (ValueError, LookupError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))

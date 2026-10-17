@@ -226,17 +226,27 @@ async def main() -> None:
     async def mail_remove(body: dict):
         return await asyncio.to_thread(crema_mail_tool.remove, str(body.get("address") or ""))
 
-    # A Gmail address (tools/crema_google.py): the user's own Google app signs Crema in. Started with its id and
-    # secret (the consent page's address back), followed until done, and Google's way back to this server.
+    # Google, one feature at a time (tools/crema_google.py): Gmail, Calendar, Drive. The accounts and their
+    # features; a feature's consent started (with the user's own app's id and secret, or the app kept), followed
+    # until done, and Google's way back to this server; a feature taken away.
     from tools import crema_google
+
+    @settings.get("/api/crema/google")
+    async def google_state():
+        return await asyncio.to_thread(crema_google.state)
 
     @settings.post("/api/crema/google/connect")
     async def google_connect(body: dict, request: Request):
         try:
-            return crema_google.start(str(body.get("address") or ""), str(body.get("client_id") or ""),
-                                      str(body.get("client_secret") or ""), str(request.base_url))
-        except ValueError as exc:
+            return await asyncio.to_thread(crema_google.start, str(body.get("feature") or "mail"), str(body.get("address") or ""),
+                                           str(body.get("client_id") or ""), str(body.get("client_secret") or ""),
+                                           str(request.base_url))
+        except (ValueError, LookupError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+    @settings.post("/api/crema/google/remove")
+    async def google_remove(body: dict):
+        return await asyncio.to_thread(crema_google.remove, str(body.get("feature") or ""), str(body.get("address") or ""))
 
     @settings.get("/api/crema/google/flows/{flow_id}")
     async def google_flow(flow_id: str):
@@ -246,10 +256,10 @@ async def main() -> None:
     async def google_back(code: str = "", state: str = "", error: str = ""):
         how = await asyncio.to_thread(crema_google.finish, code, state, error)
         page = {
-            "done": ("구글 연결을 마쳤습니다", "메일·캘린더·드라이브를 Crema에서 쓸 수 있습니다."),
+            "done": ("구글 연결을 마쳤습니다", "이제 Crema에서 쓸 수 있습니다."),
             "denied": ("허용하지 않았습니다", "Crema로 돌아가면 허용 화면을 다시 열어 드립니다."),
-            "scopes": ("권한이 빠졌습니다", "메일·캘린더·드라이브를 모두 체크해야 합니다. Crema로 돌아가 다시 허용해 주세요."),
-            "account": ("다른 계정으로 허용했습니다", "Crema에 넣은 지메일 주소의 구글 계정으로 허용해 주세요."),
+            "scopes": ("권한이 빠졌습니다", "허용 화면의 권한을 체크해야 합니다. Crema로 돌아가 다시 허용해 주세요."),
+            "account": ("다른 계정으로 허용했습니다", "Crema에 연결한 구글 계정으로 허용해 주세요."),
             "unknown": ("로그인 시간이 지났습니다", "Crema로 돌아가 다시 연결해 주세요."),
         }.get(how, ("연결하지 못했습니다", "Crema로 돌아가 다시 연결해 주세요."))
         return HTMLResponse(mcp._sign_in_page(*page, ok=how == "done"), status_code=200 if how == "done" else 400)

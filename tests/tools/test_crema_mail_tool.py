@@ -146,6 +146,7 @@ def test_the_terminal_never_gets_a_mail_password():
     from tools.environments.local_env_policy import _is_hermes_internal_secret
 
     assert _is_hermes_internal_secret("CREMA_MAIL_PASSWORD_ME_NAVER_COM")
+    assert _is_hermes_internal_secret("CREMA_GOOGLE_ME_GMAIL_COM")
 
 
 def test_folders_search_and_read_in_korean(fake):

@@ -1,12 +1,15 @@
-"""Crema: the user's Google account — Gmail, Calendar and Drive (Crema plan 메일 연결 4-3, 2026-10-17).
+"""Crema: the user's Google account — Gmail, Calendar and Drive, each connected on its own (Crema plan 메일 연결 4-3,
+2026-10-17; 구글 기능별 연결, 2026-10-17).
 
-The user makes their own Google sign-in app (an OAuth client of the Desktop kind, in a Google Cloud project of
-their own, published so Google does not cut it every 7 days); Crema's setup guide shows them where. With its id
-and secret, `start` opens Google's consent page; Google comes back to this engine's settings server
-(CALLBACK, served by crema_engine.py), `finish` trades the code for tokens, checks every permission was given and
-that Gmail lets the address in, and keeps the account. Nothing goes through Aishift: the app is the user's, and
-its id, secret and refresh token stay in this engine's .env under the account's mail secret
-(tools/crema_mail_tool.py, never passed to the terminal), which 연결 끊기 removes.
+The user makes their own Google sign-in app once (an OAuth client of the Desktop kind, in a Google Cloud project of
+their own, published so Google does not cut it every 7 days); Crema's setup guide shows them where. `start` opens
+Google's consent page for one feature (FEATURES), with that app's id and secret or the app already kept; Google
+comes back to this engine's settings server (CALLBACK, served by crema_engine.py), `finish` trades the code for
+tokens, checks the feature's permission was given by the right account (and that Gmail lets the address in), and
+adds the feature to the account. The newest refresh token holds every permission the account gave (asked with
+include_granted_scopes), so one is kept per account. Nothing goes through Aishift: the app is the user's, and its
+id, secret and refresh token stay in this engine's .env (SECRET_PREFIX, never passed to the terminal), the account
+and its features in the config (CONFIG_KEY). 연결 끊기 takes one feature away; with none left the account goes.
 
 Gmail is the `mail` tool (XOAUTH2 with `access_token`). Calendar and Drive are the `calendar` and `drive` tools,
 with Google's REST APIs and the Python standard library. A calendar change that notifies other people asks the
@@ -36,8 +39,12 @@ from tools.registry import registry, tool_error
 AUTHORIZE = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN = "https://oauth2.googleapis.com/token"
 CALLBACK = "/api/crema/google/callback"
-# All three are needed: Gmail's IMAP and SMTP take only the full mail scope.
-SCOPES = ("https://mail.google.com/", "https://www.googleapis.com/auth/calendar", "https://www.googleapis.com/auth/drive")
+# The permission each feature asks for (Gmail's IMAP and SMTP take only the full mail scope), and who allowed it.
+FEATURES = {"mail": "https://mail.google.com/", "calendar": "https://www.googleapis.com/auth/calendar",
+            "drive": "https://www.googleapis.com/auth/drive"}
+IDENTITY = "openid email"
+CONFIG_KEY = "google_accounts"
+SECRET_PREFIX = "CREMA_GOOGLE_"
 CALENDAR = "https://www.googleapis.com/calendar/v3"
 DRIVE = "https://www.googleapis.com/drive/v3"
 UPLOAD = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink"
@@ -95,20 +102,103 @@ def _json(method: str, url: str, **kwargs: Any) -> Dict[str, Any]:
     return json.loads(raw) if raw else {}
 
 
+# --- The accounts kept --------------------------------------------------------------------------------------------
+
+def accounts() -> List[Dict[str, Any]]:
+    """[{address, features}], each a Google account with the features connected."""
+    from hermes_cli.config import load_config
+
+    return [{"address": item["address"], "features": [f for f in item.get("features") or [] if f in FEATURES]}
+            for item in load_config().get(CONFIG_KEY) or [] if isinstance(item, dict) and item.get("address")]
+
+
+def _secret_name(address: str) -> str:
+    return SECRET_PREFIX + re.sub(r"[^A-Z0-9]", "_", address.upper())
+
+
+def _grant(address: str) -> Dict[str, str]:
+    from hermes_cli.config import get_env_value
+
+    value = get_env_value(_secret_name(address))
+    if not value:
+        raise LookupError(f"the Google sign-in for {address} is missing; connect it again in Settings")
+    return json.loads(value)
+
+
+def _save(address: str, features: List[str]) -> None:
+    from hermes_cli.config import load_config, remove_env_value, save_config
+
+    config = load_config()
+    kept = [item for item in config.get(CONFIG_KEY) or [] if isinstance(item, dict) and item.get("address", "").lower() != address.lower()]
+    if features:
+        kept.append({"address": address, "features": features})
+    else:
+        remove_env_value(_secret_name(address))
+    if kept:
+        config[CONFIG_KEY] = kept
+    else:
+        config.pop(CONFIG_KEY, None)
+    save_config(config)
+
+
+def state() -> Dict[str, Any]:
+    """Settings: the accounts and their features, and whether a sign-in app is kept (a further feature needs no
+    console setup then, only its API turned on in `project`, the number its client id starts with, and the
+    consent)."""
+    found = accounts()
+    try:
+        project = _grant(found[0]["address"])["client_id"].split("-")[0] if found else ""
+    except (LookupError, ValueError, KeyError):
+        project = ""
+    return {"accounts": found, "client": bool(project), "project": project}
+
+
+def remove(feature: str, address: str) -> Dict[str, Any]:
+    """Settings → 연결 끊기 for one feature; Gmail also leaves the mail accounts."""
+    if feature == "mail":
+        return mail.remove(address)
+    drop(address, feature)
+    return {"ok": True}
+
+
+def drop(address: str, feature: str) -> None:
+    """The feature leaves the account; with none left, the account and its sign-in leave this PC."""
+    address = (address or "").strip()
+    found = next((a for a in accounts() if a["address"].lower() == address.lower()), None)
+    if found:
+        _save(found["address"], [f for f in found["features"] if f != feature])
+
+
 # --- Signing in ---------------------------------------------------------------------------------------------------
 
-def start(address: str, client_id: str, client_secret: str, base: str) -> Dict[str, str]:
-    """The consent page for `address` with the user's own app, coming back to `base` + CALLBACK: { flow, url }."""
+def start(feature: str, address: str, client_id: str, client_secret: str, base: str) -> Dict[str, str]:
+    """The consent page for one feature, coming back to `base` + CALLBACK: { flow, url }. Without an id and secret
+    the app kept is used (the account's own, else any kept). Gmail needs its address;
+    Calendar and Drive take the account kept, or the one the user allows with."""
     address, client_id, client_secret = address.strip(), client_id.strip(), client_secret.strip()
-    if mail.provider_of(address) != "google" or not client_id or not client_secret:
-        raise ValueError("a Gmail address and the app's client id and secret are needed")
+    if feature not in FEATURES:
+        raise ValueError(f"unknown feature {feature!r}")
+    if feature == "mail" and mail.provider_of(address) != "google":
+        raise ValueError("a Gmail address is needed")
+    kept = accounts()
+    if not address and kept:
+        address = kept[0]["address"]
+    if not client_id or not client_secret:
+        # The app kept: the account's own, else any (one app signs in any of the user's Google accounts).
+        own = next((a for a in kept if a["address"].lower() == address.lower()), kept[0] if kept else None)
+        if own is None:
+            raise ValueError("the sign-in app's client id and secret are needed")
+        grant = _grant(own["address"])
+        client_id, client_secret = grant["client_id"], grant["client_secret"]
     verifier = secrets.token_urlsafe(48)
-    flow = {"address": address, "client_id": client_id, "client_secret": client_secret, "state": secrets.token_urlsafe(32),
-            "verifier": verifier, "redirect": base.rstrip("/") + CALLBACK, "status": "pending", "at": time.time()}
+    flow = {"feature": feature, "address": address, "client_id": client_id, "client_secret": client_secret,
+            "state": secrets.token_urlsafe(32), "verifier": verifier, "redirect": base.rstrip("/") + CALLBACK,
+            "status": "pending", "at": time.time()}
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
     url = AUTHORIZE + "?" + urllib.parse.urlencode({
-        "client_id": client_id, "redirect_uri": flow["redirect"], "response_type": "code", "scope": " ".join(SCOPES),
-        "access_type": "offline", "prompt": "consent", "login_hint": address, "state": flow["state"],
+        "client_id": client_id, "redirect_uri": flow["redirect"], "response_type": "code",
+        "scope": f"{FEATURES[feature]} {IDENTITY}", "include_granted_scopes": "true", "access_type": "offline",
+        "prompt": "consent", **({"login_hint": address} if address else {}), "state": flow["state"],
         "code_challenge": challenge, "code_challenge_method": "S256"})
     flow_id = secrets.token_urlsafe(16)
     with _lock:
@@ -123,7 +213,7 @@ def status(flow_id: str) -> Dict[str, str]:
     flow = _flows.get(flow_id)
     if flow is None:
         return {"status": "failed", "reason": "expired"}
-    return {key: flow[key] for key in ("status", "reason", "address") if key in flow}
+    return {key: flow[key] for key in ("status", "reason", "address", "feature") if flow.get(key)}
 
 
 def finish(code: str, state: str, error: str) -> str:
@@ -139,9 +229,19 @@ def finish(code: str, state: str, error: str) -> str:
     return reason or "done"
 
 
+def _allowed_by(tokens: Dict[str, Any]) -> str:
+    """The address of the account that allowed it, from the id token Google returned with the tokens (straight from
+    its token endpoint, so its signature needs no checking here)."""
+    try:
+        payload = str(tokens.get("id_token") or "").split(".")[1]
+        return str(json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))).get("email") or "")
+    except (IndexError, ValueError):
+        return ""
+
+
 def _trade(flow: Dict[str, Any], code: str) -> str:
-    """The code for tokens, then the account kept once every permission was given and Gmail lets the address in;
-    else why not."""
+    """The code for tokens, then the feature added to the account once its permission was given by the right account
+    (and, for Gmail, Gmail lets the address in); else why not."""
     try:
         tokens = _json("POST", TOKEN, form={
             "client_id": flow["client_id"], "client_secret": flow["client_secret"], "code": code,
@@ -150,24 +250,33 @@ def _trade(flow: Dict[str, Any], code: str) -> str:
         return "google"
     except OSError:
         return "server"
-    if not set(SCOPES) <= set(str(tokens.get("scope") or "").split()) or not tokens.get("refresh_token"):
+    if FEATURES[flow["feature"]] not in str(tokens.get("scope") or "").split() or not tokens.get("refresh_token"):
         return "scopes"
-    account = {"address": flow["address"], "provider": "google"}
-    try:
-        with mail._imap(account, tokens["access_token"]):
-            pass
-    except mail.imaplib.IMAP4.error:
-        return "account"  # allowed with another Google account than the address
-    except OSError:
-        return "server"
-    secret = {"client_id": flow["client_id"], "client_secret": flow["client_secret"], "refresh_token": tokens["refresh_token"]}
-    mail.keep(flow["address"], "google", json.dumps(secret))
+    address = _allowed_by(tokens)
+    if not address or (flow["address"] and address.lower() != flow["address"].lower()):
+        return "account"  # allowed with another Google account than the one connected
+    if flow["feature"] == "mail":
+        try:
+            with mail._imap({"address": address, "provider": "google"}, tokens["access_token"]):
+                pass
+        except mail.imaplib.IMAP4.error:
+            return "account"
+        except OSError:
+            return "server"
+    from hermes_cli.config import save_env_value
+
+    save_env_value(_secret_name(address), json.dumps(
+        {"client_id": flow["client_id"], "client_secret": flow["client_secret"], "refresh_token": tokens["refresh_token"]}))
+    before = next((a["features"] for a in accounts() if a["address"].lower() == address.lower()), [])
+    _save(address, sorted({*before, flow["feature"]}))
+    if flow["feature"] == "mail":
+        mail.keep(address, "google")
     return ""
 
 
 def access_token(address: str) -> str:
     """A live access token for the Google account `address`, refreshed when it is about to run out."""
-    grant = json.loads(mail._password(address))
+    grant = _grant(address)
     with _lock:
         token, until = _tokens.get(grant["refresh_token"], ("", 0))
     if token and until - time.time() > 60:
@@ -177,29 +286,30 @@ def access_token(address: str) -> str:
                                            "refresh_token": grant["refresh_token"], "grant_type": "refresh_token"})
     except GoogleError as error:
         if error.reason == "invalid_grant":
-            raise LookupError(f"Google no longer lets Crema into {address}; connect it again in Settings → 메일 연결") from None
+            raise LookupError(f"Google no longer lets Crema into {address}; connect it again in Settings → 부가 기능 연동") from None
         raise
     with _lock:
         _tokens[grant["refresh_token"]] = (found["access_token"], time.time() + int(found.get("expires_in") or 3600))
     return found["access_token"]
 
 
-def _google_account(address: Optional[str]) -> str:
-    known = [a["address"] for a in mail.accounts() if a["provider"] == "google"]
+def _google_account(address: Optional[str], feature: str) -> str:
+    known = [a["address"] for a in accounts() if feature in a["features"]]
+    name = {"calendar": "Google Calendar", "drive": "Google Drive"}.get(feature, feature)
     if not known:
-        raise LookupError("no Google account is connected (Settings → 부가 기능 연동 → 메일 연결)")
+        raise LookupError(f"{name} is not connected (Settings → 부가 기능 연동)")
     if not address:
         if len(known) > 1:
-            raise LookupError("several Google accounts are connected; name one: " + ", ".join(known))
+            raise LookupError(f"several Google accounts have {name} connected; name one: " + ", ".join(known))
         return known[0]
     found = next((a for a in known if a.lower() == address.strip().lower()), None)
     if found is None:
-        raise LookupError(f"{address} is not a connected Google account; connected: " + ", ".join(known))
+        raise LookupError(f"{address} does not have {name} connected; connected: " + ", ".join(known))
     return found
 
 
-def connected() -> bool:
-    return any(a["provider"] == "google" for a in mail.accounts())
+def connected(feature: str) -> bool:
+    return any(feature in a["features"] for a in accounts())
 
 
 def _run(handler, args: Dict[str, Any]) -> str:
@@ -244,7 +354,7 @@ def calendar(args: Dict[str, Any], **_: Any) -> str:
 
 
 def _calendar(args: Dict[str, Any]) -> Dict[str, Any]:
-    address = _google_account(args.get("account"))
+    address = _google_account(args.get("account"), "calendar")
     token = access_token(address)
     action = args.get("action")
     if action == "calendars":
@@ -315,7 +425,7 @@ def drive(args: Dict[str, Any], **_: Any) -> str:
 
 
 def _drive(args: Dict[str, Any]) -> Dict[str, Any]:
-    address = _google_account(args.get("account"))
+    address = _google_account(args.get("account"), "drive")
     token = access_token(address)
     action = args.get("action")
     if action == "search":
@@ -376,7 +486,7 @@ def _drive(args: Dict[str, Any]) -> Dict[str, Any]:
 _ACCOUNT = {"type": "string", "description": "the Google address; may be left out when only one is connected"}
 
 registry.register(
-    name="calendar", toolset="google", emoji="📅", check_fn=connected,
+    name="calendar", toolset="google", emoji="📅", check_fn=lambda: connected("calendar"),
     schema={"name": "calendar",
             "description": "The user's Google Calendar, connected in Crema's settings: list calendars, find events, "
                            "and create, change or delete them.\n"
@@ -404,7 +514,7 @@ registry.register(
 )
 
 registry.register(
-    name="drive", toolset="google", emoji="🗂️", check_fn=connected,
+    name="drive", toolset="google", emoji="🗂️", check_fn=lambda: connected("drive"),
     schema={"name": "drive",
             "description": "The user's Google Drive, connected in Crema's settings: find files, read them as text, "
                            "download them, and upload files from this PC. Nothing is deleted or shared.\n"

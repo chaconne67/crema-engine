@@ -141,7 +141,7 @@ TOOLSETS = {
     "thock": _ts("Tell Thock a word it misheard in the user's message", ["thock_heard"]),
     # Crema: the user's mail accounts, connected in Settings → 메일 연결 (tools/crema_mail_tool.py).
     "mail": _ts("The user's mail: find, read, sort and send", ["mail"]),
-    # Crema: the user's Google Calendar and Drive, with a Gmail address connected (tools/crema_google.py).
+    # Crema: the user's Google Calendar and Drive, each connected on its own (tools/crema_google.py).
     "google": _ts("The user's Google Calendar and Drive", ["calendar", "drive"]),
     "context_engine": _ts("Runtime tools exposed by the active context engine"),
     "session_search": _ts("Search and recall past conversations with summarization", ["session_search"]),

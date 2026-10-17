@@ -192,12 +192,13 @@ def connect(address: str, password: str) -> Dict[str, Any]:
     return keep(address, provider, password)
 
 
-def keep(address: str, provider: str, secret: str) -> Dict[str, Any]:
-    """An account that signed in: its secret into .env (an app password, or a Google sign-in as JSON), the account
-    into the config, in place of one with the same address."""
+def keep(address: str, provider: str, secret: str = "") -> Dict[str, Any]:
+    """An account that signed in: its app password into .env (a Gmail address's Google sign-in is kept by
+    tools/crema_google.py), the account into the config, in place of one with the same address."""
     from hermes_cli.config import load_config, save_config, save_env_value
 
-    save_env_value(secret_name(address), secret)
+    if secret:
+        save_env_value(secret_name(address), secret)
     config = load_config()
     kept = [item for item in config.get(CONFIG_KEY) or [] if isinstance(item, dict) and item.get("address", "").lower() != address.lower()]
     config[CONFIG_KEY] = kept + [{"address": address, "provider": provider}]
@@ -217,6 +218,10 @@ def remove(address: str) -> Dict[str, Any]:
         config.pop(CONFIG_KEY)
     save_config(config)
     remove_env_value(secret_name(address))
+    if provider_of(address) == "google":
+        from tools import crema_google
+
+        crema_google.drop(address, "mail")
     return {"ok": True}
 
 

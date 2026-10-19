@@ -220,12 +220,15 @@ TOOLSETS = {
     # Crema: the tools the Crema app offers (see CREMA.md); add a tool here when Crema adopts it.
     "hermes-api-server": _ts(
         "Crema — files, terminal, todo, web, image understanding, memory, past chats, skills, the knowledge notebook, "
-        "messages to other chats, words Thock misheard, the user's mail, and their Google Calendar and Drive",
+        "messages to other chats, words Thock misheard, the user's mail, their Google Calendar and Drive, and a browser "
+        "signed in to the user's My Sites",
         ["read_file", "write_file", "patch", "search_files", "terminal", "process_manage",
          "todo_list", "web_search", "web_extract", "vision_analyze",
          "memory", "session_search", "skills_list", "skill_view", "skill_manage",
          "knowledge_search", "knowledge_get", "knowledge_write", "knowledge_think", "crema_backup", "crema_chats",
-         "thock_heard", "mail", "calendar", "drive"],
+         "thock_heard", "mail", "calendar", "drive",
+         "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_scroll", "browser_back",
+         "browser_press", "browser_vision", "browser_vault_fill", "my_sites"],
     ),
     "hermes-cli": _bundle("Full interactive CLI toolset - all default tools plus cronjob management"),
 

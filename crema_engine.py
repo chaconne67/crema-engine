@@ -67,6 +67,15 @@ async def main() -> None:
     driver = importlib.util.find_spec("cua_driver")
     if driver and driver.origin:
         os.environ.setdefault("HERMES_CUA_DRIVER_CMD", str(Path(driver.origin).parent / "bin" / "cua-driver.exe"))
+    # My Sites (tools/crema_sites.py): the browser tools run the installer's agent-browser.exe (bin/ beside this
+    # source) on this PC's Chrome, else Edge, with Crema's own profile, the one the user signs in to in My Sites.
+    os.environ["PATH"] = str(Path(__file__).resolve().parent.parent / "bin") + os.pathsep + os.environ.get("PATH", "")
+    from tools import crema_sites
+
+    os.environ.setdefault("AGENT_BROWSER_PROFILE", str(crema_sites.profile_dir()))
+    os.environ.setdefault("AGENT_BROWSER_ARGS", crema_sites.RESTORE)
+    if browser := crema_sites.browser_executable():
+        os.environ.setdefault("AGENT_BROWSER_EXECUTABLE_PATH", browser)
     # Crema's built-in skills (skills/: the crema-guide manual) into the engine folder as installed;
     # a chat can work without them, so a failure is logged and the engine starts.
     try:
@@ -268,6 +277,48 @@ async def main() -> None:
             "unknown": ("로그인 시간이 지났습니다", "Crema로 돌아가 다시 연결해 주세요."),
         }.get(how, ("연결하지 못했습니다", "Crema로 돌아가 다시 연결해 주세요."))
         return HTMLResponse(mcp._sign_in_page(*page, ok=how == "done"), status_code=200 if how == "done" else 400)
+
+    # Settings → My Sites (tools/crema_sites.py): the sites; a site's login window opened, finished or cancelled;
+    # its saved login, its name, the site removed (with its login and cookies).
+    def my_sites_call(call, *args):
+        try:
+            return call(*args)
+        except LookupError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @settings.get("/api/crema/sites")
+    async def sites_state():
+        return await asyncio.to_thread(crema_sites.state)
+
+    @settings.post("/api/crema/sites/login")
+    async def sites_login(body: dict):
+        return await asyncio.to_thread(my_sites_call, crema_sites.start_login, str(body.get("url") or ""),
+                                       str(body.get("name") or ""), str(body.get("identifier") or ""),
+                                       str(body.get("password") or ""), str(body.get("site") or ""))
+
+    @settings.post("/api/crema/sites/done")
+    async def sites_done():
+        return await asyncio.to_thread(my_sites_call, crema_sites.finish_login)
+
+    @settings.post("/api/crema/sites/cancel")
+    async def sites_cancel():
+        return await asyncio.to_thread(crema_sites.cancel_login)
+
+    @settings.post("/api/crema/sites/password")
+    async def sites_password(body: dict):
+        return await asyncio.to_thread(my_sites_call, crema_sites.save_login, str(body.get("site") or ""),
+                                       str(body.get("identifier") or ""), str(body.get("password") or ""))
+
+    @settings.post("/api/crema/sites/rename")
+    async def sites_rename(body: dict):
+        return await asyncio.to_thread(my_sites_call, crema_sites.rename, str(body.get("site") or ""),
+                                       str(body.get("name") or ""))
+
+    @settings.post("/api/crema/sites/remove")
+    async def sites_remove(body: dict):
+        return await asyncio.to_thread(my_sites_call, crema_sites.remove, str(body.get("site") or ""))
 
     # 「Crema 열기」 on a sign-in's page: Crema, reading this output, brings its window forward (src-tauri lib.rs).
     @settings.get("/api/crema/front")

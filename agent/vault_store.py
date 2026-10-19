@@ -17,6 +17,8 @@ Design notes:
 
 from __future__ import annotations
 
+import base64
+import ctypes
 import json
 import os
 import re
@@ -150,6 +152,35 @@ def normalize_origin(url_or_origin: str) -> str:
     return f"{scheme}://{host}:{port}"
 
 
+# Crema (docs Crema-My-Sites-계획-2026-10-20): on Windows the key file is sealed to the user's Windows account
+# (DPAPI), so a copy of the folder does not open on another account or PC. A key written before is sealed when read.
+_SEALED = b"dpapi:"
+
+
+class _Blob(ctypes.Structure):
+    _fields_ = [("size", ctypes.c_uint32), ("data", ctypes.POINTER(ctypes.c_char))]
+
+
+def _dpapi(data: bytes, seal: bool) -> bytes:
+    buffer = ctypes.create_string_buffer(data, len(data))
+    given, made = _Blob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_char))), _Blob()
+    call = ctypes.windll.crypt32.CryptProtectData if seal else ctypes.windll.crypt32.CryptUnprotectData
+    if not call(ctypes.byref(given), None, None, None, None, 0x1, ctypes.byref(made)):  # 0x1: never show a prompt
+        raise ctypes.WinError()
+    try:
+        return ctypes.string_at(made.data, made.size)
+    finally:
+        ctypes.windll.kernel32.LocalFree(made.data)
+
+
+def _seal_key(key: bytes) -> bytes:
+    return _SEALED + base64.b64encode(_dpapi(key, True)) if os.name == "nt" else key
+
+
+def _open_key(stored: bytes) -> bytes:
+    return _dpapi(base64.b64decode(stored[len(_SEALED):]), False) if stored.startswith(_SEALED) else stored
+
+
 @dataclass(frozen=True)
 class VaultItemMeta:
     """Metadata-only view of a vault item. Never contains secret values.
@@ -254,11 +285,14 @@ class VaultStore:
                 self._key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
             )
             try:
-                os.write(fd, key)
+                os.write(fd, _seal_key(key))
             finally:
                 os.close(fd)
         else:
-            key = self._key_path.read_bytes().strip()
+            stored = self._key_path.read_bytes().strip()
+            key = _open_key(stored)
+            if os.name == "nt" and stored == key:
+                atomic_write_bytes(self._key_path, _seal_key(key), mode=0o600)
         try:
             os.chmod(self._key_path, 0o600)
         except OSError:

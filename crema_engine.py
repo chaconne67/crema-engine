@@ -9,6 +9,7 @@ routers check the same variable themselves).
 """
 import asyncio
 import hmac
+import importlib.util
 import json
 import logging
 import os
@@ -16,6 +17,7 @@ import re
 import socket
 import sys
 import time
+from pathlib import Path
 
 
 SIGN_IN_RETURN = "/api/mcp/oauth/callback/{server_name:path}"
@@ -61,6 +63,10 @@ async def main() -> None:
     # start_gateway() sets for the gateway; without it an api_server chat counts as unattended and every
     # flagged command is blocked, in manual and smart alike.
     os.environ["HERMES_EXEC_ASK"] = "1"
+    # Computer use: the cua-driver.exe the `crema` extra installs (inside its wheel, not on PATH).
+    driver = importlib.util.find_spec("cua_driver")
+    if driver and driver.origin:
+        os.environ.setdefault("HERMES_CUA_DRIVER_CMD", str(Path(driver.origin).parent / "bin" / "cua-driver.exe"))
     # Crema's built-in skills (skills/: the crema-guide manual) into the engine folder as installed;
     # a chat can work without them, so a failure is logged and the engine starts.
     try:

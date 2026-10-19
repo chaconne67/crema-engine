@@ -188,11 +188,13 @@ def test_fill_login_without_a_saved_login():
     assert "no saved login" in json.loads(sites.my_sites({"action": "fill_login", "site": "깃허브"}))["error"]
 
 
-def test_the_tool_shows_only_with_a_site():
+def test_the_tool_shows_with_a_browser_even_before_a_site(monkeypatch):
+    # With no site yet the agent still learns from the tool to send the user to Settings → My Sites.
     from tools.registry import registry
+    from tools.tool_search import is_deferrable_tool_name
 
     entry = registry._tools["my_sites"]
-    assert entry.check_fn() is False
-    sites.start_login(url="github.com", name="깃허브")
-    sites.finish_login()
     assert entry.check_fn() is True
+    assert not is_deferrable_tool_name("my_sites")
+    monkeypatch.setattr(sites, "browser_executable", lambda: None)
+    assert entry.check_fn() is False

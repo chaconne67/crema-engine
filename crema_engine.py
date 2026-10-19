@@ -76,6 +76,16 @@ async def main() -> None:
     os.environ.setdefault("AGENT_BROWSER_ARGS", crema_sites.RESTORE)
     if browser := crema_sites.browser_executable():
         os.environ.setdefault("AGENT_BROWSER_EXECUTABLE_PATH", browser)
+    # Those browser tools, never the Browser Use CLI the engine switches to when a browser-use or uvx is on
+    # this PC: its one browser_exec tool is not in Crema's tools, so the agent was left with no browser.
+    from tools.browser_use_cli import get_browser_backend
+
+    if not get_browser_backend():
+        from hermes_cli.config import load_config, save_config
+
+        config = load_config()
+        config.setdefault("browser", {})["backend"] = "off"
+        save_config(config)
     # Crema's built-in skills (skills/: the crema-guide manual) into the engine folder as installed;
     # a chat can work without them, so a failure is logged and the engine starts.
     try:

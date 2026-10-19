@@ -347,10 +347,12 @@ def my_sites(args: Dict[str, Any], **kwargs) -> str:
 
 
 registry.register(
-    name="my_sites", toolset="my_sites", emoji="🔑", check_fn=lambda: bool(_load()),
+    name="my_sites", toolset="my_sites", emoji="🔑", check_fn=lambda: bool(browser_executable()),
     schema={"name": "my_sites",
             "description": "The websites the user registered in Crema's Settings → My Sites and signed in to there. "
-                           "The browser tools use the same browser profile, so these sites open already signed in.\n"
+                           "The browser tools use the same browser profile, so these sites open already signed in. Use the "
+                           "browser tools for websites, not a browser started from the terminal or by computer use: "
+                           "that one is the user's own and has none of these sign-ins.\n"
                            "- list: the sites, whether they are signed in, and the identifier of a saved login. Call it "
                            "when the user asks for something that lives behind a login.\n"
                            "- A site that needs a login and is not in the list: ask the user to add it in Settings → My "

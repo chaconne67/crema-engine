@@ -270,8 +270,8 @@ async def main() -> None:
         return HTMLResponse(mcp._sign_in_page(*page, ok=how == "done"), status_code=200 if how == "done" else 400)
 
     # 「Crema 열기」 on a sign-in's page: Crema, reading this output, brings its window forward (src-tauri lib.rs).
-    # ego lite (tools/crema_ego.py), the browser the agent works in: installed or not, and its installer fetched and
-    # opened on the user's screen. Already installed, its command joins the PATH the agent's terminal starts with.
+    # ego lite (tools/crema_ego.py), the browser the agent works in: installed or not, and installed and set up with no
+    # screens (a minute or two). Already installed, its command joins the PATH the agent's terminal starts with.
     from tools import crema_ego
 
     crema_ego.cli()

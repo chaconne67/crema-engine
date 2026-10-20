@@ -53,6 +53,7 @@ class _Install:
         self.home = tmp_path / "ego lite"
         self.ran = []  # the installer's command line, then each ego-browser call's arguments
         self.installed = False
+        self.closed = 0  # times ego lite's windows were closed
         monkeypatch.setattr(crema_ego, "_home", lambda: self.home)
         monkeypatch.setattr(crema_ego, "cli", lambda: "ego-browser" if self.installed else None)
         monkeypatch.setattr(crema_ego.urllib.request, "urlretrieve", lambda url, path: Path(path).write_bytes(b"MZ"))
@@ -66,6 +67,7 @@ class _Install:
                 (folder / "ego-browser.exe").write_text("")
                 return subprocess.CompletedProcess(argv, 0)
             if argv[0] == "powershell":
+                self.closed += argv[-1] == crema_ego.CLOSE
                 return subprocess.CompletedProcess(argv, 0, stdout=signer, stderr="")
             self.ran.append(argv[1:])
             self.installed = True  # its first start puts ego-browser on the user's PATH
@@ -86,6 +88,8 @@ def test_install_sets_ego_lite_up_as_crema_chooses(monkeypatch, tmp_path):
     assert json.loads((install.home / "User Data" / "ego_config.json").read_text()) == {"not_first_run": True}
     assert install.ran[1:] == [["import", "list"], ["import", "--browser", "chrome", "--profile", "Default",
                                                     "--clear-existing-profiles", "--no-default"]]
+    # The welcome page and the tabs brought along do not stay on the user's screen.
+    assert install.closed == 1
 
 
 def test_bringing_the_sign_ins_along_failed_install_again_finishes_it(monkeypatch, tmp_path):
@@ -110,6 +114,7 @@ def test_install_leaves_an_earlier_setup_as_it_is(monkeypatch, tmp_path):
     assert crema_ego.install() == {"installed": True}
     assert install.ran[1:] == [["import", "list"]]
     assert config.read_text() == '{"not_first_run": true, "kept": 1}'
+    assert install.closed == 0
 
 
 def test_install_with_no_browser_to_bring_along(monkeypatch, tmp_path):

@@ -101,6 +101,22 @@ def _set_up(command: Path) -> None:
         if not done.get("success"):
             raise OSError(f"ego lite could not bring {source['browser_source']}'s sign-ins along: {done}")
     _pending().unlink()
+    _close_windows()
+
+
+# ego lite opens a welcome page on its first start, and a few seconds after bringing the sign-ins along it starts
+# again with the tabs it brought: windows the user did not ask for. Closed, it keeps running in the background and
+# shows a window again when the agent works in it. Windows are closed as they come, until none has come for 10 s.
+CLOSE = ("$end = (Get-Date).AddSeconds(60); $quiet = (Get-Date).AddSeconds(15); "
+         "while ((Get-Date) -lt $end -and (Get-Date) -lt $quiet) { "
+         "$w = Get-Process ego -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Path -like ($env:EGO_HOME + '*') }; "
+         "if ($w) { $w | ForEach-Object { [void]$_.CloseMainWindow() }; $quiet = (Get-Date).AddSeconds(10) }; "
+         "Start-Sleep -Milliseconds 500 }")
+
+
+def _close_windows() -> None:
+    subprocess.run(["powershell", "-NoProfile", "-Command", CLOSE], env={**os.environ, "EGO_HOME": str(_home())},
+                   capture_output=True, timeout=90, creationflags=NO_WINDOW)
 
 
 def install() -> Dict[str, Any]:

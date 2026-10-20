@@ -270,8 +270,9 @@ async def main() -> None:
         return HTMLResponse(mcp._sign_in_page(*page, ok=how == "done"), status_code=200 if how == "done" else 400)
 
     # 「Crema 열기」 on a sign-in's page: Crema, reading this output, brings its window forward (src-tauri lib.rs).
-    # ego lite (tools/crema_ego.py), the browser the agent works in: installed or not, and installed and set up with no
-    # screens (a minute or two). Already installed, its command joins the PATH the agent's terminal starts with.
+    # 웹 브라우저 조작 (tools/crema_ego.py): ego lite, the browser the agent works in, installed or not and on or off;
+    # installed and set up with no screens (a minute or two). Already installed, its command joins the PATH the
+    # agent's terminal starts with.
     from tools import crema_ego
 
     crema_ego.cli()
@@ -286,6 +287,10 @@ async def main() -> None:
             return await asyncio.to_thread(crema_ego.install)
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=502, detail=str(exc))
+
+    @settings.post("/api/crema/ego/enable")
+    async def ego_enable(body: dict):
+        return await asyncio.to_thread(crema_ego.enable, bool(body.get("enabled")))
 
     @settings.get("/api/crema/front")
     async def front():

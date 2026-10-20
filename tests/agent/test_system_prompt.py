@@ -57,6 +57,16 @@ def test_crema_method_says_how_to_take_a_message_sent_while_working():
     assert "first finish and report the current work, then do it" in CREMA_METHOD_GUIDANCE
 
 
+def test_crema_method_sends_signed_in_sites_to_the_browser_toggle():
+    # With 웹 브라우저 조작 off the ego-browser skill is hidden, and its rule against opening the user's own browser
+    # with it: the always-on method keeps that rule and says where it is turned on.
+    from agent.prompt_builder import CREMA_METHOD_GUIDANCE
+
+    assert "ego-browser skill" in CREMA_METHOD_GUIDANCE
+    assert "부가 기능 연동 → 웹 브라우저 조작" in CREMA_METHOD_GUIDANCE
+    assert "Don't open the user's own browser" in CREMA_METHOD_GUIDANCE
+
+
 def _captured_context_cwd(agent):
     """The cwd build_system_prompt_parts hands to build_context_files_prompt."""
     captured = {}

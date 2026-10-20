@@ -1,8 +1,9 @@
 """Crema: ego lite (crema docs Crema-ego-lite-브라우저-계획-2026-10-20.md), the browser the agent works in on websites,
 with the user's own sign-ins, through its ego-browser command (the ego-browser skill says how). Crema does not ship
-it: Settings → 부가 기능 연동 → 웹 사이트 installs it when the user picks it, and Crema makes the choices ego lite's own
+it: Settings → 부가 기능 연동 → 웹 브라우저 조작 installs it when the user turns that on, and Crema makes the choices ego lite's own
 setup would ask for, as suits Crema (the user changes them in ego lite later if they like): no setup screens, the
-sign-ins of the user's default browser brought along, ego lite neither the default browser nor started with Windows."""
+sign-ins of the user's default browser brought along, ego lite neither the default browser nor started with Windows.
+웹 브라우저 조작 off, the agent does not see the ego-browser skill."""
 from __future__ import annotations
 
 import json
@@ -23,6 +24,7 @@ SIGNER = "O=CITRO LABS PTE. LIMITED"
 # own folder, with no administrator prompt.
 TAG = "appguid={712B23BF-E734-4038-BE42-D5736B6D9570}&appname=ego%20lite&needsadmin=False&ap=-arch_x64-statsdef_1"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+SKILL = "ego-browser"  # the bundled skill the agent works in ego lite with
 _installing = threading.Lock()
 
 
@@ -62,8 +64,27 @@ def _pending() -> Path:
     return get_hermes_home() / "ego-lite-import-pending"
 
 
+def _enabled() -> bool:
+    from hermes_cli.config import load_config
+
+    return SKILL not in ((load_config().get("skills") or {}).get("disabled") or [])
+
+
 def state() -> Dict[str, Any]:
-    return {"installed": bool(cli()) and not _pending().exists()}
+    return {"installed": bool(cli()) and not _pending().exists(), "enabled": _enabled()}
+
+
+def enable(enabled: bool) -> Dict[str, Any]:
+    """웹 브라우저 조작 on or off: off, the ego-browser skill is in skills.disabled, so the agent does not see it.
+    The other skills the user turned off stay off."""
+    from hermes_cli.config import load_config, save_config
+
+    config = load_config()
+    skills = config.setdefault("skills", {})
+    disabled = [name for name in skills.get("disabled") or [] if name != SKILL]
+    skills["disabled"] = disabled if enabled else disabled + [SKILL]
+    save_config(config)
+    return state()
 
 
 def _ego(command: Path, *args: str) -> Dict[str, Any]:
@@ -91,6 +112,7 @@ def _set_up(command: Path) -> None:
     sources = _ego(command, "import", "list")["browser_sources"]
     if not _pending().exists():
         return
+    _close_windows()  # its welcome page, closed before bringing the sign-ins along takes its minute
     source = next((item for item in sources if item["is_default_browser"]), sources[0] if sources else None)
     profile = next((item for item in source["profiles"] if item["is_default"]), None) if source else None
     if profile:
@@ -105,7 +127,7 @@ def _set_up(command: Path) -> None:
 
 
 # ego lite opens a welcome page on its first start, and a few seconds after bringing the sign-ins along it starts
-# again with the tabs it brought: windows the user did not ask for. Closed, it keeps running in the background and
+# again with the tabs it brought: windows the user did not ask for, closed after each. Closed, it keeps running in the background and
 # shows a window again when the agent works in it. Windows are closed as they come, until none has come for 10 s.
 CLOSE = ("$end = (Get-Date).AddSeconds(60); $quiet = (Get-Date).AddSeconds(15); "
          "while ((Get-Date) -lt $end -and (Get-Date) -lt $quiet) { "
@@ -121,25 +143,25 @@ def _close_windows() -> None:
 
 def install() -> Dict[str, Any]:
     """Fetches ego lite's installer, installs it with no screens, and sets it up; or, installed, finishes setting it
-    up. A minute or two; a second call meanwhile waits for the first and finds it installed."""
+    up. Then 웹 브라우저 조작 is on. A minute or two; a second call meanwhile waits for the first and finds it
+    installed."""
     with _installing:
-        if state()["installed"]:
-            return state()
-        command = cli()
-        if not command:
-            setup = Path(tempfile.mkdtemp(prefix="ego-lite-")) / "egoliteSetup.exe"
-            urllib.request.urlretrieve(INSTALLER, setup)
-            signed = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "$s = Get-AuthenticodeSignature -LiteralPath $env:EGO_SETUP; if ($s.Status -eq 'Valid') { $s.SignerCertificate.Subject }"],
-                env={**os.environ, "EGO_SETUP": str(setup)},  # a path with a quote in it stays out of the command text
-                capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW).stdout
-            if SIGNER not in signed:
-                raise ValueError(f"ego lite's installer is not signed by Citro Labs: {signed.strip() or 'no valid signature'}")
-            subprocess.run(f'"{setup}" --install="{TAG}" --silent', check=True, timeout=300, creationflags=NO_WINDOW)
-            commands = sorted(_home().glob("Application/*/ego-browser.exe"))
-            if not commands:
-                raise OSError(f"ego lite's installer finished, but there is no ego-browser in {_home() / 'Application'}")
-            command = commands[-1]
-        _set_up(Path(command))
-        return state()
+        if not state()["installed"]:
+            command = cli()
+            if not command:
+                setup = Path(tempfile.mkdtemp(prefix="ego-lite-")) / "egoliteSetup.exe"
+                urllib.request.urlretrieve(INSTALLER, setup)
+                signed = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command",
+                     "$s = Get-AuthenticodeSignature -LiteralPath $env:EGO_SETUP; if ($s.Status -eq 'Valid') { $s.SignerCertificate.Subject }"],
+                    env={**os.environ, "EGO_SETUP": str(setup)},  # a path with a quote in it stays out of the command text
+                    capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW).stdout
+                if SIGNER not in signed:
+                    raise ValueError(f"ego lite's installer is not signed by Citro Labs: {signed.strip() or 'no valid signature'}")
+                subprocess.run(f'"{setup}" --install="{TAG}" --silent', check=True, timeout=300, creationflags=NO_WINDOW)
+                commands = sorted(_home().glob("Application/*/ego-browser.exe"))
+                if not commands:
+                    raise OSError(f"ego lite's installer finished, but there is no ego-browser in {_home() / 'Application'}")
+                command = commands[-1]
+            _set_up(Path(command))
+        return enable(True)

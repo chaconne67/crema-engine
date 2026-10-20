@@ -15,6 +15,28 @@ def _pending(monkeypatch, tmp_path):
     monkeypatch.setattr(crema_ego, "_pending", lambda: tmp_path / "ego-lite-import-pending")
 
 
+@pytest.fixture(autouse=True)
+def config(monkeypatch):
+    """The engine's config.yaml, kept in memory."""
+    from hermes_cli import config as hermes_config
+
+    saved = {"skills": {"disabled": ["kept-off"]}}
+    monkeypatch.setattr(hermes_config, "load_config", lambda: json.loads(json.dumps(saved)))
+    monkeypatch.setattr(hermes_config, "save_config", lambda value: saved.update(json.loads(json.dumps(value))))
+    return saved
+
+
+def test_off_hides_the_skill_and_on_shows_it_again(monkeypatch, config):
+    monkeypatch.setattr(crema_ego, "cli", lambda: "ego-browser")
+    assert crema_ego.enable(False) == {"installed": True, "enabled": False}
+    assert config["skills"]["disabled"] == ["kept-off", "ego-browser"]
+    assert crema_ego.enable(False)["enabled"] is False  # off twice: still listed once
+    assert config["skills"]["disabled"] == ["kept-off", "ego-browser"]
+    assert crema_ego.enable(True) == {"installed": True, "enabled": True}
+    # A skill the user turned off stays off.
+    assert config["skills"]["disabled"] == ["kept-off"]
+
+
 def _command(folder: Path) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     command = folder / ("ego-browser.exe" if os.name == "nt" else "ego-browser")
@@ -26,7 +48,7 @@ def _command(folder: Path) -> Path:
 def test_not_installed(monkeypatch, tmp_path):
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.setattr(crema_ego, "_user_path", lambda: "")
-    assert crema_ego.state() == {"installed": False}
+    assert crema_ego.state() == {"installed": False, "enabled": True}
 
 
 def test_found_in_the_users_new_path_joins_the_engines(monkeypatch, tmp_path):
@@ -34,7 +56,7 @@ def test_found_in_the_users_new_path_joins_the_engines(monkeypatch, tmp_path):
     command = _command(tmp_path / "ego")
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     monkeypatch.setattr(crema_ego, "_user_path", lambda: str(command.parent))
-    assert crema_ego.state() == {"installed": True}
+    assert crema_ego.state() == {"installed": True, "enabled": True}
     assert os.environ["PATH"].split(os.pathsep)[0] == str(command.parent)
 
 
@@ -78,9 +100,10 @@ class _Install:
         monkeypatch.setattr(crema_ego.subprocess, "run", run)
 
 
-def test_install_sets_ego_lite_up_as_crema_chooses(monkeypatch, tmp_path):
+def test_install_sets_ego_lite_up_as_crema_chooses(monkeypatch, tmp_path, config):
     install = _Install(monkeypatch, tmp_path)
-    assert crema_ego.install() == {"installed": True}
+    config["skills"]["disabled"].append("ego-browser")  # turned off before: 설치하고 켜기 turns it on
+    assert crema_ego.install() == {"installed": True, "enabled": True}
     assert install.ran[0] == f'--install="{crema_ego.TAG}" --silent'
     assert "needsadmin=False" in crema_ego.TAG
     # Its welcome screens skipped; the default browser's default profile brought along in place of the empty one;
@@ -89,7 +112,7 @@ def test_install_sets_ego_lite_up_as_crema_chooses(monkeypatch, tmp_path):
     assert install.ran[1:] == [["import", "list"], ["import", "--browser", "chrome", "--profile", "Default",
                                                     "--clear-existing-profiles", "--no-default"]]
     # The welcome page and the tabs brought along do not stay on the user's screen.
-    assert install.closed == 1
+    assert install.closed == 2  # after the first start, and after ego lite starts again with the tabs
 
 
 def test_bringing_the_sign_ins_along_failed_install_again_finishes_it(monkeypatch, tmp_path):
@@ -97,10 +120,10 @@ def test_bringing_the_sign_ins_along_failed_install_again_finishes_it(monkeypatc
     with pytest.raises(OSError, match="could not bring chrome"):
         crema_ego.install()
     # ego lite is there, but not as Crema sets it up: 설치 stays.
-    assert crema_ego.state() == {"installed": False}
+    assert crema_ego.state() == {"installed": False, "enabled": True}
     install.ran.clear()
     install.replies["import"] = {"success": True, "new_profile_dirs": []}
-    assert crema_ego.install() == {"installed": True}
+    assert crema_ego.install() == {"installed": True, "enabled": True}
     assert install.ran == [["import", "list"], ["import", "--browser", "chrome", "--profile", "Default",
                                                 "--clear-existing-profiles", "--no-default"]]
 
@@ -111,7 +134,7 @@ def test_install_leaves_an_earlier_setup_as_it_is(monkeypatch, tmp_path):
     config = install.home / "User Data" / "ego_config.json"
     config.parent.mkdir(parents=True)
     config.write_text('{"not_first_run": true, "kept": 1}')
-    assert crema_ego.install() == {"installed": True}
+    assert crema_ego.install() == {"installed": True, "enabled": True}
     assert install.ran[1:] == [["import", "list"]]
     assert config.read_text() == '{"not_first_run": true, "kept": 1}'
     assert install.closed == 0
@@ -119,7 +142,7 @@ def test_install_leaves_an_earlier_setup_as_it_is(monkeypatch, tmp_path):
 
 def test_install_with_no_browser_to_bring_along(monkeypatch, tmp_path):
     install = _Install(monkeypatch, tmp_path, listed={"browser_sources": [], "success": True})
-    assert crema_ego.install() == {"installed": True}
+    assert crema_ego.install() == {"installed": True, "enabled": True}
     assert install.ran[1:] == [["import", "list"]]
 
 

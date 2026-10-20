@@ -142,10 +142,7 @@ _DIRECT_SURFACE_TOOLSETS = frozenset({"desktop_ui", "project", "setup",
                                       "knowledge",
                                       # Crema: a misheard word is noticed in every message, which a
                                       # catalog stub's 60 characters cannot say (thock_heard).
-                                      "thock",
-                                      # Crema: sites behind a login go through My Sites, which a stub
-                                      # cannot say before the agent reaches for another browser.
-                                      "my_sites"})
+                                      "thock"})
 
 # Event-triggered tools deferred BY DEFAULT (a catalog stub suffices). Keep the curated
 # list in DEFAULT_CONFIG so config discovery and runtime behavior cannot drift. An explicit

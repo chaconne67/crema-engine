@@ -20,7 +20,7 @@ Crema 안에서 에이전트를 돌리는 부분이 "엔진"이다.
 | 백업 | "백업해 줘" |
 | 다른 대화 목록·메시지 | [chats-together.md](chats-together.md) |
 | 이미지·동영상 생성 | 부가 기능 연동에서 서비스를 연결했을 때만 |
-| 메일 | 부가 기능 연동 › 메일 카드에서 연결한 메일만. 보내기는 매번 묻는다: [models-and-connections.md](models-and-connections.md#메일-연결) |
+| 메일 | 부가 기능 연동 › 이메일 카드에서 연결한 메일만. 보내기는 매번 묻는다: [models-and-connections.md](models-and-connections.md#메일-연결) |
 | 구글 캘린더·드라이브 | 각각 연결했을 때만(지메일과 따로). 참석자에게 알림이 가는 일정 변경은 매번 묻는다: [models-and-connections.md](models-and-connections.md#구글-연결지메일캘린더드라이브) |
 | 웹 사이트 열기·읽기·누르기·입력·파일 받기 | 부가 기능 연동 › 웹 브라우저 조작을 켰을 때만(켜면 에고 라이트(ego lite)를 설치한다). 사용자가 에고 라이트에 로그인해 둔 사이트에서 일한다. 되돌릴 수 없는 일은 먼저 묻는다: [models-and-connections.md](models-and-connections.md#웹-브라우저-조작에고-라이트) |
 | 업무 서비스(Notion·Jira·Dropbox 등) | 부가 기능 연동의 영역 카드(일정, 문서 · 파일, 할 일 · 프로젝트 관리, 디자인 · 화이트보드)에서 연결한 서비스만: [models-and-connections.md](models-and-connections.md#업무-서비스-연결) |

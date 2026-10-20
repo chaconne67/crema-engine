@@ -102,7 +102,7 @@ def _quoted(name: str) -> str:
 def _account(address: Optional[str]) -> Dict[str, str]:
     known = accounts()
     if not known:
-        raise LookupError("no mail account is connected (Settings → 부가 기능 연동 → 메일 연결)")
+        raise LookupError("no mail account is connected (Settings → 부가 기능 연동 → 이메일)")
     if not address:
         if len(known) > 1:
             raise LookupError("several accounts are connected; name one: " + ", ".join(a["address"] for a in known))

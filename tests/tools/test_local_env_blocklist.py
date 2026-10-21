@@ -278,41 +278,6 @@ class TestProviderEnvBlocklist:
         assert "USER" in result_env
         assert "PATH" in result_env
 
-    def test_bare_hermes_resolves_from_sanitized_subprocess_path(self):
-        """Cron children can resolve Hermes even when the gateway PATH cannot."""
-        from tools.environments.local import _sanitize_subprocess_env
-
-        with patch(
-            "tools.environments.local._resolve_hermes_bin_dir",
-            return_value="/home/user/.local/bin",
-        ):
-            result = _sanitize_subprocess_env(
-                {
-                    "PATH": os.pathsep.join(["/usr/bin", "/bin"]),
-                    "HOME": "/home/user",
-                }
-            )
-
-        assert result["PATH"] == os.pathsep.join(
-            ["/home/user/.local/bin", "/usr/bin", "/bin"]
-        )
-
-    def test_bare_hermes_path_does_not_duplicate_existing_install_dir(self):
-        """The PATH repair is idempotent for already-correct environments."""
-        from tools.environments.local import _sanitize_subprocess_env
-
-        with patch(
-            "tools.environments.local._resolve_hermes_bin_dir",
-            return_value="/home/user/.local/bin",
-        ):
-            result = _sanitize_subprocess_env(
-                {"PATH": os.pathsep.join(["/home/user/.local/bin", "/usr/bin"])}
-            )
-
-        assert result["PATH"] == os.pathsep.join(
-            ["/home/user/.local/bin", "/usr/bin"]
-        )
-
     def test_self_env_blocked_vars_also_stripped(self):
         """Blocked vars in self.env are stripped; non-blocked vars pass through."""
         result_env = _run_with_env(self_env={
@@ -1578,19 +1543,6 @@ class TestBlocklistCoverage:
 class TestSanePathIncludesHomebrew:
     """Verify _SANE_PATH includes macOS Homebrew directories."""
 
-    @pytest.fixture(autouse=True)
-    def _disable_hermes_bin_injection(self):
-        """These tests assert the sane-path merge in isolation. Disable the
-        hermes-install-dir prepend (a separate concern, covered by
-        TestHermesBinDirOnPath) so a real ``hermes`` on the test runner's PATH
-        doesn't shift the asserted PATH layout."""
-        from tools.environments import local as local_mod
-        saved = local_mod._HERMES_BIN_DIR
-        local_mod._HERMES_BIN_DIR = None  # resolved -> no dir to inject
-        yield
-        local_mod._HERMES_BIN_DIR = saved
-
-
     def test_make_run_env_appends_homebrew_on_minimal_path(self, monkeypatch):
         """When PATH is minimal, _make_run_env appends missing sane entries.
 
@@ -1650,48 +1602,6 @@ class TestSanePathIncludesHomebrew:
             result = _make_run_env({})
         assert result["Path"] == windows_env["Path"]
         assert "PATH" not in result
-
-
-class TestHermesBinDirOnPath:
-    """The hermes install dir is reachable in the terminal subshell PATH.
-
-    Plugins shelling out to bare ``hermes`` via the terminal tool must work
-    even when the gateway was launched without the hermes install dir on
-    PATH (systemd, service managers, cron). See the discussion that motivated
-    _resolve_hermes_bin_dir / _prepend_hermes_bin_dir.
-    """
-
-    def _reset_cache(self):
-        from tools.environments import local as local_mod
-        local_mod._HERMES_BIN_DIR = local_mod._SENTINEL
-
-    def test_resolves_via_which(self, monkeypatch):
-        from tools.environments import local as local_mod
-        self._reset_cache()
-        monkeypatch.setattr(local_mod.shutil, "which",
-                            lambda name: "/opt/hermes/bin/hermes" if name == "hermes" else None)
-        monkeypatch.setattr(local_mod.os.path, "isdir", lambda p: p == "/opt/hermes/bin")
-        assert local_mod._resolve_hermes_bin_dir() == "/opt/hermes/bin"
-
-
-    def test_make_run_env_injects_hermes_bin_dir(self):
-        """A gateway env missing the hermes dir gets it back in the subshell PATH.
-
-        Platform-agnostic: ``_prepend_hermes_bin_dir`` uses ``os.pathsep`` on
-        every host, so no platform flag is faked here."""
-        from tools.environments import local as local_mod
-        from tools.environments.local import _make_run_env
-        self._reset_cache()
-        local_mod._HERMES_BIN_DIR = "/opt/hermes/bin"
-        with patch.dict(
-            os.environ,
-            {"PATH": os.pathsep.join(["/usr/bin", "/bin"])},
-            clear=True,
-        ):
-            result = _make_run_env({})
-        entries = result["PATH"].split(os.pathsep)
-        assert entries[0] == "/opt/hermes/bin"
-        assert "/usr/bin" in entries
 
 
 class TestHermesInternalDynamicSecrets:
@@ -1799,3 +1709,29 @@ class TestHermesInternalDynamicSecrets:
         assert "GATEWAY_RELAY_SECRET" not in run_env
         assert run_env.get("AUXILIARY_VISION_PROVIDER") == "openai"
 
+
+
+class TestUpstreamHermesNotOnPath:
+    """An upstream Hermes install on the same PC is another agent program: the folder of its
+    ``hermes`` command never joins the PATH of Crema's terminal or of the children it spawns."""
+
+    def test_terminal_and_child_paths_leave_out_upstream_hermes(self, tmp_path, monkeypatch):
+        import shutil
+
+        from tools.environments import local as local_mod
+        from tools.environments.local import _make_run_env, _sanitize_subprocess_env
+
+        upstream = tmp_path / "hermes" / "bin"
+        upstream.mkdir(parents=True)
+        (upstream / "hermes").write_text("", encoding="utf-8")
+        real_which = shutil.which
+        monkeypatch.setattr(local_mod.shutil, "which", lambda name, *a, **k: (
+            str(upstream / "hermes") if name == "hermes" else real_which(name, *a, **k)))
+        minimal = os.pathsep.join(["/usr/bin", "/bin"])
+
+        with patch.dict(os.environ, {"PATH": minimal}, clear=True):
+            run_path = _make_run_env({})["PATH"].split(os.pathsep)
+        child_path = _sanitize_subprocess_env({"PATH": minimal})["PATH"].split(os.pathsep)
+
+        assert str(upstream) not in run_path
+        assert str(upstream) not in child_path

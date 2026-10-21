@@ -99,35 +99,34 @@ class TestFindShellWindowsBehavior:
 
 
 
-class TestFindBashSkipsBrokenCustomPath:
-    """Stale HERMES_GIT_BASH_PATH must not brick Windows terminal startup."""
+class TestFindBashSkipsBrokenInstall:
+    """A broken Git for Windows install must not brick Windows terminal startup."""
 
     @pytest.mark.windows_only
-    def test_falls_through_to_portable_when_custom_fails_probe(self, tmp_path, monkeypatch):
-        """Windows-only: the candidate ladder (HERMES_GIT_BASH_PATH →
-        %LOCALAPPDATA%\\hermes\\git → Program Files) only exists in
-        ``_find_bash``'s Windows branch."""
+    def test_falls_through_to_per_user_git_when_program_files_fails_probe(self, tmp_path, monkeypatch):
+        """Windows-only: the candidate ladder (Program Files →
+        %LOCALAPPDATA%\\Programs\\Git) only exists in ``_find_bash``'s Windows branch."""
         import tools.environments.local as local_mod
         from tools.environments import local_gitbash_probe as gitbash_probe
 
         gitbash_probe._bash_starts_cache.clear()
 
-        broken = tmp_path / "broken" / "bash.exe"
-        broken.parent.mkdir()
+        broken = tmp_path / "program-files" / "Git" / "bin" / "bash.exe"
+        broken.parent.mkdir(parents=True)
         broken.write_text("", encoding="utf-8")
-        portable = tmp_path / "hermes" / "git" / "bin" / "bash.exe"
-        portable.parent.mkdir(parents=True)
-        portable.write_text("", encoding="utf-8")
+        per_user = tmp_path / "Programs" / "Git" / "bin" / "bash.exe"
+        per_user.parent.mkdir(parents=True)
+        per_user.write_text("", encoding="utf-8")
 
-        monkeypatch.setenv("HERMES_GIT_BASH_PATH", str(broken))
+        monkeypatch.setenv("ProgramFiles", str(tmp_path / "program-files"))
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
 
         def fake_starts(path: str) -> bool:
-            return path == str(portable)
+            return path == str(per_user)
 
         monkeypatch.setattr(local_mod, "_bash_starts", fake_starts)
 
-        assert _find_bash() == str(portable)
+        assert _find_bash() == str(per_user)
 
 
 class TestGitBashExternalProgramProbe:
@@ -177,13 +176,12 @@ class TestGitBashExternalProgramProbe:
 
         gitbash_probe._bash_starts_cache.clear()
         gitbash_probe._bash_probe_details_cache.clear()
-        portable = tmp_path / "hermes" / "git" / "bin" / "bash.exe"
-        portable.parent.mkdir(parents=True)
-        portable.write_text("", encoding="utf-8")
+        git_bash = tmp_path / "program-files" / "Git" / "bin" / "bash.exe"
+        git_bash.parent.mkdir(parents=True)
+        git_bash.write_text("", encoding="utf-8")
 
-        monkeypatch.setenv("HERMES_GIT_BASH_PATH", "")
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-        monkeypatch.setenv("ProgramFiles", str(tmp_path / "empty-program-files"))
+        monkeypatch.setenv("ProgramFiles", str(tmp_path / "program-files"))
         monkeypatch.delenv("ProgramFiles(x86)", raising=False)
         monkeypatch.setattr(local_mod.shutil, "which", lambda _name: None)
         monkeypatch.setattr(local_mod, "_mandatory_aslr_enabled", lambda: True)
@@ -202,7 +200,7 @@ class TestGitBashExternalProgramProbe:
         assert "Mandatory ASLR" in message
         assert "Reinstalling Git will not change" in message
         assert "Set-ProcessMitigation" in message
-        assert str(tmp_path / "hermes" / "git") in message
+        assert str(tmp_path / "program-files" / "Git") in message
 
 
 @pytest.mark.macos_only
@@ -242,3 +240,52 @@ class TestMacosLoginShellSwallowRegression:
             stdin=subprocess.DEVNULL, capture_output=True, text=True,
         )
         assert marker.exists(), f"_find_shell()={shell} swallowed the command"
+
+
+class TestFindBashIgnoresUpstreamHermes:
+    """Crema runs its terminal on Git for Windows only: an upstream Hermes install on the same PC
+    (its ``HERMES_GIT_BASH_PATH`` variable, its PortableGit under ``%LOCALAPPDATA%\hermes\git``)
+    is never used. Platform-agnostic: the Windows ladder is exercised with ``_IS_WINDOWS`` set."""
+
+    @staticmethod
+    def _bash_at(root, *parts):
+        path = root.joinpath(*parts, "bash.exe")
+        path.parent.mkdir(parents=True)
+        path.write_text("", encoding="utf-8")
+        return str(path)
+
+    def _windows(self, tmp_path, monkeypatch):
+        import tools.environments.local as local_mod
+
+        custom = self._bash_at(tmp_path, "custom")
+        self._bash_at(tmp_path, "localappdata", "hermes", "git", "bin")
+        self._bash_at(tmp_path, "localappdata", "hermes", "git", "usr", "bin")
+        monkeypatch.setenv("HERMES_GIT_BASH_PATH", custom)
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+        monkeypatch.setenv("ProgramFiles", str(tmp_path / "program-files"))
+        monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+        monkeypatch.setattr(local_mod.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(local_mod, "_IS_WINDOWS", True)
+        monkeypatch.setattr(local_mod, "_bash_starts", lambda _path: True)
+        return local_mod
+
+    def test_git_for_windows_wins_over_upstream_hermes_bash(self, tmp_path, monkeypatch):
+        local_mod = self._windows(tmp_path, monkeypatch)
+        git_for_windows = self._bash_at(tmp_path, "program-files", "Git", "bin")
+
+        assert local_mod._find_bash() == git_for_windows
+
+    def test_upstream_hermes_bash_alone_is_not_used(self, tmp_path, monkeypatch):
+        local_mod = self._windows(tmp_path, monkeypatch)
+
+        with pytest.raises(RuntimeError, match="Git Bash not found"):
+            local_mod._find_bash()
+
+    def test_upstream_hermes_bash_on_path_is_not_used(self, tmp_path, monkeypatch):
+        """Upstream Hermes's installer also puts its PortableGit on the user PATH."""
+        local_mod = self._windows(tmp_path, monkeypatch)
+        upstream = str(tmp_path / "localappdata" / "hermes" / "git" / "bin" / "bash.exe")
+        monkeypatch.setattr(local_mod.shutil, "which", lambda _name: upstream)
+
+        with pytest.raises(RuntimeError, match="Git Bash not found"):
+            local_mod._find_bash()

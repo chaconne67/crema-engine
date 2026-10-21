@@ -504,10 +504,8 @@ _PROVIDER_ALIASES = dict((
 
 
 # Offline/fresh-install fallback for the model Hermes silently lands on when the user never picked
-# one (GUI onboarding confirm card, empty ``model.default``, provider-set-but-model-missing). The
-# AUTHORITATIVE source is the remote catalog manifest, which labels exactly one entry per provider
-# ``"default": true`` (get_default_model_from_cache) so the default rotates without a release; this
-# MUST match the labeled entry in website/static/api/model-catalog.json. Deliberately a capable
+# one (GUI onboarding confirm card, empty ``model.default``, provider-set-but-model-missing). It
+# changes with a release (no remote catalog is fetched). Deliberately a capable
 # low-cost model rather than the curated lists' entry [0]: aggregator lists are ordered
 # most-capable-first, so [0] is the priciest Anthropic flagship.
 PREFERRED_SILENT_DEFAULT_MODEL = "z-ai/glm-5.2"

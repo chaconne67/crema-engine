@@ -526,11 +526,6 @@
   },
   {
     "path": "tools/environments/local.py",
-    "symbol": "_resolve_hermes_bin_dir",
-    "kind": "bare_which"
-  },
-  {
-    "path": "tools/environments/local.py",
     "symbol": "_windows_bash_candidates",
     "kind": "bare_which"
   },

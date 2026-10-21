@@ -447,15 +447,8 @@ def get_nous_recommended_aux_model(
 
 
 def get_preferred_silent_default_model(provider: str = "openrouter") -> str:
-    """Silent-default model id: the cached remote catalog's ``"default": true`` label (never hits the
-    network — safe on hot paths), else :data:`PREFERRED_SILENT_DEFAULT_MODEL`."""
-    try:
-        from hermes_cli.model_catalog import get_default_model_from_cache
-        labeled = get_default_model_from_cache(provider)
-        if labeled:
-            return labeled
-    except Exception:
-        pass
+    """Silent-default model id: :data:`PREFERRED_SILENT_DEFAULT_MODEL` (no network — safe on hot
+    paths). ``provider`` is kept for the callers that name one."""
     return PREFERRED_SILENT_DEFAULT_MODEL
 
 
@@ -573,8 +566,8 @@ def fetch_openrouter_models(
     """Return the curated OpenRouter picker list, refreshed from the live catalog when possible.
 
     ``cache_only`` never opens a socket: memory, then disk (stale accepted), then the in-repo snapshot."""
-    # The curated list is filtered from this profile's manifest (``model_catalog.*`` config, its
-    # ``<home>/cache`` copy), so a routed profile keeps its own slot instead of the module one.
+    # The curated list follows this profile's ``model_catalog.*`` config and ``<home>/cache``, so a
+    # routed profile keeps its own slot instead of the module one.
     from hermes_cli.models_profile_cache import profile_slot_get, profile_slot_set
     _me = sys.modules[__name__]
     cached = profile_slot_get(_me, "_openrouter_catalog_cache")
@@ -593,8 +586,8 @@ def fetch_openrouter_models(
     if cache_only:
         return list(OPENROUTER_MODELS)
 
-    # Remote catalog manifest first, in-repo snapshot when unreachable; the live /v1/models filter
-    # (tool support, free pricing) is applied on top either way.
+    # A self-hosted list (``model_catalog.providers.openrouter.url``) first, else the in-repo
+    # snapshot; the live /v1/models filter (tool support, free pricing) is applied on top either way.
     try:
         from hermes_cli.model_catalog import get_curated_openrouter_models
         remote = get_curated_openrouter_models()
@@ -644,8 +637,8 @@ def model_ids(*, force_refresh: bool = False) -> list[str]:
 
 
 def get_curated_nous_model_ids() -> list[str]:
-    """Curated Nous Portal model ids: the remote catalog manifest, else the in-repo
-    ``_PROVIDER_MODELS["nous"]`` snapshot. Always a list."""
+    """Curated Nous Portal model ids: a self-hosted list (``model_catalog.providers.nous.url``),
+    else the in-repo ``_PROVIDER_MODELS["nous"]`` snapshot. Always a list."""
     try:
         from hermes_cli.model_catalog import get_curated_nous_models
         remote = get_curated_nous_models()

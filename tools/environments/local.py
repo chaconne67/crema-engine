@@ -287,8 +287,7 @@ def _finalize_child_env(env: dict) -> dict:
 
 def _scrubbed_env(parts, plugin_strip: frozenset, fix_path) -> dict:
     """Filter each ``(items, unwrap_force)`` in *parts* into one env, rewrite PATH via
-    *fix_path* (always prepending the hermes install dir so bare ``hermes`` resolves
-    for children of a systemd/cron-launched gateway), then apply the shared guards."""
+    *fix_path*, then apply the shared guards."""
     out: dict[str, str] = {}
     for items, unwrap_force in parts:
         _filter_secret_env(items, out, unwrap_force=unwrap_force, plugin_strip=plugin_strip)
@@ -299,11 +298,10 @@ def _scrubbed_env(parts, plugin_strip: frozenset, fix_path) -> dict:
     from tools.env_passthrough import scoped_passthrough_additions
     out.update((k, v) for k, v in scoped_passthrough_additions(out).items() if k not in plugin_strip)
     path_key = _path_env_key(out)
-    # Keep bare ``hermes`` invocations available to child jobs even when the gateway was launched by a
-    # service manager or cron without the console script's directory on PATH. The terminal environment
-    # already applies this invariant; Cron scripts use this sanitizer directly (#92998).
+    # No ``hermes`` command folder is added: Crema ships none, and the one ``which`` would find is an
+    # upstream Hermes install on the same PC, another agent program Crema must not run.
     if path_key is not None:
-        out[path_key] = _prepend_hermes_bin_dir(fix_path(out.get(path_key, "")))
+        out[path_key] = fix_path(out.get(path_key, ""))
     return _finalize_child_env(out)
 
 
@@ -456,29 +454,31 @@ def strip_launch_profile_env(env: dict, target_home: "str | Path | None" = None)
 
 
 # --- Shell discovery ---
-def _windows_bash_candidates(custom: "str | None") -> list[str]:
-    """Ordered bash.exe candidates on Windows: HERMES_GIT_BASH_PATH, our portable Git
-    under %LOCALAPPDATA%\\hermes\\git (PortableGit ``bin`` and MinGit ``usr\\bin``),
-    known Git-for-Windows dirs, then PATH last — ``shutil.which`` may return WSL's
-    bash, which fails silently on Windows paths."""
+def _windows_bash_candidates() -> list[str]:
+    """Ordered bash.exe candidates on Windows: Git for Windows's install dirs, then PATH last —
+    ``shutil.which`` may return WSL's bash, which fails silently on Windows paths. Neither
+    ``HERMES_GIT_BASH_PATH`` nor upstream Hermes's PortableGit (%LOCALAPPDATA%\\hermes\\git) is
+    consulted: both belong to an upstream Hermes install, another agent program Crema must not use."""
     getenv = os.environ.get
     lad = getenv("LOCALAPPDATA", "")
     roots = [
-        lad and os.path.join(lad, "hermes", "git", "bin"),
-        lad and os.path.join(lad, "hermes", "git", "usr", "bin"),
         os.path.join(getenv("ProgramFiles", r"C:\Program Files"), "Git", "bin"),
         os.path.join(getenv("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Git", "bin"),
         lad and os.path.join(lad, "Programs", "Git", "bin"),
     ]
-    raw = [custom or "", *(os.path.join(r, "bash.exe") for r in roots if r)]
+    raw = [os.path.join(r, "bash.exe") for r in roots if r]
     candidates = list(dict.fromkeys(c for c in raw if c and os.path.isfile(c)))
     found = shutil.which("bash")
     if found and found not in candidates:
         # Skip WSL/system bash.exe (C:\Windows\System32\bash.exe or
         # WindowsApps bash.exe) — it is a stub launcher, not a usable shell.
         norm = os.path.normpath(found).lower()
+        # Upstream Hermes's installer also puts its PortableGit on the user PATH.
+        upstream = lad and os.path.normpath(os.path.join(lad, "hermes")).lower() + os.sep
         if "system32" in norm or "windowsapps" in norm:
             logger.debug("Skipping WSL/system bash.exe at %s", found)
+        elif upstream and norm.startswith(upstream):
+            logger.debug("Skipping upstream Hermes's bash.exe at %s", found)
         else:
             candidates.append(found)
     return candidates
@@ -490,15 +490,10 @@ def _find_bash() -> str:
         return (shutil.which("bash")
                 or next((p for p in ("/usr/bin/bash", "/bin/bash") if os.path.isfile(p)), None)
                 or os.environ.get("SHELL") or "/bin/sh")
-    custom = os.environ.get("HERMES_GIT_BASH_PATH")
-    candidates = _windows_bash_candidates(custom)
-    # First candidate that can actually start wins: a stale HERMES_GIT_BASH_PATH
-    # pointing at a broken install must not beat a healthy portable Git.
+    candidates = _windows_bash_candidates()
+    # First candidate that can actually start wins: a broken install must not beat a healthy one.
     for candidate in candidates:
         if _bash_starts(candidate):
-            if candidate != custom and custom and os.path.isfile(custom):
-                logger.warning(
-                    "HERMES_GIT_BASH_PATH=%s fails to start; using %s instead", custom, candidate)
             return candidate
     if candidates:
         probe_details = "\n".join(
@@ -509,9 +504,8 @@ def _find_bash() -> str:
         # real bash error instead of a less useful "not found".
         return candidates[0]
     raise RuntimeError(
-        "Git Bash not found. Hermes Agent requires Git for Windows on Windows.\n"
-        "Install it from: https://git-scm.com/download/win\n"
-        "Or set HERMES_GIT_BASH_PATH to your bash.exe location.")
+        "Git Bash not found. The terminal needs Git for Windows on Windows.\n"
+        "Install it from: https://git-scm.com/download/win")
 
 
 _git_bash_bin_dirs_cache: "list[str] | None" = None
@@ -578,41 +572,6 @@ def _find_shell() -> str:
 # Standard PATH entries for environments with minimal PATH.
 _SANE_PATH = ("/opt/homebrew/bin:/opt/homebrew/sbin:"
               "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
-
-# Cached directory containing the ``hermes`` console-script.
-# ``_SENTINEL`` distinguishes "not resolved yet" from a resolved ``None``.
-_SENTINEL = object()
-_HERMES_BIN_DIR: "str | None | object" = _SENTINEL
-
-
-def _resolve_hermes_bin_dir() -> str | None:
-    """Directory holding the ``hermes`` console-script, or None (cached). A gateway
-    launched by systemd/cron/a desktop launcher lacks the install dir on PATH and bare
-    ``hermes`` exits 127. Order: ``which``; absolute ``sys.argv[0]`` naming a real
-    hermes executable; ``sys.executable``'s dir if it holds the shim."""
-    global _HERMES_BIN_DIR
-    if _HERMES_BIN_DIR is not _SENTINEL:
-        return _HERMES_BIN_DIR  # type: ignore[return-value]
-    which = shutil.which("hermes")
-    argv0 = sys.argv[0] if sys.argv else ""
-    base = os.path.basename(argv0).lower()
-    exe_dir = os.path.dirname(sys.executable) if sys.executable else ""
-    shim = "hermes.exe" if _IS_WINDOWS else "hermes"
-    if which:
-        candidate = os.path.dirname(which)
-    elif (os.path.isabs(argv0) and (base == "hermes" or base.startswith("hermes."))
-            and os.path.isfile(argv0)):
-        candidate = os.path.dirname(argv0)
-    else:
-        candidate = exe_dir if exe_dir and os.path.isfile(os.path.join(exe_dir, shim)) else None
-    _HERMES_BIN_DIR = candidate if candidate and os.path.isdir(candidate) else None
-    return _HERMES_BIN_DIR
-
-
-def _prepend_hermes_bin_dir(existing_path: str) -> str:
-    """Prepend the hermes install dir to ``existing_path`` if missing."""
-    bin_dir = _resolve_hermes_bin_dir()
-    return _prepend_missing_path_entries(existing_path, [bin_dir] if bin_dir else [])
 
 
 def _managed_runtime_path_entries() -> list[str]:

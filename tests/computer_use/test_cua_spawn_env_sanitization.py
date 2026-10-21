@@ -14,7 +14,6 @@ full parent environment (provider API keys included):
 """
 
 import json
-import os
 from unittest.mock import MagicMock
 
 SECRET = "sk-super-secret-should-not-leak"
@@ -49,16 +48,9 @@ def _assert_sanitized(captured):
 
 
 def _assert_path_preserved(env):
-    """Original PATH entries survive sanitization; the hermes console-script
-    dir may be prepended (see _sanitize_subprocess_env, issue #92998) so we
-    assert the contract, not byte equality."""
-    from tools.environments.local import _resolve_hermes_bin_dir
-
+    """Original PATH entries survive sanitization."""
     path_val = env.get("PATH", "")
     assert path_val.endswith("/usr/bin:/bin"), path_val
-    hermes_bin = _resolve_hermes_bin_dir()
-    if hermes_bin and path_val != "/usr/bin:/bin":
-        assert path_val.startswith(hermes_bin + os.pathsep), path_val
 
 
 def _patch_windows_hide_flags(monkeypatch, module):

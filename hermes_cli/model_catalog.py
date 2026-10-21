@@ -1,34 +1,25 @@
-"""Remote model catalog fetcher.
+"""Model catalog settings and self-hosted curation lists.
 
-``get_catalog()`` returns the parsed manifest: in-process cache (TTL) → disk cache at
-``~/.hermes/cache/model_catalog.json`` → master URL fetch; any fetch failure keeps the stale copy
-(or ``{}``). ``get_curated_openrouter_models()`` / ``get_curated_nous_models()`` are thin accessors
-whose callers fall back to the in-repo lists on ``None``.
+The picker's curated OpenRouter / Nous Portal lists are the in-repo ones (``OPENROUTER_MODELS``,
+``_PROVIDER_MODELS`` in ``hermes_cli.models``). Crema does not fetch upstream Hermes's hosted
+catalog: it does not depend on other agent programs' servers, so the lists change with an engine
+release. A list the user hosts themselves (``model_catalog.providers.<name>.url``) still replaces the
+in-repo one for that provider; ``get_curated_openrouter_models()`` / ``get_curated_nous_models()``
+return it, or ``None`` so callers use the in-repo list.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import threading
-import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 from typing import Any
 
 from hermes_cli import __version__ as _HERMES_VERSION
-from utils import atomic_json_write
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CATALOG_URL = (
-    "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json")
-# The Docusaurus site sits behind Vercel, which occasionally 403s non-browser clients (bot
-# challenge); the raw GitHub copy is the same manifest and is not bot-gated.
-DEFAULT_CATALOG_FALLBACK_URLS: tuple[str, ...] = (
-    "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/website/static/api/model-catalog.json",
-)
 DEFAULT_TTL_MINUTES = 20
 # Legacy key, honoured only when the user set it explicitly; ``ttl_minutes`` is the shipped default.
 DEFAULT_TTL_HOURS = DEFAULT_TTL_MINUTES / 60.0
@@ -36,13 +27,6 @@ DEFAULT_FETCH_TIMEOUT = 8.0
 SUPPORTED_SCHEMA_VERSION = 1
 
 _HERMES_USER_AGENT = f"hermes-cli/{_HERMES_VERSION}"
-
-# In-process cache, invalidated against the disk file's path + mtime and TTL. The path matters:
-# under a multiplexed gateway each profile has its own ``<home>/cache/model_catalog.json``, and
-# mtime alone cannot tell two profiles' files apart.
-_catalog_cache: dict[str, Any] | None = None
-_catalog_cache_source_mtime: float = 0.0
-_catalog_cache_source_path: str = ""
 
 
 def _load_catalog_config() -> dict[str, Any]:
@@ -73,15 +57,8 @@ def _load_catalog_config() -> dict[str, Any]:
 
     return {
         "enabled": bool(raw.get("enabled", True)),
-        "url": str(raw.get("url") or DEFAULT_CATALOG_URL),
         "ttl_hours": ttl_minutes / 60.0,
         "providers": raw.get("providers") if isinstance(raw.get("providers"), dict) else {}}
-
-
-def _cache_path() -> Path:
-    """Disk cache path; imported lazily so tests can monkeypatch home."""
-    from hermes_constants import get_hermes_home
-    return get_hermes_home() / "cache" / "model_catalog.json"
 
 
 def _fetch_manifest(url: str, timeout: float) -> dict[str, Any] | None:
@@ -100,24 +77,6 @@ def _fetch_manifest(url: str, timeout: float) -> dict[str, Any] | None:
         logger.info("model catalog at %s failed schema validation", url)
         return None
     return data
-
-
-def _fetch_manifest_with_fallback(
-    primary_url: str, timeout: float, fallback_urls: tuple[str, ...] = DEFAULT_CATALOG_FALLBACK_URLS
-) -> dict[str, Any] | None:
-    """First manifest that fetches and validates from ``primary_url`` then ``fallback_urls`` (skipping
-    any equal to the primary so a raw-GitHub-configured operator doesn't double-fetch), or None."""
-    data = _fetch_manifest(primary_url, timeout)
-    if data is not None:
-        return data
-    for url in fallback_urls:
-        if not url or url == primary_url:
-            continue
-        data = _fetch_manifest(url, timeout)
-        if data is not None:
-            logger.info("model catalog primary URL failed; using fallback %s", url)
-            return data
-    return None
 
 
 def _validate_manifest(data: Any) -> bool:
@@ -141,114 +100,17 @@ def _validate_manifest(data: Any) -> bool:
     return True
 
 
-def _read_disk_cache() -> tuple[dict[str, Any] | None, float]:
-    """Return ``(data_or_none, mtime)``. mtime is 0 if file is missing."""
-    path = _cache_path()
-    try:
-        mtime = path.stat().st_mtime
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, json.JSONDecodeError):
-        return (None, 0.0)
-    return (data, mtime) if _validate_manifest(data) else (None, 0.0)
-
-
-def _write_disk_cache(data: dict[str, Any]) -> None:
-    try:
-        atomic_json_write(_cache_path(), data)
-    except OSError as exc:
-        logger.info("model catalog cache write failed: %s", exc)
-
-
-# Stale-while-revalidate: at most one background manifest refresh in flight per process. The
-# refreshed manifest lands on disk; the NEXT get_catalog() call picks it up via the mtime check.
-_catalog_swr_lock = threading.Lock()
-_catalog_swr_inflight = False
-
-
-def _spawn_catalog_swr_refresh(url: str) -> None:
-    """Refresh the catalog manifest off-thread (fire-and-forget, deduped)."""
-    global _catalog_swr_inflight
-    with _catalog_swr_lock:
-        if _catalog_swr_inflight:
-            return
-        _catalog_swr_inflight = True
-
-    def _refresh() -> None:
-        global _catalog_swr_inflight
-        try:
-            fetched = _fetch_manifest_with_fallback(url, DEFAULT_FETCH_TIMEOUT)
-            if fetched is not None:
-                _write_disk_cache(fetched)
-        except Exception:
-            logger.debug("catalog SWR refresh failed", exc_info=True)
-        finally:
-            with _catalog_swr_lock:
-                _catalog_swr_inflight = False
-
-    threading.Thread(target=_refresh, daemon=True, name="model-catalog-swr").start()
-
-
-def _remember(data: dict[str, Any], mtime: float) -> dict[str, Any]:
-    global _catalog_cache, _catalog_cache_source_mtime, _catalog_cache_source_path
-    _catalog_cache, _catalog_cache_source_mtime = data, mtime
-    _catalog_cache_source_path = str(_cache_path())
-    return data
-
-
-def _in_process_catalog() -> dict[str, Any] | None:
-    """The in-process copy when it mirrors the ACTIVE profile's cache file, else None."""
-    if _catalog_cache is not None and _catalog_cache_source_path == str(_cache_path()):
-        return _catalog_cache
-    return None
-
-
-def get_catalog(*, force_refresh: bool = False) -> dict[str, Any]:
-    """Parsed model catalog manifest, or ``{}`` on failure — never raises, so the CLI works offline
-    (callers treat a missing provider/model as "use the in-repo fallback")."""
-    cfg = _load_catalog_config()
-    if not cfg["enabled"]:
-        return {}
-    ttl_seconds = max(0.0, cfg["ttl_hours"] * 3600.0)
-    disk_data, disk_mtime = _read_disk_cache()
-    now = time.time()
-    disk_fresh = disk_data is not None and (now - disk_mtime) < ttl_seconds
-
-    if not force_refresh and disk_data is not None:
-        cached = _in_process_catalog()
-        if disk_fresh and cached is not None and disk_mtime == _catalog_cache_source_mtime:
-            return cached
-        if not disk_fresh:
-            # Stale-while-revalidate: serve the expired disk copy now and refresh off-thread so the
-            # /model picker (which calls this on every open) never blocks on the manifest fetch.
-            # Only a cold cache (no disk copy at all) still blocks.
-            _spawn_catalog_swr_refresh(cfg["url"])
-        return _remember(disk_data, disk_mtime)
-
-    fetched = _fetch_manifest_with_fallback(cfg["url"], DEFAULT_FETCH_TIMEOUT)
-    if fetched is not None:
-        _write_disk_cache(fetched)
-        new_disk_data, new_mtime = _read_disk_cache()
-        if new_disk_data is not None:
-            return _remember(new_disk_data, new_mtime)
-        return _remember(fetched, now)
-    if disk_data is not None:
-        return _remember(disk_data, disk_mtime)
-    return {}
-
-
 def refresh_interval_seconds() -> float:
     """Return the configured catalog TTL in seconds (the gateway poll cadence)."""
     return max(60.0, _load_catalog_config()["ttl_hours"] * 3600.0)
 
 
 def refresh_catalogs() -> bool:
-    """Force-refresh every remote catalog the picker reads (manifest, OpenRouter live list, Nous Portal
+    """Force-refresh the live provider lists the picker reads (OpenRouter's live list, Nous Portal
     recommendations), writing each disk cache so the next ``/model`` open in ANY process sees them.
-    Blocking; run it off the event loop."""
+    Blocking; run it off the event loop. False when ``model_catalog.enabled`` is off."""
     if not _load_catalog_config()["enabled"]:
         return False
-    catalog = get_catalog(force_refresh=True)
     try:
         from hermes_cli.models import fetch_nous_recommended_models, fetch_openrouter_models
 
@@ -256,7 +118,7 @@ def refresh_catalogs() -> bool:
         fetch_nous_recommended_models(force_refresh=True)
     except Exception:
         logger.debug("provider catalog refresh failed", exc_info=True)
-    return bool(catalog)
+    return True
 
 
 def _fetch_provider_override(provider: str) -> dict[str, Any] | None:
@@ -274,14 +136,10 @@ def _fetch_provider_override(provider: str) -> dict[str, Any] | None:
     return _fetch_manifest(override_url.strip(), DEFAULT_FETCH_TIMEOUT)
 
 
-def _block_of(manifest: dict[str, Any] | None, provider: str) -> dict[str, Any] | None:
-    block = (manifest or {}).get("providers", {}).get(provider)
-    return block if isinstance(block, dict) else None
-
-
 def _get_provider_block(provider: str) -> dict[str, Any] | None:
-    """Return the provider's manifest block, respecting per-provider overrides."""
-    return _block_of(_fetch_provider_override(provider), provider) or _block_of(get_catalog(), provider)
+    """The provider's block of its self-hosted override list, or None."""
+    block = (_fetch_provider_override(provider) or {}).get("providers", {}).get(provider)
+    return block if isinstance(block, dict) else None
 
 
 def _block_ids(block: dict[str, Any] | None) -> list[tuple[str, dict[str, Any]]]:
@@ -291,54 +149,11 @@ def _block_ids(block: dict[str, Any] | None) -> list[tuple[str, dict[str, Any]]]
 
 
 def get_curated_openrouter_models() -> list[tuple[str, str]] | None:
-    """OpenRouter's curated ``[(id, description), ...]`` from the manifest."""
+    """OpenRouter's curated ``[(id, description), ...]`` from a self-hosted override, or None."""
     rows = _block_ids(_get_provider_block("openrouter"))
     return [(mid, str(m.get("description") or "")) for mid, m in rows] or None
 
 
 def get_curated_nous_models() -> list[str] | None:
-    """Nous Portal's curated model ids from the manifest."""
+    """Nous Portal's curated model ids from a self-hosted override, or None."""
     return [mid for mid, _ in _block_ids(_get_provider_block("nous"))] or None
-
-
-def _default_model_from_block(block: dict[str, Any] | None) -> str | None:
-    """Id of the model entry labeled ``"default": true``, or None."""
-    return next((mid for mid, m in _block_ids(block) if m.get("default")), None)
-
-
-def get_default_model_from_cache(provider: str) -> str | None:
-    """The manifest's labeled default for ``provider`` (the model Hermes silently lands on when the
-    user never picked one) — in-process then disk cache only, never a fetch."""
-    cached = _in_process_catalog()
-    found = _default_model_from_block(_block_of(cached, provider)) if cached is not None else None
-    if found:
-        return found
-    disk_data, _mtime = _read_disk_cache()
-    return _default_model_from_block(_block_of(disk_data, provider)) if disk_data is not None else None
-
-
-def seed_cache_from_checkout(project_root: "Path | str") -> bool:
-    """Overwrite the disk cache with the checkout's ``website/static/api/model-catalog.json``.
-    After ``hermes update`` that file IS the newest catalog, so the picker stays current even when
-    the remote fetch is bot-gated. Validated, then written via the same atomic writer."""
-    src = Path(project_root) / "website" / "static" / "api" / "model-catalog.json"
-    try:
-        with open(src, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.debug("model catalog seed from checkout skipped (%s): %s", src, exc)
-        return False
-    if not _validate_manifest(data):
-        logger.debug("model catalog seed from checkout skipped: invalid manifest at %s", src)
-        return False
-    _write_disk_cache(data)
-    reset_cache()  # drop the in-process copy so the next read picks up the seed
-    return True
-
-
-def reset_cache() -> None:
-    """Clear the in-process cache. Used by tests and ``hermes model --refresh``."""
-    global _catalog_cache, _catalog_cache_source_mtime, _catalog_cache_source_path
-    _catalog_cache = None
-    _catalog_cache_source_mtime = 0.0
-    _catalog_cache_source_path = ""

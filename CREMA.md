@@ -154,6 +154,13 @@ Both bind 127.0.0.1 only.
    skill and no longer tell the reviewer to recommend `hermes skills install` / `hermes curator pin|adopt`,
    commands a Crema user has no way to run
 
+17. Each run works in the folder Crema names: `POST /v1/runs` takes `cwd` (the chat's project folder, else the app's
+   `Documents\Crema`; one that is not an existing absolute folder is a 400 `invalid_cwd`, never a fallback).
+   `gateway/platforms/api_server_runs.py` binds it as the turn's session cwd (`_bind_api_server_session(cwd=)`
+   in `gateway/platforms/api_server.py`, read by the system prompt's "Current working directory") and registers
+   it as the session's terminal/file-tool cwd (`register_task_env_overrides`), so concurrent chats keep their own;
+   tests in `tests/gateway/test_api_server_run_work_folder.py`
+
 Kept code still mentions many removed features (browser, memory, delegation, …) through imports that
 are either lazy or guarded; those modules stay until the code that names them is gone.
 

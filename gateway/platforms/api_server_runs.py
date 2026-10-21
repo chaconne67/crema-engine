@@ -472,6 +472,7 @@ class _RunLaunch:
     browser_control_principal: Any
     browser_control_transport_family: Any
     turn_author: Optional[Dict[str, Any]] = None  # memory-attribution label only; grants nothing
+    cwd: str = ""  # Crema: the folder this run works in ("" = the engine's TERMINAL_CWD)
 
     @property
     def approval_session_key(self) -> str:
@@ -622,6 +623,12 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
         user_message = raw_input[-1].get("content", "") if isinstance(raw_input, list) else ""
     if not user_message:
         return _json_error(_openai_error, "No user message found in input", status=400)
+    # Crema: the folder the run works in (the chat's project folder, else Crema's own). One that is not
+    # there is refused: the run never falls back to another folder.
+    cwd = body.get("cwd")
+    if cwd is not None and not (isinstance(cwd, str) and os.path.isabs(cwd) and os.path.isdir(cwd)):
+        return _json_error(
+            _openai_error, "'cwd' must be an existing absolute folder", code="invalid_cwd", status=400)
     try:
         turn_author = _api_server._request_turn_author(body)
     except ValueError as exc:
@@ -704,7 +711,7 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
         request_profile=_api_server._api_request_profile.get(),
         browser_control_principal=_api_server._api_request_browser_control_principal.get(),
         browser_control_transport_family=_api_server._api_request_browser_control_transport_family.get(),
-        turn_author=turn_author)
+        turn_author=turn_author, cwd=cwd or "")
     self._activate_admitted_request()
     # A canonical Bot Chat that a Desktop holds live is that Desktop's to run: executing here would
     # be a second writer beside its lease (#114959). The owner's mailbox takes the turn and its
@@ -771,7 +778,7 @@ def _run_agent_sync(self, run: _RunLaunch, agent, approval_notify, *, _api_serve
                 chat_id=session_id or "", session_key=run.approval_session_key, session_id=session_id or "",
                 profile=run.request_profile or "",
                 browser_control_principal=run.browser_control_principal,
-                browser_control_transport_family=run.browser_control_transport_family,
+                browser_control_transport_family=run.browser_control_transport_family, cwd=run.cwd,
                 # #98619 audited opt-in: the /v1/runs session id is wake-capable only when its
                 # own continuation path reloads session history — an explicit body/chained
                 # session id or a declared X-Hermes-Session-Key conversation (both load
@@ -784,6 +791,11 @@ def _run_agent_sync(self, run: _RunLaunch, agent, approval_notify, *, _api_serve
                 session_history_delivery="1" if run.session_history_delivery else "")
             if session_tokens:
                 resets.append((session_tokens, clear_session_vars))
+            if run.cwd:
+                # The terminal and the file tools' relative paths start in the run's folder (keyed by this
+                # session, so concurrent chats keep their own); bound above, the agent's own cwd follows it.
+                from tools.terminal_tool import register_task_env_overrides
+                register_task_env_overrides(effective_task_id, {"cwd": run.cwd, "cwd_source": "session"})
             if run.agent_kwargs["room_dispatch"] is not None:
                 policy = RoomExecutionPolicy.from_mapping(run.agent_kwargs["room_execution_policy"] or {})
                 resets.append((bind_room_execution_policy(policy), reset_room_execution_policy))

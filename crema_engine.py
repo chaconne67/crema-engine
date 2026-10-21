@@ -23,6 +23,32 @@ from pathlib import Path
 SIGN_IN_RETURN = "/api/mcp/oauth/callback/{server_name:path}"
 
 
+# What the Crema app itself sets when it starts the engine (src-tauri/src/lib.rs).
+APP_SET = frozenset({"HERMES_HOME", "HERMES_DASHBOARD_SESSION_TOKEN", "HERMES_FTS5_CJK_SO"})
+
+
+def use_only_crema_connections() -> None:
+    """Crema uses only what was connected in Crema: keys from its own .env (loaded after this) and sign-ins
+    from its own auth.json. The app starts the engine with the user's whole environment, so drop what would
+    connect or steer it from outside: every provider and tool key the engine knows (exported for other
+    programs, they would show as connected and be billed) and every Hermes setting (HERMES_* and the
+    terminal backend of an upstream Hermes install). Runs before anything loads .env."""
+    def drop(unwanted) -> None:
+        for name in list(os.environ):
+            if unwanted(name.upper()) and name.upper() not in APP_SET:
+                del os.environ[name]
+
+    # HERMES_* first: finding the providers below already reads some (plugin discovery).
+    drop(lambda name: name.startswith(("HERMES_", "_HERMES_")))
+    from hermes_cli.config import TERMINAL_CONFIG_ENV_MAP
+    from providers import list_providers
+    from tools.environments.local_env_policy import _HERMES_PROVIDER_ENV_BLOCKLIST
+
+    keys = set(_HERMES_PROVIDER_ENV_BLOCKLIST).union(
+        TERMINAL_CONFIG_ENV_MAP.values(), *(profile.env_vars for profile in list_providers()))
+    drop(keys.__contains__)
+
+
 def free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -56,6 +82,7 @@ async def main() -> None:
     token = os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN", "")
     if len(token) < 16:
         sys.exit("HERMES_DASHBOARD_SESSION_TOKEN is missing or too short")
+    use_only_crema_connections()
 
     # Only the packages bundled with Crema (the `crema` extra); never install more at run time.
     os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"

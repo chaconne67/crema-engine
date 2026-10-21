@@ -1214,7 +1214,11 @@ def _first_exchangeable_copilot_token(raw_tokens) -> str:
 
 def _copilot_cli_config_tokens() -> list[str]:
     """``copilotTokens`` from the GitHub Copilot CLI's own plaintext store (JSONC — strip
-    ``//``-comment lines), written by ``copilot login`` on hosts without an OS keychain."""
+    ``//``-comment lines), written by ``copilot login`` on hosts without an OS keychain. Another
+    program's login: read only when external logins are adopted."""
+    from agent.credential_sources import adopt_external_logins_enabled
+    if not adopt_external_logins_enabled():
+        return []
     cli_config = os.path.expanduser("~/.copilot/config.json")
     if not os.path.isfile(cli_config):
         return []

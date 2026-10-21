@@ -8,7 +8,6 @@ import logging
 import math
 import os
 import re
-import shutil
 import subprocess
 from collections.abc import Iterable
 from contextlib import suppress
@@ -214,68 +213,11 @@ _FAST_MODE_BETA = "fast-mode-2026-02-01"
 # Required for OAuth/subscription auth; matches Claude Code / pi-ai / OpenCode.
 _OAUTH_ONLY_BETAS = ["claude-code-20250219", "oauth-2025-04-20"]
 
-# Claude Code identity — OAuth requests without it intermittently 500. Anthropic rejects OAuth
-# requests whose user-agent version is too far behind the actual release, so the installed
-# version is detected and this fallback kept current.
-_CLAUDE_CODE_VERSION_FALLBACK = "2.1.74"
-_claude_code_version_cache: Optional[str] = None
-
-# Install prefixes probed in addition to PATH. GUI launches (the Electron desktop app, macOS
-# LaunchAgents) inherit the bare ``/usr/bin:/bin:/usr/sbin:/sbin``, which carries none of these,
-# so a PATH-only lookup finds nothing there even with the CLI installed — detection then returns
-# the stale fallback and Anthropic 400s with "Claude Code X does not support this model".
-# These are additive: on Windows none resolve to a file and detection falls back to the PATH
-# lookup (which handles PATHEXT), leaving current behaviour there unchanged.
-_CLAUDE_CODE_PREFIXES = (
-    "~/.local/bin", "~/.claude/local", "~/bin", "~/.npm-global/bin", "~/.bun/bin",
-    "~/.volta/bin", "/opt/homebrew/bin", "/usr/local/bin",
-)
-
-
-_CLAUDE_CODE_NAMES = ("claude", "claude-code")
-
-
-def _claude_code_candidates() -> List[str]:
-    """Executable paths to try, deduped and filtered to files that exist.
-
-    Two passes: every PATH hit first (what the user's shell would run), then the
-    well-known install prefixes. A single nested loop would probe a stale prefix
-    ``claude`` before a current PATH ``claude-code``.
-    """
-    seen: Dict[str, None] = {}
-    for name in _CLAUDE_CODE_NAMES:
-        hit = shutil.which(name)
-        if hit:
-            seen.setdefault(hit)
-    for prefix in _CLAUDE_CODE_PREFIXES:
-        for name in _CLAUDE_CODE_NAMES:
-            path = os.path.join(os.path.expanduser(prefix), name)
-            if os.path.isfile(path):
-                seen.setdefault(path)
-    return list(seen)
-
-
-def _detect_claude_code_version() -> str:
-    """Installed Claude Code version (``claude --version``), else the static fallback."""
-    for cmd in _claude_code_candidates():
-        with suppress(Exception):
-            result = subprocess.run(
-                [cmd, "--version"],
-                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                version = result.stdout.strip().split()[0]  # "2.1.74 (Claude Code)" or "2.1.74"
-                if version and version[0].isdigit():
-                    return version
-    return _CLAUDE_CODE_VERSION_FALLBACK
-
-
-def _get_claude_code_version() -> str:
-    """Detect lazily (only OAuth headers need it) and cache for the process."""
-    global _claude_code_version_cache
-    if _claude_code_version_cache is None:
-        _claude_code_version_cache = _detect_claude_code_version()
-    return _claude_code_version_cache
+# Claude Code identity — OAuth requests without it intermittently 500.
+# The Claude Code version Crema's Claude sign-in presents (Anthropic gates OAuth model access on it, and an
+# old one is answered 400 "Claude Code X does not support this model"). Fixed: Crema never runs the user's
+# own Claude Code to read it. Raise it when that 400 appears for a new model.
+_CLAUDE_CODE_VERSION = "2.1.306"
 
 
 _MCP_TOOL_PREFIX = "mcp__"
@@ -380,7 +322,7 @@ def _build_anthropic_client_with_bearer_hook(
         # identity is answered with 429 rate_limit_error "Error" (#114967) — same headers as the
         # static "oauth" style in build_anthropic_client.
         headers = _beta_header(betas + _OAUTH_ONLY_BETAS)
-        headers["user-agent"] = f"claude-code/{_get_claude_code_version()} (external, cli)"
+        headers["user-agent"] = f"claude-code/{_CLAUDE_CODE_VERSION} (external, cli)"
         headers["x-app"] = "cli"
     else:
         headers = _beta_header(betas)
@@ -466,7 +408,7 @@ def build_anthropic_client(api_key, base_url: str = None, timeout: float = None,
     if style == "kimi":
         headers = {**_attribution_headers(), **headers}
     elif style == "oauth":
-        headers["user-agent"] = f"claude-code/{_get_claude_code_version()} (external, cli)"
+        headers["user-agent"] = f"claude-code/{_CLAUDE_CODE_VERSION} (external, cli)"
         headers["x-app"] = "cli"
     if _is_opencode_endpoint(base_url):
         # OpenCode identifies clients by request headers (like OpenRouter). The OpenAI-wire paths

@@ -27,7 +27,12 @@ def _qwen_cli_auth_path() -> Path:
 
 
 def _read_qwen_cli_tokens() -> Dict[str, Any]:
+    from agent.credential_sources import adopt_external_logins_enabled
     from hermes_cli.auth import _qwen_cli_auth_path
+    # Qwen Code's own login: never read, refreshed or rewritten unless external logins are adopted.
+    if not adopt_external_logins_enabled():
+        raise _qwen_err("Qwen Code's login is not used: auth.adopt_external_logins is false.",
+                        "qwen_external_login_not_adopted")
     auth_path = _qwen_cli_auth_path()
     if not auth_path.exists():
         raise _qwen_err("Qwen CLI credentials not found. Run 'qwen auth qwen-oauth' first.", "qwen_auth_missing")

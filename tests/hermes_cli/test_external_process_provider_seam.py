@@ -18,6 +18,13 @@ from providers import register_provider
 from providers.base import ProviderProfile
 
 
+@pytest.fixture(autouse=True)
+def _external_logins_adopted(monkeypatch):
+    """These tests cover borrowing another program's CLI or login, which happens only when
+    auth.adopt_external_logins is on (Crema keeps it off: tests/test_crema_engine_connections.py)."""
+    monkeypatch.setattr("agent.credential_sources.adopt_external_logins_enabled", lambda: True)
+
+
 class _AcmeACPProfile(ProviderProfile):
     def create_client(self, **kwargs):
         return ("acme-client", kwargs)

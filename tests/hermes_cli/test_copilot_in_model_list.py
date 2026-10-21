@@ -55,6 +55,7 @@ def _no_other_copilot_creds(monkeypatch):
 
 
 def test_copilot_acp_listed_when_executable_resolves(tmp_path, monkeypatch, _no_other_copilot_creds):
+    monkeypatch.setattr("agent.credential_sources.adopt_external_logins_enabled", lambda: True)  # borrowing a CLI login is opt-in
     fake = tmp_path / ("copilot.exe" if os.name == "nt" else "copilot")
     fake.write_text("", encoding="utf-8")
     fake.chmod(0o755)

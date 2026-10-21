@@ -2006,6 +2006,9 @@ def get_external_process_provider_status(provider_id: str) -> Dict[str, Any]:
     pconfig = _registry_lookup(provider_id)
     if not pconfig or pconfig.auth_type != "external_process":
         return {"configured": False}
+    from agent.credential_sources import adopt_external_logins_enabled
+    if not adopt_external_logins_enabled():  # the CLI and its login are another program's
+        return {"configured": False}
     command, args, base_url, resolved_command, _ = _external_process_spec(pconfig)
     available = bool(resolved_command or base_url.startswith("acp+tcp://"))
     auth_verified, auth_source = _external_process_auth_evidence(provider_id, resolved_command)
@@ -2174,6 +2177,9 @@ def resolve_external_process_provider_credentials(provider_id: str) -> Dict[str,
         raise AuthError(
             f"Provider '{provider_id}' is not an external-process provider.",
             provider=provider_id, code="invalid_provider")
+    from agent.credential_sources import EXTERNAL_LOGINS_NOT_ADOPTED_NOTICE, adopt_external_logins_enabled
+    if not adopt_external_logins_enabled():
+        raise AuthError(EXTERNAL_LOGINS_NOT_ADOPTED_NOTICE, provider=provider_id, code="external_logins_not_adopted")
 
     command, args, base_url, resolved_command, command_env_vars = _external_process_spec(pconfig)
     if not resolved_command and not base_url.startswith("acp+tcp://"):

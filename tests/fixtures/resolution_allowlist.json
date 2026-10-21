@@ -1,10 +1,5 @@
 [
   {
-    "path": "agent/anthropic_adapter.py",
-    "symbol": "_claude_code_candidates",
-    "kind": "bare_which"
-  },
-  {
     "path": "agent/anthropic_credentials.py",
     "symbol": "run_oauth_setup_token",
     "kind": "bare_which"
@@ -688,11 +683,6 @@
     "path": "tui_gateway/methods_prompt.py",
     "symbol": "_",
     "kind": "bare_which"
-  },
-  {
-    "path": "agent/anthropic_adapter.py",
-    "symbol": "<module>",
-    "kind": "known_path_table"
   },
   {
     "path": "hermes_cli/_early_recovery.py",

@@ -291,6 +291,7 @@ class TestRuntimeProviderResolution:
         assert result["api_mode"] == "codex_responses"
 
     def test_runtime_copilot_acp_uses_process_runtime(self, monkeypatch):
+        monkeypatch.setattr("agent.credential_sources.adopt_external_logins_enabled", lambda: True)  # borrowing a CLI login is opt-in
         monkeypatch.setattr("hermes_cli.auth.shutil.which", lambda command: f"/usr/local/bin/{command}")
         monkeypatch.setenv("HERMES_COPILOT_ACP_ARGS", "--acp --stdio --debug")
 

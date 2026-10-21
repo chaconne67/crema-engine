@@ -56,6 +56,7 @@ def _pool_entry(provider: str, **fields):
 def test_hermes_model_routes_registered_plugin_profiles_to_the_generic_flow(plugin, monkeypatch, tmp_path):
     """Selecting an admitted external-process or OAuth plugin in `hermes model` persists config.model;
     an api_key profile still takes the api-key flow and an unknown slug stays a no-op."""
+    monkeypatch.setattr("agent.credential_sources.adopt_external_logins_enabled", lambda: True)  # borrowing a CLI login is opt-in
     import hermes_cli.main as main
     from hermes_cli import auth
     from hermes_cli.config import load_config
@@ -121,6 +122,7 @@ def test_any_external_process_plugin_counts_as_signed_in_when_its_binary_resolve
     """The Desktop ``explicit_only`` filter (``build_model_options_payload`` behind
     ``tui_gateway/methods_complete.py::model.options``) keeps an out-of-tree ACP row exactly like the
     bundled one: binary resolves → auth evidence; missing binary → hidden."""
+    monkeypatch.setattr("agent.credential_sources.adopt_external_logins_enabled", lambda: True)  # borrowing a CLI login is opt-in
     from hermes_cli import auth
     from hermes_cli.inventory import _external_process_signed_in, _filter_explicit_provider_rows
 

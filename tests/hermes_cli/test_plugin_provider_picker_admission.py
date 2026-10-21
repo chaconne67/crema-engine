@@ -43,6 +43,7 @@ def test_external_process_plugin_authenticated_flag_tracks_binary_and_catalog_us
         monkeypatch, tmp_path):
     """The row's authenticated flag is the real binary-resolves gate (not a hardcoded slug), and the
     profile's fallback_models is its catalog when the subprocess probe yields nothing."""
+    monkeypatch.setattr("agent.credential_sources.adopt_external_logins_enabled", lambda: True)  # borrowing a CLI login is opt-in
     from providers.base import ProviderProfile
     from hermes_cli import models, models_catalog_static
 

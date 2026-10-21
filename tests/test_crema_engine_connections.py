@@ -92,6 +92,21 @@ def test_copilot_cli_login_and_cli_are_not_used(monkeypatch, tmp_path):
     assert get_provider_profile("copilot-acp").fetch_models() is None
 
 
+def test_codex_model_menu_does_not_read_the_codex_cli_folder(monkeypatch, tmp_path):
+    from hermes_cli import codex_models
+
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text('model = "codex-cli-default"\n', encoding="utf-8")
+    (codex_home / "models_cache.json").write_text(json.dumps({"models": [{"slug": "codex-cli-cached"}]}))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    ids = codex_models.get_codex_model_ids()
+
+    assert "codex-cli-default" not in ids and "codex-cli-cached" not in ids
+    assert ids
+
+
 def test_qwen_cli_login_is_not_read_or_rewritten(monkeypatch, tmp_path):
     from hermes_cli import auth
 

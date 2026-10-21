@@ -195,12 +195,17 @@ def _read_cache_models(codex_home: Path) -> List[str]:
 
 
 def get_codex_model_ids(access_token: Optional[str] = None) -> List[str]:
-    """Available Codex model IDs: live API (if token) > config.toml default > local cache > defaults."""
-    codex_home = Path(os.getenv("CODEX_HOME", "").strip() or str(Path.home() / ".codex")).expanduser()
+    """Available Codex model IDs: live API (if token) > the Codex CLI's config.toml default and local
+    cache (only with auth.adopt_external_logins on: they are another program's files) > defaults."""
     if access_token:
         api_models = _fetch_models_from_api(access_token)
         if api_models:
             return _finalize_codex_models(api_models)
+    from agent.credential_sources import adopt_external_logins_enabled
+
+    if not adopt_external_logins_enabled():
+        return _finalize_codex_models(_drop_undiscovered_astra(list(DEFAULT_CODEX_MODELS)))
+    codex_home = Path(os.getenv("CODEX_HOME", "").strip() or str(Path.home() / ".codex")).expanduser()
     default_model = _read_default_model(codex_home)
     return _finalize_codex_models(_drop_undiscovered_astra(_dedupe([
         *([default_model] if default_model else []), *_read_cache_models(codex_home),

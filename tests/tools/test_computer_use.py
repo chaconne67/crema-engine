@@ -691,25 +691,6 @@ class TestImageAwareTokenEstimator:
 # Run-agent multimodal helpers
 # ---------------------------------------------------------------------------
 
-class TestRunAgentMultimodalHelpers:
-
-    def test_append_subdir_hint_to_multimodal_appends_to_text_part(self):
-        from agent.tool_dispatch_helpers import _append_subdir_hint_to_multimodal
-        env = {
-            "_multimodal": True,
-            "content": [
-                {"type": "text", "text": "summary"},
-                {"type": "image_url", "image_url": {"url": "x"}},
-            ],
-            "text_summary": "summary",
-        }
-        _append_subdir_hint_to_multimodal(env, "\n[subdir hint]")
-        assert env["content"][0]["text"] == "summary\n[subdir hint]"
-        # Image part untouched
-        assert env["content"][1]["type"] == "image_url"
-        assert env["text_summary"] == "summary\n[subdir hint]"
-
-
 # ---------------------------------------------------------------------------
 # Regression tests for bugs 2 & 5 from issue #24170 (cua-driver v0.1.6)
 # ---------------------------------------------------------------------------

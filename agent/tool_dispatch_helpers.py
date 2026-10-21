@@ -292,22 +292,6 @@ def _multimodal_text_summary(value: Any) -> str:
         return str(value)
 
 
-def _append_subdir_hint_to_multimodal(value: Dict[str, Any], hint: str) -> None:
-    """Append a subdir hint to the envelope's first text part (and ``text_summary``) in place."""
-    if not _is_multimodal_tool_result(value):
-        return
-    parts = value.get("content") or []
-    for p in parts:
-        if _is_text_part(p):
-            p["text"] = str(p.get("text", "")) + hint
-            break
-    else:
-        parts.insert(0, {"type": "text", "text": hint})
-        value["content"] = parts
-    if isinstance(value.get("text_summary"), str):
-        value["text_summary"] = value["text_summary"] + hint
-
-
 # ``\s*`` (not ``\s+``) after ``***`` matches patch_parser / file_tools, which
 # accept ``***Update File:`` with no space.
 _V4A_FILE_HEADER = re.compile(r'^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+)$', re.MULTILINE)
@@ -546,7 +530,7 @@ __all__ = [
     "_PATH_SCOPED_WRITERS", "_DESTRUCTIVE_PATTERNS", "_REDIRECT_OVERWRITE", "_is_destructive_command",
     "_plan_tool_batch_segments", "_should_parallelize_tool_batch", "_canonical_path",
     "_extract_parallel_scope_path", "_extract_parallel_scope_paths", "_paths_overlap",
-    "_is_multimodal_tool_result", "_multimodal_text_summary", "_append_subdir_hint_to_multimodal",
+    "_is_multimodal_tool_result", "_multimodal_text_summary",
     "_extract_file_mutation_targets", "_extract_landed_file_mutation_paths", "_extract_error_preview",
     "_trajectory_normalize_msg", "_detect_upstream_elision", "_maybe_append_elision_notice",
     "make_tool_result_message",

@@ -1828,10 +1828,14 @@ def _credential_fingerprint(provider: str) -> str:
                 _mtime_part(rel, get_hermes_home() / rel)
         except Exception:
             pass
-        for rel in ("~/.codex/auth.json", "~/.claude/.credentials.json",
-                    "~/.config/github-copilot/hosts.json", "~/.minimax/credentials.json"):
-            path = os.path.expanduser(rel)
-            _mtime_part(path, path)
+        # Other programs' logins count only when they can be borrowed (auth.adopt_external_logins).
+        from agent.credential_sources import adopt_external_logins_enabled
+
+        if adopt_external_logins_enabled():
+            for rel in ("~/.codex/auth.json", "~/.claude/.credentials.json",
+                        "~/.config/github-copilot/hosts.json", "~/.minimax/credentials.json"):
+                path = os.path.expanduser(rel)
+                _mtime_part(path, path)
 
     blob = "|".join(parts).encode("utf-8", errors="replace")
     # blake2b, not sha256: fingerprint only (collisions = a harmless cache miss), and CodeQL's

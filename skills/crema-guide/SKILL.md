@@ -46,17 +46,17 @@ metadata:
 | 사용자가 묻는 것 | 읽을 파일 |
 |---|---|
 | 창 구성, 사이드바, 프로젝트, 입력창, 보내기·멈추기, 끼어들기·대기열, 명령 메뉴(`/`), 첨부, 답의 일부를 골라 묻기, 답 아래 알림 줄, 문서 보기 창, 단축키 | [screens-and-chat.md](references/screens-and-chat.md) |
-| 설정 창의 각 쪽(계정·AI 연결·부가 기능 연동·페르소나·모양·입력)과 항목 | [settings.md](references/settings.md) |
+| 설정 창의 각 쪽(계정·AI 연결·부가 기능 연동·지침·모양·입력)과 항목 | [settings.md](references/settings.md) |
 | AI 연결(Provider), API 키, 구독 로그인, 대화별 모델, 추론 강도, 빠른 속도, 이미지·동영상·웹 검색 연결, 메일 연결, 웹 브라우저 조작(에고 라이트), 업무 서비스(Notion·Jira 등) 연결, 음성 입력(Thock) | [models-and-connections.md](references/models-and-connections.md) |
 | 기억, 지식 노트, 일하는 방법(스킬), 조용해진 대화 정리, 하루 정리, 되돌리기 | [memory-and-notebook.md](references/memory-and-notebook.md) |
 | 대화 여러 개를 함께 돌릴 때, 같은 파일 차례, 대화끼리 메시지 | [chats-together.md](references/chats-together.md) |
-| 에이전트가 쓸 수 있는 도구와 없는 도구, 명령 승인, 대화 압축, 지난 대화 검색, 제목, 작업 방식과 페르소나 | [engine.md](references/engine.md) |
+| 에이전트가 쓸 수 있는 도구와 없는 도구, 명령 승인, 대화 압축, 지난 대화 검색, 제목, 작업 방식과 지침(SOUL.md·CREMA.md) | [engine.md](references/engine.md) |
 | 계정·요금, 무료 기간, 업데이트, 판별 변화, 설치·제거, 데이터 저장 위치, 백업 | [account-updates-data.md](references/account-updates-data.md) |
 | 오류 문구, 안 될 때 확인할 것 | [troubleshooting.md](references/troubleshooting.md) |
 
 ## 늘 맞는 핵심 사실
 
-- 설정 창은 여섯 쪽이다: **계정 · AI 연결 · 부가 기능 연동 · 페르소나 · 모양 · 입력**.
+- 설정 창은 여섯 쪽이다: **계정 · AI 연결 · 부가 기능 연동 · 지침 · 모양 · 입력**.
   - 기억, 지식 노트, 스킬, 백업을 다루는 설정 화면은 없다. 모두 대화로 시킨다.
 - 모델은 대화마다 따로다.
   - 입력창의 모델 칩이나 `/model`은 지금 대화만 바꾼다.

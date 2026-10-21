@@ -217,7 +217,7 @@ TOOLSETS = {
         "messaging, audio, or clarify UI",
         [t for t in _CODING_TOOLS if t != "clarify"],
     ),
-    # Crema: the tools the Crema app offers (see CREMA.md); add a tool here when Crema adopts it.
+    # Crema: the tools the Crema app offers (see ENGINE.md); add a tool here when Crema adopts it.
     "hermes-api-server": _ts(
         "Crema — files, terminal, todo, web, image understanding, memory, past chats, skills, the knowledge notebook, "
         "messages to other chats, words Thock misheard, the user's mail, and their Google Calendar and Drive",

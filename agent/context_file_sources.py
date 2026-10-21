@@ -1,10 +1,11 @@
 """Per-file manifest of the context/instruction files behind the ``/context`` "Rules" figure.
 
-Crema's only context file is SOUL.md from the profile home: it never loads other agent programs'
-instruction files (AGENTS.md, CLAUDE.md, .cursorrules, .hermes.md, ...), so the manifest never lists them.
-Read-only: reports SOUL.md's size and whether it was loaded, truncated over the context-file cap, flagged by
-the injection scan (still loaded — it is the user's own file) or empty/unreadable. Nothing here builds a
-prompt or touches the truncation-warning ContextVar, so it is free of cache impact.
+Crema's context files are SOUL.md from the profile home and the CREMA.md files of
+``prompt_builder.crema_md_paths``: it never loads other agent programs' instruction files (AGENTS.md,
+CLAUDE.md, .cursorrules, .hermes.md, ...), so the manifest never lists them. Read-only: reports each file's
+size and whether it was loaded, truncated over the context-file cap, flagged by the injection scan (still
+loaded — the user's own file), blocked by it (a work folder's CREMA.md) or empty/unreadable. Nothing here
+builds a prompt or touches the truncation-warning ContextVar, so it is free of cache impact.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ _STATUS_DISPLAY = {
     "loaded": ("✓", ""),
     "truncated": ("◐", "truncated — over context_file_max_chars"),
     "flagged": ("⚠", "loaded — matched prompt-injection pattern(s); review the file"),
+    "blocked": ("✗", "not loaded — matched prompt-injection pattern(s); review the file"),
     "empty": ("○", "not loaded — empty file"),
     "unreadable": ("✗", "not loaded — could not be read"),
 }
@@ -40,36 +42,42 @@ def _empty_status(path: Path) -> str:
         return "unreadable"
 
 
-def _loaded_status(content: str, max_chars: int) -> str:
-    """Same scan the builder runs (``_scan_context_content``): the user's own SOUL.md still loads on a hit."""
+def _loaded_status(content: str, max_chars: int, user_authored: bool) -> str:
+    """Same scan the builder runs (``_scan_context_content``): the user's own file still loads on a hit."""
     if _pb._scan_for_threats(content.lstrip("﻿"), scope="context"):
-        return "flagged"
+        return "flagged" if user_authored else "blocked"
     return "truncated" if len(content) > max_chars else "loaded"
 
 
 def list_context_file_sources(
-    context_length: Optional[int] = None, home_override: "Path | None" = None,
+    context_length: Optional[int] = None, home_override: "Path | None" = None, cwd: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """SOUL.md's manifest row (``[]`` when the profile home has none). Keys: ``label``, ``path``, ``chars``,
-    ``est_tokens``, ``loaded`` and ``status`` ∈ loaded / truncated / flagged / empty / unreadable."""
+    """Manifest rows for SOUL.md and the CREMA.md files that exist, in prompt order. Keys: ``label``,
+    ``path``, ``chars``, ``est_tokens``, ``loaded`` and ``status`` ∈ loaded / truncated / flagged / blocked /
+    empty / unreadable."""
     home = Path(home_override) if home_override is not None else _pb.get_hermes_home()
-    soul_path = home / "SOUL.md"
-    if not _pb._exists_or_denied(soul_path):
-        return []
-    content = _pb._read_context_file(soul_path)
-    status = (_loaded_status(content, _pb._get_context_file_max_chars(context_length)) if content
-              else _empty_status(soul_path))
-    return [_entry("SOUL.md", soul_path, content, status)]
+    rows = []
+    for label, path, user_authored in [("SOUL.md", home / "SOUL.md", True), *_pb.crema_md_paths(cwd, home_override)]:
+        if not _pb._exists_or_denied(path):
+            continue
+        content = _pb._read_context_file(path)
+        status = (_loaded_status(content, _pb._get_context_file_max_chars(context_length), user_authored) if content
+                  else _empty_status(path))
+        rows.append(_entry(label, path, content, status))
+    return rows
 
 
 def context_file_sources_for_agent(agent: Any) -> List[Dict[str, Any]]:
     """The manifest for a live agent, scoped to the agent's own profile home."""
     if getattr(agent, "skip_context_files", False):
         return []
+    from agent.runtime_cwd import resolve_context_cwd
     from agent.system_prompt import _agent_home
     ctx_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
+    cwd = resolve_context_cwd()
     return list_context_file_sources(
         context_length=ctx_len if isinstance(ctx_len, int) else None, home_override=_agent_home(agent),
+        cwd=str(cwd) if cwd else None,
     )
 
 

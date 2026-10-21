@@ -170,7 +170,7 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
 
 # ── Protected agent-instruction files (always-ask approval gate) ─────────
 # Files that steer FUTURE agent behavior are a prompt-injection persistence
-# vector (AGENTS.md / CLAUDE.md / SOUL.md / .cursorrules / project .hermes tree).
+# vector (AGENTS.md / CLAUDE.md / SOUL.md / CREMA.md / .cursorrules / project .hermes tree).
 # Writes ALWAYS require human approval — even under --yolo — and fail closed
 # without a human channel. Basenames match in ANY directory, case-insensitively.
 # Ported from: RooCodeInc/Roo-Code RooProtectedController (Apache-2.0). Companion: the terminal-tool vector
@@ -181,7 +181,7 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
 # case-insensitive filesystems (macOS/Windows) cannot slip past; on case-sensitive filesystems most loaders
 # probe common case variants too, so the stricter behavior is kept uniform.
 _PROTECTED_INSTRUCTION_BASENAMES = frozenset({
-    "agents.md", "claude.md", "soul.md", ".cursorrules"})
+    "agents.md", "claude.md", "soul.md", "crema.md", ".cursorrules"})
 
 
 def _protected_instruction_config() -> tuple[bool, list[str]]:

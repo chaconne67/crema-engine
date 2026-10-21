@@ -13,7 +13,7 @@ import sys
 import threading
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from hermes_constants import (
     get_hermes_home, get_scratch_dir, get_skills_dir, is_wsl, reset_hermes_home_override, set_hermes_home_override,
@@ -1576,22 +1576,46 @@ def _read_context_file(path: Path) -> str:
         return ""
 
 
+def crema_md_paths(cwd: Optional[str] = None, home_override: "Path | None" = None) -> List[Tuple[str, Path, bool]]:
+    """The CREMA.md files a chat reads, in prompt order, as ``(label, path, user_authored)``: the one in
+    HERMES_HOME (every chat; the user writes it in Crema's settings), then the one at the top of the chat's
+    work folder *cwd* (that project only; it may have come with a downloaded folder, so a scanner hit blocks it)."""
+    home_file = (Path(home_override) if home_override is not None else get_hermes_home()) / "CREMA.md"
+    paths = [("CREMA.md (all chats)", home_file, True)]
+    if cwd and (Path(cwd) / "CREMA.md").resolve() != home_file.resolve():
+        paths.append(("CREMA.md (this project's folder)", Path(cwd) / "CREMA.md", False))
+    return paths
+
+
 def build_context_files_prompt(
     cwd: Optional[str] = None, skip_soul: bool = False, context_length: Optional[int] = None,
     allow_install_tree_fallback: bool = False, home_override: "Path | None" = None,
 ) -> str:
-    """Context files for the system prompt: SOUL.md from HERMES_HOME only, unless *skip_soul* (already the
-    identity slot).
+    """Context files for the system prompt: SOUL.md from HERMES_HOME unless *skip_soul* (already the identity
+    slot), then the user's CREMA.md instructions (``crema_md_paths``).
 
     Crema does not depend on other agent programs, so it never loads their instruction files from any folder
-    (.hermes.md/HERMES.md, AGENTS.md chain, CLAUDE.md, .cursorrules, .cursor/rules/*.mdc). *cwd* and
-    *allow_install_tree_fallback* stay in the signature for existing callers and select nothing.
+    (.hermes.md/HERMES.md, AGENTS.md chain, CLAUDE.md, .cursorrules, .cursor/rules/*.mdc), and reads CREMA.md
+    from the work folder itself only, never from the folders above it. *allow_install_tree_fallback* stays in
+    the signature for existing callers and selects nothing.
     """
+    parts = []
     soul = None if skip_soul else load_soul_md(context_length, home_override=home_override)
-    if not soul:
-        return ""
-    return ("# Project Context\n\nThe following project context files have been loaded and should be followed:\n\n"
-            + soul)
+    if soul:
+        parts.append("# Project Context\n\nThe following project context files have been loaded and should be "
+                     "followed:\n\n" + soul)
+    sections = []
+    for label, path, user_authored in crema_md_paths(cwd, home_override):
+        content = _read_context_file(path)
+        if content:
+            body = f"## {label}: {path}\n\n{_scan_context_content(content, label, user_authored=user_authored)}"
+            sections.append(_truncate_content(body, label, context_length=context_length, read_path=str(path)))
+    if sections:
+        precedence = (" Where the two disagree, follow this project's: it is the more specific." if len(sections) > 1
+                      else "")
+        parts.append("# CREMA.md\n\nThe user's standing instructions for working in Crema. Follow them in this "
+                     f"chat.{precedence}\n\n" + "\n\n".join(sections))
+    return "\n\n".join(parts)
 
 
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----

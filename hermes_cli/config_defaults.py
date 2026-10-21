@@ -1682,12 +1682,17 @@ DEFAULT_CONFIG = {
     # substitutes it; a bare string is shorthand for append. `replace` wins over `append` if both
     # are given.
     # Crema: its chat (the API server's runs endpoint) renders Markdown and shows MEDIA: files in place, unlike
-    # the unknown client the built-in api_server hint assumes.
+    # the unknown client the built-in api_server hint assumes. Models bold a quarter of a reply unasked (GPT most);
+    # the bold line brought that to under a tenth on the same question (2026-10-21).
     "platform_hints": {
         "api_server": {
             "replace": (
                 "You're answering in Crema, a desktop chat app that renders Markdown (headings, lists, tables, bold, "
-                "code blocks). To show the user an image, video or sound you made or saved, put "
+                "code blocks). Bold is rare: at most one short phrase of a few words per section, for what a reader "
+                "skimming the reply must not miss (the verdict, a key number, a warning). Never bold a whole sentence "
+                "or clause, and do not bold list-item labels: headings and lists already carry the structure, and when "
+                "much of a reply is bold nothing stands out and it reads heavy. To show the user an image, video or "
+                "sound you made or saved, put "
                 "MEDIA:<absolute local path> on a line of its own; Crema shows it in place, while a web link only "
                 "shows as a link (video_generate already saves its video on this computer). Mention any other file "
                 "by its plain path."

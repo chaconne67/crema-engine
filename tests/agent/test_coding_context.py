@@ -150,7 +150,17 @@ class TestProjectFacts:
         assert facts.manifests == ["package.json"]
         assert facts.package_managers == ["pnpm"]
         assert facts.verify_commands == ["pnpm run test"]  # dev excluded
-        assert facts.context_files == []
+
+    def test_other_agent_instruction_files_stay_out_of_facts_and_prompt(self, tmp_path):
+        _git_init(tmp_path)
+        for name in ("AGENTS.md", "CLAUDE.md", ".cursorrules"):
+            (tmp_path / name).write_text("x")
+        assert cc.project_facts_for(tmp_path)["contextFiles"] == []
+        block = cc.build_coding_workspace_block(tmp_path)
+        assert "Context files" not in block
+        for name in ("AGENTS.md", "CLAUDE.md", ".cursorrules"):
+            assert name not in block
+            assert name not in cc.CODING_AGENT_GUIDANCE
 
     def test_project_facts_for_matches_prompt_block(self, tmp_path):
         # Invariant: the structured facts the UI consumes must not drift from the
@@ -311,7 +321,7 @@ class TestProfiles:
 # ── detection signals ───────────────────────────────────────────────────────
 
 class TestDetection:
-    @pytest.mark.parametrize("marker", ["pyproject.toml", "package.json", "go.mod", "AGENTS.md"])
+    @pytest.mark.parametrize("marker", ["pyproject.toml", "package.json", "go.mod"])
     def test_project_manifest_triggers_without_git(self, tmp_path, marker):
         (tmp_path / marker).write_text("x")
         cfg = {"agent": {"coding_context": "auto"}}
@@ -323,6 +333,12 @@ class TestDetection:
         sub.mkdir(parents=True)
         cfg = {"agent": {"coding_context": "auto"}}
         assert cc.is_coding_context(platform="cli", cwd=sub, config=cfg) is True
+
+    @pytest.mark.parametrize("name", ["AGENTS.md", "CLAUDE.md", ".cursorrules"])
+    def test_other_agent_instruction_file_is_not_a_project_marker(self, tmp_path, name):
+        (tmp_path / name).write_text("x")
+        cfg = {"agent": {"coding_context": "auto"}}
+        assert cc.is_coding_context(platform="cli", cwd=tmp_path, config=cfg) is False
 
     def test_bare_dir_is_not_coding(self, tmp_path):
         cfg = {"agent": {"coding_context": "auto"}}

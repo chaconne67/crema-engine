@@ -32,10 +32,8 @@ INTERACTIVE_CODING_PLATFORMS = {"cli", "tui", "acp", "desktop", ""}
 _PROJECT_MARKERS = (
     "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "package.json", "tsconfig.json", "deno.json",
     "Cargo.toml", "go.mod", "pom.xml", "build.gradle", "build.gradle.kts", "Gemfile", "composer.json", "mix.exs",
-    "pubspec.yaml", "CMakeLists.txt", "Makefile", "Dockerfile", "AGENTS.md", "CLAUDE.md", ".cursorrules",
+    "pubspec.yaml", "CMakeLists.txt", "Makefile", "Dockerfile",
 )
-# Agent-instruction files surfaced separately from manifests in the snapshot.
-_CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md", ".cursorrules")
 
 # Extensions that make a manifest-less git repo a *code* workspace (a `git init` notes folder is not).
 _CODE_EXTENSIONS = frozenset({
@@ -100,8 +98,8 @@ CODING_AGENT_GUIDANCE = (
     "- Edit with `patch`/`write_file`. Do NOT print code blocks to the user as "
     "a substitute for editing — apply the change, then summarise it. Only show "
     "code when the user explicitly asks to see it.\n"
-    "- Match the project's existing style and conventions; AGENTS.md / "
-    "CLAUDE.md / .cursorrules already in context win over your defaults. Touch "
+    "- Follow the style and conventions you see in neighbouring code rather "
+    "than your own defaults. Touch "
     "only what the task needs — no drive-by refactors, renames, or reformatting "
     "— and add any imports/dependencies your code requires.\n"
     "- If an edit fails to apply, re-read the file to get the current exact "
@@ -219,7 +217,7 @@ def _home() -> Optional[Path]:
 
 def _marker_root(cwd: Path) -> Optional[Path]:
     """Nearest ancestor (≤6 levels) that looks like a project root, or ``None``. ``$HOME``
-    and the shared temp root are skipped: a Makefile/AGENTS.md in the home dir is global
+    and the shared temp root are skipped: a Makefile in the home dir is global
     config, and a stray manifest in /tmp must not flip every session under it."""
     current = cwd.resolve()
     try:
@@ -460,11 +458,10 @@ class ProjectFacts:
     manifests: list[str]
     package_managers: list[str]
     verify_commands: list[str]
-    context_files: list[str]
 
 
 def detect_project_facts(root: Path) -> ProjectFacts:
-    """Detect manifests, package manager(s), verify commands, context files (single source of truth)."""
+    """Detect manifests, package manager(s), verify commands (single source of truth)."""
     verify: list[str] = []
     if (root / "scripts" / "run_tests.sh").is_file():
         verify.append("scripts/run_tests.sh")
@@ -483,12 +480,11 @@ def detect_project_facts(root: Path) -> ProjectFacts:
         if makefile and re.search(rf"^{re.escape(name)}\s*:", makefile, re.MULTILINE)
     )
     return ProjectFacts(
-        manifests=[m for m in _PROJECT_MARKERS if m not in _CONTEXT_FILES and (root / m).is_file()],
+        manifests=[m for m in _PROJECT_MARKERS if (root / m).is_file()],
         package_managers=list(dict.fromkeys(
             pm for lock, pm in (*_PY_LOCKFILES, *_JS_LOCKFILES) if (root / lock).is_file()
         )),
         verify_commands=list(dict.fromkeys(verify))[:_MAX_VERIFY_COMMANDS],
-        context_files=[c for c in _CONTEXT_FILES if (root / c).is_file()],
     )
 
 
@@ -510,7 +506,7 @@ def project_facts_for(cwd: Optional[str | Path] = None) -> Optional[dict[str, An
         "manifests": f.manifests,
         "packageManagers": f.package_managers,
         "verifyCommands": f.verify_commands,
-        "contextFiles": f.context_files,
+        "contextFiles": [],  # wire key of project.facts; Crema reads no other agent's instruction files
     }
 
 
@@ -558,8 +554,6 @@ def build_coding_workspace_block(cwd: Optional[str | Path] = None) -> str:
         lines.append(f"- Project: {', '.join(f.manifests[:6])}{managers}")
     if f.verify_commands:
         lines.append(f"- Verify: {'; '.join(f.verify_commands)}")
-    if f.context_files:
-        lines.append(f"- Context files: {', '.join(f.context_files)}")
     return "\n".join(lines)
 
 

@@ -139,10 +139,6 @@ def _normalize_event(event_type: Any) -> Any:
     except (ValueError, TypeError):
         return None
 
-_CONTEXT_FILES_INTRO = (
-    "\nThe workspace's project context files are reproduced below. Their conventions and invariants are binding for "
-    "your work in this workspace.\n\n"
-)
 _COMPLETION_INSTRUCTIONS = (
     "\nComplete this task using the tools available to you. When finished, provide a clear, concise summary of:\n"
     "- What you did\n- What you found or accomplished\n- Any files you created or modified\n- Any issues encountered\n\n"
@@ -194,18 +190,6 @@ def _build_child_system_prompt(
             f"{workspace_path}\n"
             "Use this exact path for local repository/workdir operations unless the task explicitly says otherwise."
         )
-        # Project context files (AGENTS.md / CLAUDE.md / .cursorrules ...) via the SAME discovery/priority/cap logic
-        # as the main agent's prompt: children are built with skip_context_files=True, so without this a subagent
-        # works in a repo blind to its conventions. SOUL.md is skipped (identity belongs to the parent).
-        # workspace_path comes only from explicit sources (_resolve_workspace_hint, never bare getcwd), so the
-        # install-tree-fallback leak doesn't apply. Best-effort.
-        _ctx_files = ""
-        with _quiet("subagent: workspace context-files load failed", exc_info=True):
-            # See #64590.
-            from agent.prompt_builder import build_context_files_prompt
-            _ctx_files = build_context_files_prompt(cwd=str(workspace_path), skip_soul=True)
-        if _ctx_files.strip():
-            parts.append(_CONTEXT_FILES_INTRO + _ctx_files.strip())
     parts.append(_COMPLETION_INSTRUCTIONS)
     if role == "orchestrator":
         child_note = _LEAF_CHILDREN_NOTE if child_depth + 1 >= max_spawn_depth else _NESTED_CHILDREN_NOTE
@@ -221,8 +205,7 @@ def _resolve_workspace_hint(parent_agent) -> Optional[str]:
     absolute directory is ever injected (never a fake container path)."""
     from agent.runtime_cwd import scope_terminal_cwd
     candidates = [
-        scope_terminal_cwd(), getattr(getattr(parent_agent, "_subdirectory_hints", None), "working_dir", None),
-        getattr(parent_agent, "terminal_cwd", None), getattr(parent_agent, "cwd", None),
+        scope_terminal_cwd(), getattr(parent_agent, "terminal_cwd", None), getattr(parent_agent, "cwd", None),
     ]
     for candidate in filter(None, candidates):
         with _quiet(None):

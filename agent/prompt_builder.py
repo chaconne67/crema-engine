@@ -33,8 +33,7 @@ from utils import atomic_json_write, file_signature
 logger = logging.getLogger(__name__)
 
 
-# Default read deadline for context files (SOUL.md, AGENTS.md, .cursorrules,
-# ...); overridable via ``context_file_read_timeout`` in config.yaml.
+# Default read deadline for context files (SOUL.md); overridable via ``context_file_read_timeout`` in config.yaml.
 # Intentionally short: network-backed filesystems (iCloud Drive, OneDrive,
 # NFS) can fault-in an evicted file and block a cold read indefinitely, which
 # stalls system-prompt assembly before the first turn.
@@ -79,7 +78,7 @@ def _read_text_with_timeout(path: Path, timeout: Optional[float] = None) -> Opti
 
 
 def _scan_context_content(content: str, filename: str, *, user_authored: bool = False) -> str:
-    """Scan a context file (AGENTS.md, .cursorrules, SOUL.md) for injection; matches are BLOCKED.
+    """Scan a context file (SOUL.md) for injection; matches are BLOCKED.
 
     "context" scope only (strict-scope SSH-backdoor/persistence/exfil patterns are too aggressive for a
     cloned repo's docs); blocking, not warning, because the file would otherwise enter the prompt verbatim.
@@ -88,8 +87,7 @@ def _scan_context_content(content: str, filename: str, *, user_authored: bool = 
     SOUL.md sits in the same trust class as config.yaml — file-tool writes to it go through the
     protected-instruction approval gate (``tools/file_tools_write_guards.py``) and project checkouts never
     supply it — so a user who *documents* "ignore previous instructions" in their security guidance
-    must not lose their whole identity file to a one-line log entry (#112570). Project-dir files
-    (repo AGENTS.md / .cursorrules / .hermes.md) arrive with the checkout and keep blocking, and so does
+    must not lose their whole identity file to a one-line log entry (#112570). A hit keeps blocking for
     a SOUL.md owned by a profile distribution (``hermes profile install <git-url>`` copies it in unscanned;
     ``load_soul_md`` passes ``user_authored=False`` when ``distribution.yaml`` owns the file).
     """
@@ -108,51 +106,11 @@ def _scan_context_content(content: str, filename: str, *, user_authored: bool = 
     return f"[BLOCKED: {filename} contained potential prompt injection ({', '.join(findings)}). Content not loaded.]"
 
 
-def _find_git_root(start: Path) -> Optional[Path]:
-    """Nearest ancestor (or *start* itself) containing ``.git``, else None."""
-    current = start.resolve()
-    # A parent the process may not stat (locked-down /home on shared hosts) is "no .git here", not a crash.
-    return next((p for p in (current, *current.parents) if _exists_or_denied(p / ".git")), None)
-
-
 def _exists_or_denied(path: Path) -> bool:
     try:
         return path.exists()
     except OSError:
         return False
-
-
-def _is_file_or_denied(path: Path) -> bool:
-    try:
-        return path.is_file()
-    except OSError:
-        return False
-
-
-def _is_dir_or_denied(path: Path) -> bool:
-    try:
-        return path.is_dir()
-    except OSError:
-        return False
-
-
-def _find_hermes_md(cwd: Path) -> Optional[Path]:
-    """Nearest ``.hermes.md`` / ``HERMES.md`` from *cwd* up to the git root, else None."""
-    stop_at = _find_git_root(cwd)
-    current = cwd.resolve()
-    # No git root: cwd only — walking parents could pick up a file planted in /tmp, /home, etc.
-    for directory in [current, *current.parents] if stop_at else [current]:
-        found = next((directory / n for n in (".hermes.md", "HERMES.md") if _is_file_or_denied(directory / n)), None)
-        if found or directory == stop_at:
-            return found
-    return None
-
-
-def _strip_yaml_frontmatter(content: str) -> str:
-    """Drop optional ``---`` YAML frontmatter so only the markdown body is injected."""
-    content = content.lstrip("\ufeff")
-    end = content.find("\n---", 3) if content.startswith("---") else -1
-    return (content[end + 4:].lstrip("\n") or content) if end != -1 else content
 
 
 # Crema: the identity used when SOUL.md is missing or empty is the one SOUL.md is seeded with.
@@ -1618,179 +1576,22 @@ def _read_context_file(path: Path) -> str:
         return ""
 
 
-def _context_section(content: str, label: str, warn_name: str, path: Path, context_length: Optional[int]) -> str:
-    """Threat-scan *content*, render it as ``## <label>``, cap it to the budget (*warn_name* labels warnings)."""
-    body = f"## {label}\n\n{_scan_context_content(content, label)}"
-    return _truncate_content(body, warn_name, context_length=context_length, read_path=str(path))
-
-
-def _hermes_md_candidates(cwd_path: Path) -> list[tuple[str, Path, str]]:
-    """.hermes.md / HERMES.md — nearest match walking up to the git root."""
-    path = _find_hermes_md(cwd_path)
-    if path is None:
-        return []
-    label = str(path.relative_to(cwd_path)) if path.is_relative_to(cwd_path) else path.name
-    return [(label, path, _read_context_file(path))]
-
-
-def _agents_md_directory_chain(cwd_path: Path) -> list[Path]:
-    """Directories to check for AGENTS.md: git root first, cwd last (deeper = precedence); cwd only without a root."""
-    current = cwd_path.resolve()
-    root = _find_git_root(current)
-    if root is None or root == current or not current.is_relative_to(root):
-        return [current]
-    parts = current.relative_to(root).parts
-    return [root] + [root.joinpath(*parts[: i + 1]) for i in range(len(parts))]
-
-
-def _agents_md_candidates(cwd_path: Path) -> list[tuple[str, Path, str]]:
-    """AGENTS.md chain from git root down to cwd; per directory the first NON-EMPTY of ``AGENTS.override.md`` /
-    ``AGENTS.md`` / ``agents.md`` wins (empty or unreadable files are listed but fall through)."""
-    cwd_resolved = cwd_path.resolve()
-    found: list[tuple[str, Path, str]] = []
-    for directory in _agents_md_directory_chain(cwd_resolved):
-        for name in ("AGENTS.override.md", "AGENTS.md", "agents.md"):
-            candidate = directory / name
-            if not _exists_or_denied(candidate):
-                continue
-            content = _read_context_file(candidate)
-            label = name if directory == cwd_resolved else os.path.relpath(candidate, cwd_resolved)
-            found.append((label, candidate, content))
-            if content:
-                break  # first name match wins per directory
-    return found
-
-
-def _claude_md_candidates(cwd_path: Path) -> list[tuple[str, Path, str]]:
-    """CLAUDE.md / claude.md — cwd only, first non-empty wins."""
-    found: list[tuple[str, Path, str]] = []
-    for name in ("CLAUDE.md", "claude.md"):
-        candidate = cwd_path / name
-        if not _exists_or_denied(candidate):
-            continue
-        content = _read_context_file(candidate)
-        found.append((name, candidate, content))
-        if content:
-            break
-    return found
-
-
-def _cursorrules_candidates(cwd_path: Path) -> list[tuple[str, Path, str]]:
-    """.cursorrules + .cursor/rules/*.mdc — cwd only; every non-empty file is concatenated."""
-    candidates: list[tuple[str, Path]] = [(".cursorrules", cwd_path / ".cursorrules")]
-    cursor_rules_dir = cwd_path / ".cursor" / "rules"
-    if _is_dir_or_denied(cursor_rules_dir):
-        candidates += [(f".cursor/rules/{f.name}", f) for f in sorted(cursor_rules_dir.glob("*.mdc"))]
-    return [(label, path, _read_context_file(path)) for label, path in candidates if _exists_or_denied(path)]
-
-
-# Project-context types in priority order: the first type with any non-empty file wins, later types are
-# shadowed. Both the prompt build (loaders below) and the /context manifest
-# (``agent/context_file_sources.py``) enumerate files through these finders, so the two cannot drift.
-_CONTEXT_FILE_CANDIDATES = {
-    "hermes_md": _hermes_md_candidates,
-    "agents_md": _agents_md_candidates,
-    "claude_md": _claude_md_candidates,
-    "cursorrules": _cursorrules_candidates,
-}
-
-
-def discover_context_files(cwd_path: Path) -> list[tuple[str, str, Path, str]]:
-    """Every project-context file on disk as ``(kind, label, path, content)`` in priority order.
-    ``content == ""`` means empty or unreadable — such a file is never loaded."""
-    return [(kind, label, path, content)
-            for kind, finder in _CONTEXT_FILE_CANDIDATES.items() for label, path, content in finder(cwd_path)]
-
-
-def _project_context_suppressed(cwd: Optional[str], cwd_path: Path, allow_install_tree_fallback: bool) -> bool:
-    """A FALLBACK-picked cwd inside the Hermes install tree must not gain system-prompt authority (the desktop
-    default would load this repo's contributor AGENTS.md). An explicitly configured cwd is honored verbatim —
-    the Hermes tree is a legitimate workspace when the user deliberately points a session at it — and
-    CLI-style surfaces pass allow_install_tree_fallback=True because their launch dir IS the user's shell cwd
-    (developing Hermes in-tree). See #64590."""
-    from agent.runtime_cwd import _is_install_tree
-    return cwd is None and not allow_install_tree_fallback and _is_install_tree(cwd_path)
-
-
-def _load_hermes_md(cwd_path: Path, context_length: Optional[int] = None) -> str:
-    """.hermes.md / HERMES.md — nearest match walking up to the git root."""
-    for label, path, content in _hermes_md_candidates(cwd_path):
-        if content:
-            return _context_section(_strip_yaml_frontmatter(content), label, ".hermes.md", path, context_length)
-    return ""
-
-
-def _load_agents_md(cwd_path: Path, context_length: Optional[int] = None) -> str:
-    """AGENTS.md — merged directory chain from git root down to cwd.
-
-    Each directory on the chain (see ``_agents_md_candidates``) contributes its ``AGENTS.override.md`` /
-    ``AGENTS.md`` / ``agents.md`` (first name wins per directory) as its own provenance-labelled section.
-    ``AGENTS.override.md`` wins over ``AGENTS.md`` so a developer can keep a personal, typically-gitignored
-    override next to the committed project instructions without editing the tracked file (same convention as
-    earendil-works/pi#7681). Identical content encountered again further down the chain (copied or symlinked
-    files) is deduplicated. With a single match — the common case, and always the case outside a git repo —
-    output is identical to the historical single-file behavior.
-    """
-    sections: list[str] = []
-    seen_content: set = set()
-    for label, candidate, content in _agents_md_candidates(cwd_path):
-        if content and content not in seen_content:  # else: empty, or an identical copy along the chain
-            seen_content.add(content)
-            sections.append(_context_section(content, label, label, candidate, context_length))
-    if len(sections) <= 1:
-        return sections[0] if sections else ""
-    # Per-file budgets applied above; also cap the merged chain so a deep monorepo can't multiply the budget.
-    return _truncate_content("\n\n".join(sections), "AGENTS.md (directory chain)", context_length=context_length,
-                             read_path=str(cwd_path.resolve() / "AGENTS.md"))
-
-
-def _load_claude_md(cwd_path: Path, context_length: Optional[int] = None) -> str:
-    """CLAUDE.md / claude.md — cwd only."""
-    for name, path, content in _claude_md_candidates(cwd_path):
-        if content:
-            return _context_section(content, name, "CLAUDE.md", path, context_length)
-    return ""
-
-
-def _load_cursorrules(cwd_path: Path, context_length: Optional[int] = None) -> str:
-    """.cursorrules + .cursor/rules/*.mdc — cwd only, concatenated."""
-    cursorrules_content = "".join(
-        f"## {label}\n\n{_scan_context_content(content, label)}\n\n"
-        for label, _path, content in _cursorrules_candidates(cwd_path) if content
-    )
-    if not cursorrules_content:
-        return ""
-    return _truncate_content(cursorrules_content, ".cursorrules", context_length=context_length,
-                             read_path=str(cwd_path / ".cursorrules"))
-
-
 def build_context_files_prompt(
     cwd: Optional[str] = None, skip_soul: bool = False, context_length: Optional[int] = None,
     allow_install_tree_fallback: bool = False, home_override: "Path | None" = None,
 ) -> str:
-    """Discover and load context files for the system prompt (each capped, see ``_get_context_file_max_chars``).
+    """Context files for the system prompt: SOUL.md from HERMES_HOME only, unless *skip_soul* (already the
+    identity slot).
 
-    Only ONE project context type loads, first found wins: .hermes.md/HERMES.md (walk to git root) →
-    AGENTS.md chain (git root → cwd) → CLAUDE.md (cwd) → .cursorrules + .cursor/rules/*.mdc (cwd). SOUL.md
-    from HERMES_HOME is independent and always included unless *skip_soul* (already the identity slot).
+    Crema does not depend on other agent programs, so it never loads their instruction files from any folder
+    (.hermes.md/HERMES.md, AGENTS.md chain, CLAUDE.md, .cursorrules, .cursor/rules/*.mdc). *cwd* and
+    *allow_install_tree_fallback* stay in the signature for existing callers and select nothing.
     """
-    cwd_path = Path(cwd if cwd is not None else os.getcwd()).resolve()
-    if _project_context_suppressed(cwd, cwd_path, allow_install_tree_fallback):
-        logger.warning(
-            "skipping project-context discovery: working-directory resolution fell back to the Hermes "
-            "install tree (%s) — set terminal.cwd to your project directory", cwd_path,
-        )
-        sections = []
-    else:
-        sections = [_load_hermes_md(cwd_path, context_length) or _load_agents_md(cwd_path, context_length)
-                    or _load_claude_md(cwd_path, context_length) or _load_cursorrules(cwd_path, context_length)]
-    if not skip_soul:
-        sections.append(load_soul_md(context_length, home_override=home_override))
-    sections = [s for s in sections if s]
-    if not sections:
+    soul = None if skip_soul else load_soul_md(context_length, home_override=home_override)
+    if not soul:
         return ""
     return ("# Project Context\n\nThe following project context files have been loaded and should be followed:\n\n"
-            + "\n".join(sections))
+            + soul)
 
 
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----

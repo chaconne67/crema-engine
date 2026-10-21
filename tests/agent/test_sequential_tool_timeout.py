@@ -59,7 +59,7 @@ def _deterministic_worker_start(monkeypatch):
     yield
 
 
-def _make_agent(tmp_path: Path) -> AIAgent:
+def _make_agent(tmp_path: Path, *, skip_context_files: bool = True) -> AIAgent:
     with (
         patch(
             "model_tools.get_tool_definitions",
@@ -83,7 +83,7 @@ def _make_agent(tmp_path: Path) -> AIAgent:
             api_key="test-key",
             base_url="https://openrouter.ai/api/v1",
             quiet_mode=True,
-            skip_context_files=True,
+            skip_context_files=skip_context_files,
             skip_memory=True,
         )
     agent._flush_messages_to_session_db = MagicMock(return_value=True)
@@ -91,7 +91,6 @@ def _make_agent(tmp_path: Path) -> AIAgent:
         side_effect=lambda _name, _args, result, **_kwargs: result
     )
     agent._record_file_mutation_result = MagicMock()
-    agent._subdirectory_hints.check_tool_call = MagicMock(return_value="")
     agent._tool_result_content_for_active_model = MagicMock(
         side_effect=lambda _name, result: result
     )
@@ -115,6 +114,30 @@ def _clarify_call(call_id: str = "clarify-1"):
             arguments='{"question": "Pick one?", "choices": ["A", "B"]}',
         ),
     )
+
+
+def test_tool_results_never_carry_other_agent_instruction_files(tmp_path, monkeypatch):
+    """A tool touching a folder with AGENTS.md / CLAUDE.md / .cursorrules gets its own result back, nothing
+    appended: Crema never feeds other agent programs' instruction files to the model."""
+    workspace = tmp_path / "ws"
+    pkg = workspace / "pkg"
+    pkg.mkdir(parents=True)
+    for name in ("AGENTS.md", "CLAUDE.md", ".cursorrules"):
+        (pkg / name).write_text(f"foreign rules {name}")
+    monkeypatch.setenv("TERMINAL_CWD", str(workspace))
+    agent = _make_agent(tmp_path, skip_context_files=False)
+    call = SimpleNamespace(
+        id="touch-pkg", type="function",
+        function=SimpleNamespace(name="web_extract", arguments=json.dumps({"path": str(pkg / "main.py")})),
+    )
+    messages: list[dict] = []
+    with patch("model_tools.handle_function_call", return_value="tool output"):
+        execute_tool_calls_sequential(agent, SimpleNamespace(tool_calls=[call]), messages, "task")
+
+    assert [m["tool_call_id"] for m in messages] == ["touch-pkg"]
+    content = messages[0]["content"]
+    assert "tool output" in content
+    assert "foreign rules" not in content and "Subdirectory context" not in content
 
 
 def test_sequential_tool_timeout_emits_result_and_continues(tmp_path, monkeypatch):

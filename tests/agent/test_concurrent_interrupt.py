@@ -31,7 +31,6 @@ def _make_agent(monkeypatch):
         verbose_logging = False
         log_prefix_chars = 200
         _checkpoint_mgr = MagicMock(enabled=False)
-        _subdirectory_hints = MagicMock()
         tool_progress_callback = None
         tool_start_callback = None
         tool_complete_callback = None

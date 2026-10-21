@@ -382,23 +382,24 @@ def test_start_review_threads_loaded_skills_into_context(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Workspace context files — ALL subagents (reviewer included) get AGENTS.md
-# et al. in their child system prompt (tools/delegate_tool.py)
+# Workspace instruction files — subagents (reviewer included) never get
+# AGENTS.md / CLAUDE.md / .cursorrules in their child system prompt
 # ---------------------------------------------------------------------------
 
-def test_child_system_prompt_embeds_workspace_context(tmp_path):
-    """Real file I/O through the same loader the main system prompt uses."""
+def test_child_system_prompt_never_embeds_workspace_instruction_files(tmp_path):
+    """Crema does not depend on other agent programs: their instruction files stay out of child prompts."""
     from tools.delegate_tool import _build_child_system_prompt
 
     workspace = tmp_path / "proj"
     workspace.mkdir()
-    (workspace / "AGENTS.md").write_text(
-        "# Project Rules\nAll fixes must cover sibling call sites.\n"
-    )
+    (workspace / ".git").mkdir()
+    for name in (".hermes.md", "AGENTS.md", "CLAUDE.md", ".cursorrules"):
+        (workspace / name).write_text(f"foreign rules {name}")
     prompt = _build_child_system_prompt(
         "do the thing", None, workspace_path=str(workspace)
     )
-    assert "sibling call sites" in prompt
+    assert "foreign rules" not in prompt
+    assert str(workspace) in prompt  # the workspace path itself is still given
 
 
 

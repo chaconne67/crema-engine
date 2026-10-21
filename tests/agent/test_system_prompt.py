@@ -186,7 +186,7 @@ class TestContextFileCwd:
 
         assert "bundled contributor instructions" not in context
 
-    def test_desktop_explicit_install_tree_workspace_still_loads_agents_md(
+    def test_desktop_explicit_workspace_never_loads_agents_md(
         self, monkeypatch, tmp_path
     ):
         import agent.runtime_cwd as runtime_cwd
@@ -206,7 +206,7 @@ class TestContextFileCwd:
         ):
             context = build_system_prompt_parts(agent)["context"]
 
-        assert "chosen workspace instructions" in context
+        assert "chosen workspace instructions" not in context
 
 
 def _stable_prompt(agent):
@@ -261,25 +261,20 @@ class TestCodingContextBlock:
         assert "coding agent" not in _stable_prompt(agent)
 
 
-def test_shared_project_context_precedes_worktree_bytes(monkeypatch, tmp_path):
-    import os
-
+def test_worktree_instruction_files_never_reach_the_prompt(monkeypatch, tmp_path):
     monkeypatch.setenv("TERMINAL_ENV", "local")
-    prompts = []
     for name in ("worktree-a", "worktree-b"):
         cwd = tmp_path / name
         cwd.mkdir()
-        (cwd / "AGENTS.md").write_text("Shared project instructions.")
+        for filename in ("AGENTS.md", "CLAUDE.md", ".cursorrules"):
+            (cwd / filename).write_text("Shared project instructions.")
         monkeypatch.setenv("TERMINAL_CWD", str(cwd))
         agent = _make_agent(platform="cli")
         parts = build_system_prompt_parts(agent)
         full = "\n\n".join(parts.values())
-        assert full.index("Shared project instructions.") < full.index("Current working directory:")
+        assert "Shared project instructions." not in full
         assert str(cwd) not in parts["stable"]
         assert full == "\n\n".join(build_system_prompt_parts(agent).values())
-        prompts.append(full)
-    common = os.path.commonprefix(prompts)
-    assert "Shared project instructions." in common
 
 
 def test_stored_prompt_cwd_ignores_project_host_decoys(monkeypatch, tmp_path):

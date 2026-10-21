@@ -321,14 +321,6 @@ class TestBOMToleranceSiblingSites:
     SKILL = "---\nname: bom-skill\ndescription: Saved by Notepad\n---\n\n# Body\n"
 
 
-    def test_prompt_builder_strips_bom_frontmatter(self):
-        # A BOM'd context file (AGENTS.md etc.) must not leak raw
-        # frontmatter into the system prompt.
-        from agent.prompt_builder import _strip_yaml_frontmatter
-
-        out = _strip_yaml_frontmatter("\ufeff---\nfoo: bar\n---\nBody text\n")
-        assert out.strip() == "Body text"
-
     def test_blueprints_split_frontmatter_bom(self):
         # str.lstrip() does NOT strip U+FEFF (it is not whitespace), so the
         # pre-existing lstrip() in _split_frontmatter never covered it.

@@ -43,7 +43,6 @@ from agent.tool_dispatch_helpers import (
     _is_destructive_command,
     _is_multimodal_tool_result,
     _multimodal_text_summary,
-    _append_subdir_hint_to_multimodal,
     _plan_tool_batch_segments,
     make_tool_result_message,
 )
@@ -1085,14 +1084,6 @@ def _commit_tool_result(
             config=budget,
         )
     _record_persisted_path_for_stub(agent, tool_call_id, persisted_result)
-
-    subdir_hints = agent._subdirectory_hints.check_tool_call(function_name, function_args)
-    if subdir_hints:
-        if _is_multimodal_tool_result(persisted_result):
-            # Hint goes on the text summary part so the model still sees it; image blocks untouched.
-            _append_subdir_hint_to_multimodal(persisted_result, subdir_hints)
-        else:
-            persisted_result += subdir_hints
 
     # Multimodal dicts become an OpenAI-style content list; text-only servers get a
     # string-safe fallback so a rejected image result never poisons history.

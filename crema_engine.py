@@ -205,7 +205,7 @@ async def main() -> None:
         return {"ok": True}
 
     # Messages between chats (tools/crema_chats_tool.py): the sidebar's chats the tool may name, and the
-    # messages the app has shown under the chat that read them.
+    # messages the app hands over (turns/handed).
     @settings.post("/api/crema/chats")
     async def chats_known(body: dict):
         await asyncio.to_thread(crema_file_turns.set_chats, list(body.get("chats") or []))
@@ -302,9 +302,9 @@ async def main() -> None:
         await asyncio.to_thread(sync_services)
         return {"ok": True}
 
-    @settings.post("/api/crema/turns/shown")
-    async def turns_shown(body: dict):
-        await asyncio.to_thread(crema_file_turns.shown, str(body.get("session_id") or ""), int(body.get("upto") or 0))
+    @settings.post("/api/crema/turns/handed")
+    async def turns_handed(body: dict):
+        await asyncio.to_thread(crema_file_turns.handed, str(body.get("session_id") or ""), int(body.get("upto") or 0))
         return {"ok": True}
 
     @settings.middleware("http")

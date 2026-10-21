@@ -103,11 +103,12 @@ Both bind 127.0.0.1 only.
      its notes in `pre_llm_call`; `tests/agent/test_crema_file_turns.py`
    - `crema_engine.py`: installs the hooks; `GET /api/crema/turns` (settle, then who waits, who the user must
      order, whose turn came), `POST /api/crema/turns/woken|order|release`
-   - messages between chats (Crema plan `Crema-대화간-메시지-계획-2026-10-09.md`): new `tools/crema_chats_tool.py`
-     (`crema_chats` toolset in `hermes-api-server`); the notes of `agent/crema_file_turns.py` are the mailbox,
-     told after each tool step (`transform_tool_result`) as well as at a turn's start; `POST /api/crema/chats`
-     (the sidebar's chats, kept in `crema-chats.json`), `GET /api/crema/turns` also lists messages that ask to
-     start a chat and messages read but not shown, `POST /api/crema/turns/shown`
+   - messages between chats (Crema plans `Crema-대화간-메시지-계획-2026-10-09.md`, Codex's way since
+     `Crema-대화간-메시지-Codex방식-계획-2026-10-21.md`): new `tools/crema_chats_tool.py` (`crema_chats` toolset in
+     `hermes-api-server`: list, send, read); a message waits in the notes of `agent/crema_file_turns.py` until the
+     app hands it over (it starts an idle chat with it or puts it into a running reply); `POST /api/crema/chats`
+     (the sidebar's chats, kept in `crema-chats.json`), `GET /api/crema/turns` also lists the messages to hand
+     over, `POST /api/crema/turns/handed`
    - the files a reply wrote (Crema plan `Crema-파일-링크-계획-2026-10-09.md`): every write of `write_file`/`patch`
      (made or changed) and every file a terminal command changed in a Git folder is a `crema_wrote` event;
      `GET /api/crema/files?session_id=&since=` lists those still there, for the app's line under the reply

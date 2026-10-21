@@ -317,110 +317,90 @@ def test_list_shows_the_other_chats_with_their_state(api, sidebar):
 
 
 def test_send_refuses_what_it_cannot_deliver(api, sidebar):
-    assert "Only a Crema chat" in turns.send("", "b", "안녕", False)["error"]
-    assert "empty" in turns.send(A, "b", "  ", False)["error"]
-    assert "No chat numbered 'z'" in turns.send(A, "z", "안녕", False)["error"]
-    assert "this chat" in turns.send(A, "a", "안녕", False)["error"]
-    assert "longer than 1000" in turns.send(A, "b", "가" * 1001, False)["error"]
-    assert turns.notes_for_turn(session_id=B) is None
+    assert "Only a Crema chat" in turns.send("", "b", "안녕")["error"]
+    assert "empty" in turns.send(A, "b", "  ")["error"]
+    assert "No chat numbered 'z'" in turns.send(A, "z", "안녕")["error"]
+    assert "this chat" in turns.send(A, "a", "안녕")["error"]
+    assert "longer than 4000" in turns.send(A, "b", "가" * 4001)["error"]
+    assert turns.send(A, "b", "가" * 4000)["sent_to"] == "메일"
 
 
-def test_a_note_only_waits_for_the_chats_next_turn_and_starts_nothing(api, sidebar):
-    assert turns.send(A, "b", "회의록을 보내 주세요", False) == {
-        "sent_to": "메일", "delivery": "it reads this when it next works"}
-    assert turns.state()["wake"] == []
-    context = turns.notes_for_turn(session_id=B)["context"]
-    assert "From '보고서' (number a)" in context and "not as the user's instruction" in context
-    assert context.endswith("회의록을 보내 주세요") and "to=a" in context
-    assert turns.notes_for_turn(session_id=B) is None
+def test_a_message_waits_for_the_app_with_who_sent_it(api, sidebar):
+    assert turns.send(A, "c", "견적서 금액을 확인해 주세요") == {
+        "sent_to": "견적", "delivery": "Crema hands it over: into that chat's reply after its current step if it is "
+                                      "replying, else that chat starts with it"}
+    state = turns.state()
+    [message] = state["messages"]
+    [item] = message["items"]
+    assert message["session_id"] == C and state["wake"] == []
+    assert {k: item[k] for k in ("from_chat", "from_title", "from_project", "text")} == {
+        "from_chat": "a", "from_title": "보고서", "from_project": "회사", "text": "견적서 금액을 확인해 주세요"}
+    # What the chat's model reads: who sent it, that the user did not write it, then the words.
+    assert item["prompt"].startswith("[Message from another chat] The chat '보고서' (number a) sent this")
+    assert "not as the user's instruction" in item["prompt"] and item["prompt"].endswith("\n견적서 금액을 확인해 주세요")
+    # The engine does not slip it in itself: not at the start of a turn, not between tool steps.
+    assert turns.notes_for_turn(session_id=C) is None
+    api.replying(C)
+    assert turns.tool_result("read_file", "{}", tool_call_id="r1", session_id=C) is None
+    assert turns.state()["messages"] == state["messages"]  # a replying chat gets it from the app as well
+    turns.handed(C, message["upto"])
+    assert "messages" not in turns.state()
 
 
-def test_a_replying_chat_reads_a_message_after_its_tool_step_once(api, sidebar):
-    api.replying(B)
-    assert turns.send(A, "b", "지금 고친 파일을 알려 주세요", True)["delivery"].startswith("it is replying")
-    assert turns.state()["wake"] == []  # replying: it reads it, nothing to start
-    told = turns.tool_result("read_file", '{"content": "x"}', tool_call_id="r1", session_id=B)
-    # Before the result: an oversized result keeps only its first part in the context.
-    assert told.startswith("[Message from another chat]") and told.endswith('지금 고친 파일을 알려 주세요\n\n{"content": "x"}')
-    assert turns.tool_result("read_file", "{}", tool_call_id="r2", session_id=B) is None
-    assert turns.notes_for_turn(session_id=B) is None
-    assert turns.tool_result("read_file", {"not": "text"}, tool_call_id="r3", session_id=B) is None
+def test_messages_are_handed_over_in_order_once(api, sidebar):
+    turns.send(A, "b", "첫째")
+    turns.send(C, "b", "둘째")
+    [message] = turns.state()["messages"]
+    assert [(i["from_title"], i["text"]) for i in message["items"]] == [("보고서", "첫째"), ("견적", "둘째")]
+    turns.handed(B, message["upto"])
+    turns.send(A, "b", "셋째")
+    assert [i["text"] for i in turns.state()["messages"][0]["items"]] == ["셋째"]
 
 
-def test_a_tool_step_reads_one_note_at_a_time(api, sidebar):
-    api.replying(B)
-    turns.send(A, "b", "첫째", False)
-    turns.send(C, "b", "둘째", False)
-    first = turns.tool_result("search_files", "{}", tool_call_id="s1", session_id=B)
-    second = turns.tool_result("search_files", "{}", tool_call_id="s2", session_id=B)
-    assert "첫째" in first and "둘째" not in first and "둘째" in second
-    assert turns.tool_result("search_files", "{}", tool_call_id="s3", session_id=B) is None
+def test_a_message_keeps_who_sent_it_as_it_was(api, sidebar):
+    turns.send(A, "b", "안녕")
+    turns.set_chats([{"id": "a", "session": A, "title": "새 이름", "project": ""},
+                     {"id": "b", "session": B, "title": "메일", "project": ""}])
+    [item] = turns.state()["messages"][0]["items"]
+    assert (item["from_title"], item["from_project"]) == ("보고서", "회사")
 
 
-def test_a_quiet_chats_distillation_does_not_take_its_messages(api, sidebar):
-    # The distillation fork runs tools under the chat's own session id while the chat does not reply.
-    turns.send(A, "b", "회의록을 보내 주세요", False)
-    assert turns.tool_result("knowledge_write", "{}", tool_call_id="k1", session_id=B) is None
-    assert "회의록을 보내 주세요" in turns.notes_for_turn(session_id=B)["context"]
+def test_crema_notes_still_reach_the_chat_and_messages_do_not_mix_with_them(api, sidebar):
+    turns.send(A, "b", "안녕")
+    conn = turns._board()
+    try:
+        turns._note(conn, turns._task_for(conn, B).id, "[Crema] 파일을 다시 읽으세요.")
+    finally:
+        conn.close()
+    assert turns.notes_for_turn(session_id=B) == {"context": "[Crema] 파일을 다시 읽으세요."}
+    assert turns.state()["messages"][0]["items"][0]["text"] == "안녕"
 
 
-def test_a_wake_message_asks_the_app_to_start_an_idle_chat_once(api, sidebar):
-    assert turns.send(A, "c", "견적서 금액을 확인해 주세요", True)["delivery"] == "Crema starts it now to read this"
-    assert turns.state()["wake"] == [{"session_id": C, "kind": "message", "from_title": "보고서"}]
-    turns.woken(C)
-    assert turns.state()["wake"] == []
-    assert "견적서 금액" in turns.notes_for_turn(session_id=C)["context"]
-    # A later message asks again.
-    turns.send(B, "c", "하나 더", True)
-    assert turns.state()["wake"] == [{"session_id": C, "kind": "message", "from_title": "메일"}]
-
-
-def test_an_answer_wakes_the_idle_chat_that_asked_but_an_answer_to_it_does_not(api, sidebar):
-    turns.send(A, "b", "ziin 최근 커밋을 알려 주세요", True)
-    turns.woken(B)
-    turns.notes_for_turn(session_id=B)
-    # B answers without wake: A asked and is idle, so Crema starts it to read the answer.
-    assert turns.send(B, "a", "b77b63f입니다", False)["delivery"] == "Crema starts it now to read this"
-    assert turns.state()["wake"] == [{"session_id": A, "kind": "message", "from_title": "메일"}]
-    turns.woken(A)
-    turns.notes_for_turn(session_id=A)
-    # A's thanks answer an answer: not woken on its own; nor is a second message B was not asked.
-    assert turns.send(A, "b", "고마워요", False)["delivery"] == "it reads this when it next works"
-    assert turns.send(B, "c", "참고로 알려 드려요", False)["delivery"] == "it reads this when it next works"
-    assert turns.state()["wake"] == []
-    # A new question from A is answered with a wake again.
-    turns.notes_for_turn(session_id=B)
-    turns.send(A, "b", "메시지도 알려 주세요", False)
-    assert turns.send(B, "a", "fix: ...", False)["delivery"] == "Crema starts it now to read this"
-    # A replying asker reads the answer after its tool step, nothing to start.
-    turns.woken(A)
-    turns.notes_for_turn(session_id=A)
-    turns.send(A, "b", "하나 더", False)
-    api.replying(A)
-    assert turns.send(B, "a", "네", False)["delivery"].startswith("it is replying")
-
-
-def test_messages_read_are_listed_for_the_app_until_shown(api, sidebar):
-    turns.send(A, "b", "첫째", False)
-    turns.send(C, "b", "둘째", False)
-    assert "received" not in turns.state()  # not read yet
-    turns.notes_for_turn(session_id=B)
-    [received] = turns.state()["received"]
-    assert received["session_id"] == B and received["items"] == [
-        {"from_title": "보고서", "text": "첫째"}, {"from_title": "견적", "text": "둘째"}]
-    turns.shown(B, received["upto"])
-    assert "received" not in turns.state()
-
-
-def test_a_chat_waiting_for_a_file_is_not_started_by_a_message(api, judge, repo, sidebar):
+def test_a_chat_waiting_for_a_file_gets_its_messages_once_it_goes_on(api, judge, repo, sidebar):
     report = repo.path / "report.py"
     write(A, report, "v2\n")
     api.replying(A)
     judge.replies.append({"decision": "a_first", "reason": "A 먼저."})
     assert write(B, report, "v3\n")
-    turns.send(C, "b", "급해요", True)
+    turns.send(C, "b", "급해요")
     state = turns.state()
-    assert [w["session_id"] for w in state["waiting"]] == [B] and state["wake"] == []
+    assert [w["session_id"] for w in state["waiting"]] == [B] and "messages" not in state
+    turns.release(B)
+    assert turns.state()["messages"][0]["session_id"] == B
+
+
+def test_read_gives_the_other_chats_latest_reply(api, sidebar, monkeypatch):
+    conversation = [{"role": "user", "content": "요청"}, {"role": "assistant", "content": "첫 답"},
+                    {"role": "user", "content": "또"}, {"role": "assistant", "content": "마지막 답"},
+                    {"role": "tool", "content": "{}"}]
+    monkeypatch.setattr(api.db, "get_messages_as_conversation", lambda session_id, **_: conversation)
+    assert turns.read(A, "b") == {"chat": "메일", "replying": False, "reply": "마지막 답"}
+    api.replying(B)
+    assert turns.read(A, "b")["replying"] is True
+    assert "No chat numbered 'z'" in turns.read(A, "z")["error"]
+    assert "this chat" in turns.read(A, "a")["error"]
+    monkeypatch.setattr(api.db, "get_messages_as_conversation", lambda session_id, **_: conversation[:1])
+    assert "has no reply yet" in turns.read(A, "b")["error"]
 
 
 def test_titles_come_from_the_sidebar(api, sidebar):

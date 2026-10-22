@@ -2272,9 +2272,13 @@ def _chat_summary_attempt(agent, api_messages: list, api_request_id: str):
 _SUMMARY_ATTEMPT_BUILDERS = {"codex_responses": _codex_summary_attempt, "anthropic_messages": _anthropic_summary_attempt}
 
 
-def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
-    """Request a summary when max iterations are reached. Returns the final response text."""
-    warning = f"⚠️  Reached maximum iterations ({agent.max_iterations}). Requesting summary..."
+def handle_max_iterations(agent, messages: list, api_call_count: int, *, guardrail_decision=None) -> str:
+    """Bounded report on iteration exhaustion or a tool guardrail; never executes tools."""
+    warning = (
+        f"⚠️ Tool execution stopped ({guardrail_decision.code}). Requesting report..."
+        if guardrail_decision is not None else
+        f"⚠️  Reached maximum iterations ({agent.max_iterations}). Requesting summary..."
+    )
     if getattr(agent, "suppress_status_output", False):
         # Strict machine-readable mode (-Q, oneshot): keep diagnostics off stdout. quiet_mode is
         # NOT the gate — the interactive CLI runs quiet_mode=True by default and must see this.
@@ -2290,15 +2294,42 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
     # Shared constant so compaction recognizers can identify this runtime nudge by its stable
     # content after SessionDB projection strips metadata flags.
     from agent.context_compressor import MAX_ITERATIONS_SUMMARY_REQUEST
-    append_message(messages, {"role": "user", "content": MAX_ITERATIONS_SUMMARY_REQUEST})
+    if guardrail_decision is None:
+        append_message(messages, {"role": "user", "content": MAX_ITERATIONS_SUMMARY_REQUEST})
 
     try:
         api_messages = _iteration_summary_api_messages(agent, messages)
+        if guardrail_decision is not None:
+            # Only the outbound copy of the current tool-result tail is extended.
+            # Never rewrite cached history, the system prompt, or a real user ask.
+            tail = api_messages[-1]
+            if tail.get("role") != "tool":
+                raise ValueError("Guardrail report requires a tool-result tail")
+            notice = (
+                "\n\n[Runtime notice: tool execution has ended. This is the final report, "
+                "not another work iteration. Guardrail: "
+                + json.dumps(guardrail_decision.to_metadata(), ensure_ascii=False)
+                + ". Do not call tools or restart the stopped work through another tool. "
+                "In the user's language, explain the actual stop reason, then report the "
+                "useful results already supported by this conversation, retaining available "
+                "sources and artifact locations. Separate confirmed results from gaps and "
+                "unfinished work; say what remains to be done. If no useful results were "
+                "obtained, say so. A total-call cap is not evidence of failed calls or no "
+                "progress. Do not invent results, imply the task completed, or require the "
+                "user to send 'continue' just to receive this report.]"
+            )
+            content = tail.get("content") or ""
+            tail["content"] = content + notice if isinstance(content, str) else [
+                *content, {"type": "text", "text": notice},
+            ]
         build_attempt = _SUMMARY_ATTEMPT_BUILDERS.get(agent.api_mode, _chat_summary_attempt)
         attempt = build_attempt(agent, api_messages, summary_api_request_id)
 
         # One retry on an empty summary; a summary empty once its <think> block is stripped is NOT retried.
-        final_response = _EMPTY_SUMMARY_RESPONSE
+        final_response = (
+            agent._toolguard_controlled_halt_response(guardrail_decision)
+            if guardrail_decision is not None else _EMPTY_SUMMARY_RESPONSE
+        )
         for retry_count in (0, 1):
             text = attempt(retry_count)
             if not text:
@@ -2307,14 +2338,19 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                 text = re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
             if text:
                 summary_call_outcome = "success"
-                append_message(messages, {"role": "assistant", "content": text})
+                if guardrail_decision is None:
+                    append_message(messages, {"role": "assistant", "content": text})
                 final_response = text
             break
 
     except Exception as e:
         logger.warning("Failed to get summary response: %s", e)
         from agent.turn_failure_copy import site_copy
-        final_response = site_copy("max_iterations_no_summary", limit=agent.max_iterations)
+        final_response = (
+            agent._toolguard_controlled_halt_response(guardrail_decision)
+            if guardrail_decision is not None else
+            site_copy("max_iterations_no_summary", limit=agent.max_iterations)
+        )
     finally:
         from agent import relay_llm
         relay_llm.complete_logical_call(summary_api_request_id, outcome=summary_call_outcome)

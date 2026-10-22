@@ -1271,12 +1271,18 @@ class AIAgent(
             self._tool_guardrail_halt_decision = decision
 
     def _toolguard_controlled_halt_response(self, decision: ToolGuardrailDecision) -> str:
-        # Shown to the user as the reply, so no decision codes; the code stays in result["guardrail"].
+        # Last resort only: the report call also failed. A total-call cap does not
+        # establish that earlier calls failed or made no progress.
+        if self.platform in {"api_server", "desktop"}:
+            return (
+                "도구 사용 제한 또는 반복 호출 방지 조건에 도달해 추가 실행을 중단했습니다. "
+                "그때까지의 결과를 정리해 보고하려 했지만 보고를 생성하지 못했습니다. "
+                "작업은 미완료이며, 앞서 받은 자료와 실행 결과는 대화 기록에 남아 있습니다."
+            )
         return (
-            f"I stopped retrying because I kept running {decision.tool_name or 'the same tool'} "
-            f"{decision.count} times without making progress. The last result above shows what "
-            "blocked it. Tell me how you'd like to proceed, or send `continue` and I'll try a "
-            "different approach."
+            "Further tool execution was stopped by a usage or repetition guardrail. "
+            "I also could not generate the report of results so far. The task is incomplete; "
+            "earlier tool results remain in the conversation history."
         )
 
     def _append_guardrail_observation(self, tool_name: str, function_args: dict, function_result: str, *,

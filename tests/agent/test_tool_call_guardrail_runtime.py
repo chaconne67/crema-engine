@@ -448,3 +448,137 @@ def test_guardrail_halt_emits_final_response_through_stream_delta_callback():
     assert halt_text in text_deltas, (
         f"halt message was never streamed; callback only saw {deltas!r}"
     )
+
+
+@pytest.mark.parametrize("max_iterations", [2, 10])
+def test_guardrail_cap_reports_existing_evidence_without_more_tool_execution(max_iterations):
+    """A total-call cap is not proof of failed research; reuse its real results."""
+    agent = _make_agent("web_search", max_iterations=max_iterations, platform="api_server", config={
+        "tool_loop_guardrails": {"loop_caps": {"max_web_searches": 1}},
+    })
+    agent._disable_streaming = True
+    evidence = "공식 자료: 야간 이력서 분류. https://example.org/evidence"
+    report = "검색 제한으로 추가 조사는 멈췄습니다. 확인: 야간 이력서 분류 https://example.org/evidence. 미확인: 발송 승인. 남은 일: 승인 절차 확인."
+    responses = [
+        _mock_response("", "tool_calls", [_mock_tool_call("web_search", '{"query":"first"}', "cap-first")]),
+        _mock_response("", "tool_calls", [_mock_tool_call("web_search", '{"query":"second"}', "cap-blocked")]),
+        _mock_response(report),
+    ]
+    sent = []
+    def respond(**kwargs):
+        import copy
+        sent.append(copy.deepcopy(kwargs))
+        return responses.pop(0)
+    agent.client.chat.completions.create.side_effect = respond
+    deltas = []
+    agent.stream_delta_callback = deltas.append
+    with (
+        patch("model_tools.handle_function_call", return_value=json.dumps({"result": evidence}, ensure_ascii=False)) as dispatch,
+        patch.object(agent, "_persist_session"), patch.object(agent, "_save_trajectory"),
+        patch.object(agent, "_cleanup_task_resources"),
+    ):
+        result = agent.run_conversation("자료를 조사하고 결과와 한계를 보고해 줘")
+    assert result["final_response"] == report
+    assert result["turn_exit_reason"] == "guardrail_halt"
+    assert result["guardrail"]["code"] == "loop_web_search_cap"
+    assert result["guardrail"]["count"] == 1
+    assert dispatch.call_count == 1
+    assert len(sent) == 3
+    summary_messages = sent[-1]["messages"]
+    assert evidence in json.dumps(summary_messages, ensure_ascii=False)
+    assert "loop_web_search_cap" in json.dumps(summary_messages, ensure_ascii=False)
+    assert [m for m in summary_messages if m.get("role") == "user"] == [
+        m for m in sent[0]["messages"] if m.get("role") == "user"
+    ]
+    assert [m for m in summary_messages if m.get("role") == "system"] == [
+        m for m in sent[0]["messages"] if m.get("role") == "system"
+    ]
+    assert result["messages"][-1]["content"] == report
+    assert sum(m.get("content") == report for m in result["messages"]) == 1
+    assert report in deltas
+    assert agent._cached_system_prompt == "You are helpful."
+
+
+@pytest.mark.parametrize("failure", ["empty", "tools", "exception", "thinking"])
+def test_guardrail_report_failure_still_explains_stop_without_dispatch(failure):
+    agent = _make_agent("web_search", platform="api_server", config={
+        "tool_loop_guardrails": {"loop_caps": {"max_web_searches": 1}},
+    })
+    bad_response = {
+        "empty": _mock_response(""),
+        "tools": _mock_response("", "tool_calls", [_mock_tool_call("web_search", '{"query":"must-not-run"}')]),
+        "exception": RuntimeError("summary provider unavailable"),
+        "thinking": _mock_response("<think>private reasoning</think>"),
+    }[failure]
+    agent.client.chat.completions.create.side_effect = [
+        _mock_response("", "tool_calls", [_mock_tool_call("web_search", '{"query":"first"}')]),
+        _mock_response("", "tool_calls", [_mock_tool_call("web_search", '{"query":"second"}')]),
+        bad_response, bad_response,
+    ]
+    with (
+        patch("model_tools.handle_function_call", return_value='{"result":"some evidence"}') as dispatch,
+        patch.object(agent, "_persist_session"), patch.object(agent, "_save_trajectory"),
+        patch.object(agent, "_cleanup_task_resources"),
+    ):
+        result = agent.run_conversation("조사 결과를 보고해 줘")
+    report = result["final_response"]
+    assert "중단" in report
+    assert "보고" in report and "미완료" in report
+    assert "without making progress" not in report
+    assert "iteration limit" not in report
+    assert "private reasoning" not in report
+    assert dispatch.call_count == 1
+    assert agent.client.chat.completions.create.call_count <= 4
+    assert result["messages"][-1]["content"] == report
+
+
+def test_guardrail_failure_halt_requests_report_not_retry():
+    agent = _make_agent("web_search", config=_hard_stop_config())
+    responses = [
+        _mock_response("", "tool_calls", [_mock_tool_call("web_search", '{"query":"same"}')])
+        for _ in range(3)
+    ]
+    report = "도구 호출이 반복 실패해 중단했습니다. 확인된 결과는 없으며 작업은 미완료입니다. 인증 상태 확인이 필요합니다."
+    responses.append(_mock_response(report))
+    agent.client.chat.completions.create.side_effect = responses
+    with (
+        patch("model_tools.handle_function_call", return_value='{"error":"boom"}') as dispatch,
+        patch.object(agent, "_persist_session"), patch.object(agent, "_save_trajectory"),
+        patch.object(agent, "_cleanup_task_resources"),
+    ):
+        result = agent.run_conversation("조사해 줘")
+    assert result["final_response"] == report
+    assert result["guardrail"]["code"] == "repeated_exact_failure_block"
+    assert dispatch.call_count == 2
+
+
+
+def test_guardrail_streaming_summary_is_delivered_once():
+    agent = _make_agent("web_search", platform="api_server", config={
+        "tool_loop_guardrails": {"loop_caps": {"max_web_searches": 1}},
+    })
+    agent._disable_streaming = True
+    agent.client.chat.completions.create.side_effect = [
+        _mock_response("", "tool_calls", [_mock_tool_call("web_search", '{"query":"first"}')]),
+        _mock_response("", "tool_calls", [_mock_tool_call("web_search", '{"query":"second"}')]),
+    ]
+    report = "추가 실행은 중단했고 확보 결과와 남은 일을 보고합니다."
+    deltas = []
+    callback = deltas.append
+    agent.stream_delta_callback = callback
+    def stream_summary(a, messages, request_id):
+        def attempt(retry_count):
+            # Codex's real summary transport calls this delta seam while it reads SSE.
+            a._fire_stream_delta(report)
+            return report
+        return attempt
+    with (
+        patch("agent.chat_completion_helpers._chat_summary_attempt", side_effect=stream_summary),
+        patch("model_tools.handle_function_call", return_value='{"result":"evidence"}'),
+        patch.object(agent, "_persist_session"), patch.object(agent, "_save_trajectory"),
+        patch.object(agent, "_cleanup_task_resources"),
+    ):
+        result = agent.run_conversation("조사 결과를 보고해 줘")
+    assert result["final_response"] == report
+    assert "".join(d for d in deltas if isinstance(d, str)).count(report) == 1
+    assert agent.stream_delta_callback is callback

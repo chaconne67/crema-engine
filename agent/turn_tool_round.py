@@ -164,8 +164,21 @@ def run_tool_round(
     if agent._tool_guardrail_halt_decision is not None:
         decision = agent._tool_guardrail_halt_decision
         _turn_exit_reason = "guardrail_halt"
-        final_response = agent._toolguard_controlled_halt_response(decision)
-        agent._emit_diagnostic_status(f"⚠️ Tool guardrail halted {decision.tool_name}: {decision.code}")
+        agent._emit_diagnostic_status(
+            f"⚠️ Tool guardrail stopped execution of {decision.tool_name}: {decision.code} — preparing report"
+        )
+        # Stop tool execution, not the report. Reuse the bounded summary pipeline;
+        # any tools the model emits there are discarded, never dispatched.
+        # Codex streams the summary internally; buffer it until the report is
+        # accepted so retries/partial failures cannot leak or duplicate the answer.
+        display_callback, tts_callback = agent.stream_delta_callback, agent._stream_callback
+        agent.stream_delta_callback = agent._stream_callback = None
+        try:
+            final_response = agent._handle_max_iterations(
+                messages, api_call_count, guardrail_decision=decision,
+            )
+        finally:
+            agent.stream_delta_callback, agent._stream_callback = display_callback, tts_callback
         append_message(messages, {"role": "assistant", "content": final_response})
         # Emit the halt so it isn't mistaken for a crash; the stream callback is still
         # alive, so SSE/TUI clients see the explanation.

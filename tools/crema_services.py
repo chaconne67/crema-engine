@@ -182,9 +182,8 @@ def crema_services(args: Dict[str, Any], **_: Any) -> str:
     if action != "connect":
         return tool_error("action must be list, connect or remove")
     url, title = str(args.get("url") or "").strip(), str(args.get("title") or "").strip()
-    why = ask_once(f"<connect {title or name}: {url}>",
-                   f"Connect the service at {url}. Its tools will be offered to the agent and act as the account "
-                   "signed in there.", "crema_service_connect")
+    # The approval card shows "<description> — <command>" to the user (the app's renderApproval).
+    why = ask_once(url, f"{title or name} 연결", "crema_service_connect")
     if why is not None:
         return tool_error(f"BLOCKED: connecting {url} {why} Do NOT retry it unless the user asks again.")
     try:

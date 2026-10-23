@@ -124,7 +124,7 @@ def test_the_agent_connects_only_after_the_user_approves(engine, monkeypatch):
     monkeypatch.setattr(crema_services, "_asks_sign_in", lambda url: False)
     asked = []
     answer = ["was denied by the user."]
-    monkeypatch.setattr("tools.approval_prompt.ask_once", lambda display, description, key: asked.append(display) or answer[0])
+    monkeypatch.setattr("tools.approval_prompt.ask_once", lambda display, description, key: asked.append((display, description)) or answer[0])
     monkeypatch.setattr("tools.mcp_tool_discovery.get_mcp_status",
                         lambda: [{"name": "higgsfield", "status": "connected", "tools": 7}])
     args = {"action": "connect", "name": "higgsfield", "title": "힉스필드", "url": "https://mcp.higgsfield.ai/mcp"}
@@ -134,4 +134,4 @@ def test_the_agent_connects_only_after_the_user_approves(engine, monkeypatch):
 
     answer[0] = None
     assert json.loads(crema_services.crema_services(args)) == {"connected": "higgsfield", "status": "connected", "tools": 7}
-    assert asked == ["<connect 힉스필드: https://mcp.higgsfield.ai/mcp>"] * 2
+    assert asked == [("https://mcp.higgsfield.ai/mcp", "힉스필드 연결")] * 2

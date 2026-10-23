@@ -55,29 +55,6 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
-def sync_services() -> None:
-    """The services connected in Settings (config mcp_servers) in step with that list, as the gateway's
-    reconcile keeps them: one added is connected and its tools offered, one removed is cut off and its
-    sign-in (mcp-tokens/) forgotten, so 연결 끊기 leaves nothing behind. Run at start and after each 연결 or
-    연결 끊기, so a failed earlier try does not make it wait out a retry delay. No sign-in window opens from
-    here: Crema leads the sign-in itself (Settings → 연결)."""
-    from hermes_cli.mcp_config import _get_mcp_servers
-    from hermes_constants import get_hermes_home
-    from tools.mcp_oauth import suppress_interactive_oauth
-    from tools.mcp_oauth_manager import get_manager
-    from tools.mcp_tool_common import _core
-    from tools.mcp_tool_discovery import reconcile_mcp_servers_with_config
-    from tools.mcp_tool_lifecycle import _clear_connect_cooldowns
-
-    with _core._lock:
-        _clear_connect_cooldowns()
-    with suppress_interactive_oauth():
-        reconcile_mcp_servers_with_config()
-    signed_in = {path.name.split(".")[0] for path in (get_hermes_home() / "mcp-tokens").glob("*.json")}
-    for name in signed_in - set(_get_mcp_servers()):
-        get_manager().remove(name)
-
-
 async def main() -> None:
     token = os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN", "")
     if len(token) < 16:
@@ -113,8 +90,10 @@ async def main() -> None:
     from agent import crema_file_turns
 
     crema_file_turns.install(api)
-    # The services connected in Settings, in the background so a slow one does not hold the engine.
-    asyncio.get_running_loop().run_in_executor(None, sync_services)
+    # The services connected (tools/crema_services.py), in the background so a slow one does not hold the engine.
+    from tools import crema_services
+
+    asyncio.get_running_loop().run_in_executor(None, crema_services.sync_services)
     from hermes_cli.plugins import get_plugin_manager
 
     get_plugin_manager()._hooks.setdefault("transform_llm_output", []).append(drop_next_input)
@@ -132,11 +111,10 @@ async def main() -> None:
         settings.include_router(router)
     # Of these routers only what Crema shows: what the agent remembers (memory cards and learned
     # skills, to read, edit and delete), the past-chat search, and the image and video model lists.
-    # And the services to connect (Settings → 업무 서비스 연결): the list, add and remove, the sign-in
-    # started, followed and cancelled, and the address the service's sign-in page comes back to.
+    # And a service's sign-in, which tools/crema_services.py starts, follows and cancels here, and the address the
+    # service's sign-in page comes back to.
     wanted = {"/api/learning/graph", "/api/learning/node", "/api/sessions/search", "/api/tools/toolsets/{name}/models",
-              "/api/mcp/servers", "/api/mcp/servers/{name}", "/api/mcp/servers/{name}/auth",
-              "/api/mcp/oauth/flows/{flow_id}", SIGN_IN_RETURN}
+              "/api/mcp/servers/{name}/auth", "/api/mcp/oauth/flows/{flow_id}", SIGN_IN_RETURN}
     for router in (status.router, sessions.search_router, tools.router, mcp.router):
         settings.router.routes.extend(route for route in router.routes if route.path in wanted)
 
@@ -324,9 +302,39 @@ async def main() -> None:
         print(json.dumps({"front": True}), flush=True)
         return {"ok": True}
 
-    @settings.post("/api/crema/services/sync")
-    async def services_sync():
-        await asyncio.to_thread(sync_services)
+    # Settings → 부가 기능 연동's services (tools/crema_services.py): the list, 연결 (followed until signed in, or cancelled),
+    # 연결 끊기, and 기타 서비스 turned on or off.
+    @settings.get("/api/crema/services")
+    async def services_list():
+        return {"services": await asyncio.to_thread(crema_services.listing)}
+
+    @settings.post("/api/crema/services/connect")
+    async def services_connect(body: dict):
+        try:
+            return crema_services.start(str(body.get("name") or ""), str(body.get("url") or ""), str(body.get("title") or ""))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @settings.get("/api/crema/services/jobs/{job_id}")
+    async def services_job(job_id: str):
+        state = crema_services.job_state(job_id)
+        if state is None:
+            raise HTTPException(status_code=404, detail="no such connection")
+        return state
+
+    @settings.delete("/api/crema/services/jobs/{job_id}")
+    async def services_cancel(job_id: str):
+        crema_services.cancel(job_id)
+        return {"ok": True}
+
+    @settings.delete("/api/crema/services/{name}")
+    async def services_remove(name: str):
+        return {"removed": await asyncio.to_thread(crema_services.remove, name)}
+
+    @settings.put("/api/crema/services/{name}/enabled")
+    async def services_enabled(name: str, body: dict):
+        if not await asyncio.to_thread(crema_services.set_enabled, name, bool(body.get("enabled"))):
+            raise HTTPException(status_code=404, detail="no such service")
         return {"ok": True}
 
     @settings.post("/api/crema/turns/handed")
@@ -347,6 +355,7 @@ async def main() -> None:
         return await call_next(request)
 
     port = free_port()
+    crema_services.SETTINGS.update(port=port, token=token)
     server = uvicorn.Server(uvicorn.Config(settings, host="127.0.0.1", port=port, log_level="warning"))
     serving = asyncio.create_task(server.serve())
     while not server.started:

@@ -137,6 +137,8 @@ TOOLSETS = {
     "backup": _ts("Back up chats, memory and settings into one file without keys", ["crema_backup"]),
     # Crema: messages between the user's chats (tools/crema_chats_tool.py).
     "crema_chats": _ts("List the user's other chats and send one a message", ["crema_chats"]),
+    # Crema: connect an MCP server the user gives the address of (tools/crema_services.py).
+    "crema_services": _ts("Connect, list and remove the services the agent works in", ["crema_services"]),
     # Crema: words Thock misheard in the user's message, for Thock to learn (tools/thock_heard_tool.py).
     "thock": _ts("Tell Thock a word it misheard in the user's message", ["thock_heard"]),
     # Crema: the user's mail accounts, connected in Settings → 메일 연결 (tools/crema_mail_tool.py).
@@ -220,12 +222,13 @@ TOOLSETS = {
     # Crema: the tools the Crema app offers (see ENGINE.md); add a tool here when Crema adopts it.
     "hermes-api-server": _ts(
         "Crema — files, terminal, todo, web, image understanding, memory, past chats, skills, the knowledge notebook, "
-        "messages to other chats, words Thock misheard, the user's mail, and their Google Calendar and Drive",
+        "messages to other chats, words Thock misheard, the user's mail, their Google Calendar and Drive, and "
+        "connecting services by address",
         ["read_file", "write_file", "patch", "search_files", "terminal", "process_manage",
          "todo_list", "web_search", "web_extract", "vision_analyze",
          "memory", "session_search", "skills_list", "skill_view", "skill_manage",
          "knowledge_search", "knowledge_get", "knowledge_write", "knowledge_think", "crema_backup", "crema_chats",
-         "thock_heard", "mail", "calendar", "drive"],
+         "thock_heard", "mail", "calendar", "drive", "crema_services"],
     ),
     "hermes-cli": _bundle("Full interactive CLI toolset - all default tools plus cronjob management"),
 

@@ -334,3 +334,63 @@ def request_elicitation_consent(message: str, description: str, *,
         logger.error("Elicitation CLI prompt failed: %s", exc, exc_info=True)
         return "decline"
     return _consent(choice, "cancel")  # timeout mirrors the gateway's unresolved outcome
+
+
+APPROVAL_UNAVAILABLE = "requires approval but the approval subsystem is unavailable."
+NO_HUMAN = "requires approval but no interactive user or gateway is present to approve it."
+
+
+def ask_once(display: str, description: str, pattern_key: str) -> str | None:
+    """Ask the human to approve ONE operation; ``None`` when approved, else why not (a sentence to put after
+    "BLOCKED: ..."). Deliberately NOT routed through ``_run_approval_gate`` (honors --yolo and allowlists):
+    approval EVERY time, no persisted scope, fail-closed without a human channel. Protected instruction-file
+    writes and Crema's service connections ask through it."""
+    try:
+        import tools.approval as _approval
+    except Exception:
+        return APPROVAL_UNAVAILABLE
+
+    # Gateway surface: block on the button round-trip when a notify callback
+    # is registered for this session. One-operation only — no scope buttons.
+    session_key = _ctx.get_current_session_key()
+    try:
+        with _approval._lock:
+            notify_cb = _approval._gateway_notify_cbs.get(session_key)
+    except Exception:
+        notify_cb = None
+
+    if notify_cb is not None:
+        approval_data = {
+            "command": display,
+            "pattern_key": pattern_key,
+            "pattern_keys": [pattern_key],
+            "description": description,
+            "allow_permanent": False,
+            "allow_session": False}
+        decision = _gw._await_gateway_decision(session_key, notify_cb, approval_data, surface="gateway")
+        if decision.get("notify_failed"):
+            return "requires approval but the approval request could not be delivered."
+        if decision.get("cancelled"):
+            return f"approval was withdrawn before the user answered ({decision['cancelled']})."
+        choice, timed = decision.get("choice"), not decision.get("resolved")
+    else:
+        # CLI surface: per-thread approval callback (prompt_toolkit panel).
+        try:
+            from tools.terminal_tool import _get_approval_callback
+            callback = _get_approval_callback()
+        except Exception:
+            callback = None
+        if callback is None:
+            # No human channel (script, cron, background thread): fail closed.
+            return NO_HUMAN
+        choice = prompt_dangerous_approval(
+            display, description, allow_permanent=False, allow_session=False, approval_callback=callback)
+        if choice == "cancelled":
+            return ("approval prompt could not be delivered or was not answered "
+                    f"({getattr(choice, 'cause', 'no answer')}).")
+        timed = choice == "timeout"
+    # Any tapped scope is a one-operation grant; nothing is persisted.
+    if not timed and choice in {"once", "session", "always"}:
+        return None
+    return ("approval prompt timed out without a user response. Silence is not consent." if timed
+            else "was denied by the user.")

@@ -247,8 +247,7 @@ def _protected_instruction_reason(filepath: str, task_id: str = "default",
     return None
 
 
-_APPROVAL_UNAVAILABLE = "requires approval but the approval subsystem is unavailable."
-_NO_HUMAN = "requires approval but no interactive user or gateway is present to approve it."
+from tools.approval_prompt import APPROVAL_UNAVAILABLE as _APPROVAL_UNAVAILABLE, NO_HUMAN as _NO_HUMAN
 
 
 def _request_protected_instruction_approval(reasons: list[str], task_id: str = "default") -> str | None:
@@ -269,61 +268,10 @@ def _request_protected_instruction_approval(reasons: list[str], task_id: str = "
         "{why} The user has NOT consented to this write. Do NOT retry it or "
         "attempt the same edit via another path (terminal, execute_code, "
         "etc.).")
-    timed_out = blocked.format(why="approval prompt timed out without a user response. Silence is not consent.")
-    denied = blocked.format(why="was denied by the user.")
+    from tools.approval_prompt import ask_once
 
-    try:
-        import tools.approval as _approval
-        from tools.approval_context import get_current_session_key
-        from tools.approval_gateway_wait import _await_gateway_decision
-        from tools.approval_prompt import prompt_dangerous_approval
-    except Exception:
-        return blocked.format(why=_APPROVAL_UNAVAILABLE)
-
-    # Gateway surface: block on the button round-trip when a notify callback
-    # is registered for this session. One-operation only — no scope buttons.
-    session_key = get_current_session_key()
-    try:
-        with _approval._lock:
-            notify_cb = _approval._gateway_notify_cbs.get(session_key)
-    except Exception:
-        notify_cb = None
-
-    if notify_cb is not None:
-        approval_data = {
-            "command": display,
-            "pattern_key": "protected_instruction_file",
-            "pattern_keys": ["protected_instruction_file"],
-            "description": description,
-            "allow_permanent": False,
-            "allow_session": False}
-        decision = _await_gateway_decision(session_key, notify_cb, approval_data, surface="gateway")
-        if decision.get("notify_failed"):
-            return blocked.format(why="requires approval but the approval request could not be delivered.")
-        if decision.get("cancelled"):
-            return blocked.format(why=f"approval was withdrawn before the user answered ({decision['cancelled']}).")
-        choice, timed = decision.get("choice"), not decision.get("resolved")
-    else:
-        # CLI surface: per-thread approval callback (prompt_toolkit panel).
-        try:
-            from tools.terminal_tool import _get_approval_callback
-            callback = _get_approval_callback()
-        except Exception:
-            callback = None
-        if callback is None:
-            # No human channel (script, cron, background thread): fail closed —
-            # auto-approving here would recreate the persistence vector.
-            return blocked.format(why=_NO_HUMAN)
-        choice = prompt_dangerous_approval(
-            display, description, allow_permanent=False, allow_session=False, approval_callback=callback)
-        if choice == "cancelled":
-            return blocked.format(why="approval prompt could not be delivered or was not answered "
-                                      f"({getattr(choice, 'cause', 'no answer')}).")
-        timed = choice == "timeout"
-    # Any tapped scope is a one-operation grant; nothing is persisted.
-    if not timed and choice in {"once", "session", "always"}:
-        return None
-    return timed_out if timed else denied
+    why = ask_once(display, description, "protected_instruction_file")
+    return None if why is None else blocked.format(why=why)
 
 
 def _check_protected_instruction_write(paths: list[str], task_id: str = "default") -> str | None:

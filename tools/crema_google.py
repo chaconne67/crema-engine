@@ -7,8 +7,9 @@ feature (FEATURES); Google comes back to this engine's settings server (CALLBACK
 `finish` trades the code for tokens, checks the feature's permission was given by the right account (and that
 Gmail lets the address in), and adds the feature to the account. The newest refresh token holds every permission
 the account gave (asked with include_granted_scopes), so one is kept per account. Nothing goes through Aishift:
-the refresh token stays in this engine's .env (SECRET_PREFIX, never passed to the terminal), the account
-and its features in the config (CONFIG_KEY). 연결 끊기 takes one feature away; with none left the account goes.
+the refresh token stays in this engine's .env (SECRET_PREFIX, never passed to the terminal) sealed so only this
+Windows user can open it, the account and its features in the config (CONFIG_KEY). 연결 끊기 takes one feature
+away; with none left Google takes the sign-in back and the account goes.
 
 Gmail is the `mail` tool (XOAUTH2 with `access_token`). Calendar and Drive are the `calendar` and `drive` tools,
 with Google's REST APIs and the Python standard library. A calendar change that notifies other people asks the
@@ -37,6 +38,7 @@ from tools.registry import registry, tool_error
 
 AUTHORIZE = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN = "https://oauth2.googleapis.com/token"
+REVOKE = "https://oauth2.googleapis.com/revoke"
 CALLBACK = "/api/crema/google/callback"
 # Crema's sign-in app. A Desktop client's secret is not a secret to Google (it ships in every copy); PKCE guards the
 # sign-in. Kept in main /srv/consolidation/secrets/crema-google-app.env, changed there and here together.
@@ -50,6 +52,7 @@ FEATURES = {"mail": "https://mail.google.com/",
 IDENTITY = "openid email"
 CONFIG_KEY = "google_accounts"
 SECRET_PREFIX = "CREMA_GOOGLE_"
+SEALED = "dpapi:"
 CALENDAR = "https://www.googleapis.com/calendar/v3"
 DRIVE = "https://www.googleapis.com/drive/v3"
 UPLOAD = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink"
@@ -121,13 +124,39 @@ def _secret_name(address: str) -> str:
     return SECRET_PREFIX + re.sub(r"[^A-Z0-9]", "_", address.upper())
 
 
+def _seal(text: str) -> str:
+    """The sign-in as only this Windows user on this PC can open it (Windows DPAPI)."""
+    import win32crypt
+
+    return SEALED + base64.b64encode(win32crypt.CryptProtectData(text.encode(), None, None, None, None, 0)).decode()
+
+
+def _unseal(value: str) -> str:
+    import win32crypt
+
+    return win32crypt.CryptUnprotectData(base64.b64decode(value[len(SEALED):]), None, None, None, 0)[1].decode()
+
+
 def _grant(address: str) -> Dict[str, str]:
     from hermes_cli.config import get_env_value
 
     value = get_env_value(_secret_name(address))
-    if not value:
+    if not value or not value.startswith(SEALED):  # none, or kept unsealed before Crema sealed it
         raise LookupError(f"the Google sign-in for {address} is missing; connect it again in Settings")
-    return json.loads(value)
+    return json.loads(_unseal(value))
+
+
+def _revoke(address: str) -> None:
+    """Google takes back what the account allowed Crema; one it no longer knows is already taken back."""
+    try:
+        token = _grant(address)["refresh_token"]
+    except LookupError:
+        return  # no sign-in on this PC to take back
+    try:
+        _http("POST", REVOKE, form={"token": token})
+    except GoogleError as error:
+        if error.reason != "invalid_token":
+            raise
 
 
 def _save(address: str, features: List[str]) -> None:
@@ -138,6 +167,7 @@ def _save(address: str, features: List[str]) -> None:
     if features:
         kept.append({"address": address, "features": features})
     else:
+        _revoke(address)
         remove_env_value(_secret_name(address))
     if kept:
         config[CONFIG_KEY] = kept
@@ -254,8 +284,7 @@ def _trade(flow: Dict[str, Any], code: str) -> str:
             return "server"
     from hermes_cli.config import save_env_value
 
-    save_env_value(_secret_name(address), json.dumps(
-        {"refresh_token": tokens["refresh_token"]}))
+    save_env_value(_secret_name(address), _seal(json.dumps({"refresh_token": tokens["refresh_token"]})))
     before = next((a["features"] for a in accounts() if a["address"].lower() == address.lower()), [])
     _save(address, sorted({*before, flow["feature"]}))
     if flow["feature"] == "mail":

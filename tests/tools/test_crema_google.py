@@ -57,6 +57,8 @@ class FakeGoogle:
 
     def __call__(self, method, url, *, form=None, body=None, token="", content_type=""):
         self.calls.append((method, url, form, body))
+        if url == google.REVOKE:
+            return b""
         if url == google.TOKEN:
             if form["grant_type"] == "refresh_token":
                 self.refreshes += 1
@@ -90,6 +92,9 @@ def fake(monkeypatch):
     global FAKE
     found = FAKE = FakeGoogle()
     monkeypatch.setattr(google, "_http", found)
+    # Windows DPAPI stands in as a reversible wrapper (these tests run on Linux).
+    monkeypatch.setattr(google, "_seal", lambda text: google.SEALED + text[::-1])
+    monkeypatch.setattr(google, "_unseal", lambda value: value[len(google.SEALED):][::-1])
     google._tokens.clear()
     asked = []
     monkeypatch.setattr(mail_tool, "ask_to_send", lambda summary, what="메일 보내기", key="mail_send": asked.append((what, summary)) or None)
@@ -118,8 +123,9 @@ def test_each_feature_asks_only_its_permission_and_the_account_keeps_what_it_has
     assert how == "done" and google.status(started["flow"]) == {"status": "done", "address": "me@gmail.com", "feature": "mail"}
     assert mail_tool.accounts() == [{"address": "me@gmail.com", "provider": "google"}]
     assert google.state() == {"accounts": [{"address": "me@gmail.com", "features": ["mail"]}]}
-    kept = json.loads(get_env_value("CREMA_GOOGLE_ME_GMAIL_COM"))
-    assert kept == {"refresh_token": "1//refresh"}
+    kept = get_env_value("CREMA_GOOGLE_ME_GMAIL_COM")
+    assert kept.startswith(google.SEALED) and "1//refresh" not in kept
+    assert google._grant("me@gmail.com") == {"refresh_token": "1//refresh"}
     assert not get_env_value("CREMA_MAIL_PASSWORD_ME_GMAIL_COM")
     # A second coming back with the same state finds nothing to settle.
     assert google.finish("code-1", query["state"], "") == "unknown"
@@ -133,8 +139,11 @@ def test_each_feature_asks_only_its_permission_and_the_account_keeps_what_it_has
     mail_tool.remove("me@gmail.com")
     assert mail_tool.accounts() == [] and google.accounts() == [{"address": "me@gmail.com", "features": ["calendar"]}]
     assert get_env_value("CREMA_GOOGLE_ME_GMAIL_COM")
+    assert not [c for c in FAKE.calls if c[1] == google.REVOKE]
+    # The last feature gone: Google takes the sign-in back, then it leaves this PC.
     google.remove("calendar", "me@gmail.com")
     assert google.accounts() == [] and not get_env_value("CREMA_GOOGLE_ME_GMAIL_COM")
+    assert [c[2] for c in FAKE.calls if c[1] == google.REVOKE] == [{"token": "1//refresh"}]
 
 
 def test_drive_alone_takes_the_account_that_allowed_it(fake):

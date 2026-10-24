@@ -60,6 +60,10 @@ async def main() -> None:
     if len(token) < 16:
         sys.exit("HERMES_DASHBOARD_SESSION_TOKEN is missing or too short")
     use_only_crema_connections()
+    # The engine's own failures, for Crema to send when 오류 정보 보내기 is on (tools/crema_failures.py).
+    from tools import crema_failures
+
+    crema_failures.watch()
 
     # Only the packages bundled with Crema (the `crema` extra); never install more at run time.
     os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
@@ -337,6 +341,11 @@ async def main() -> None:
             raise HTTPException(status_code=404, detail="no such service")
         return {"ok": True}
 
+    # Crema takes the failures kept since it last looked and sends them, or drops them when the user turned that off.
+    @settings.get("/api/crema/failures")
+    async def failures():
+        return crema_failures.take()
+
     @settings.post("/api/crema/turns/handed")
     async def turns_handed(body: dict):
         await asyncio.to_thread(crema_file_turns.handed, str(body.get("session_id") or ""), int(body.get("upto") or 0))
@@ -352,7 +361,12 @@ async def main() -> None:
                                             or path in (crema_google.CALLBACK, "/api/crema/front"))
         if not back and not hmac.compare_digest(given.encode(), token.encode()):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-        return await call_next(request)
+        response = await call_next(request)
+        # A settings call that failed (an install, a connection): the route, never what was asked.
+        if response.status_code >= 500:
+            route = request.scope.get("route")
+            crema_failures.record("settings", f"{request.method} {getattr(route, 'path', '?')} {response.status_code}")
+        return response
 
     port = free_port()
     crema_services.SETTINGS.update(port=port, token=token)

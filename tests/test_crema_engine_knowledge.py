@@ -329,3 +329,148 @@ def test_daily_pass_counts_attempts_so_a_failing_provider_stops_at_the_cap(store
     report = crema_engine.daily_once(api, now)
     assert len(attempts) == crema_engine.DAILY_MAX_CHATS and report["distilled"] == 0
     assert all(store.distilled_count(sid) == 0 for sid in attempts)  # left for another day
+
+
+# -- upkeep quality: successful judgments, changed evidence, and bounded candidate coverage --
+
+
+@pytest.mark.parametrize("phase", ["pair", "patterns"])
+@pytest.mark.parametrize("bad", ["empty", "missing", "non_object", "bad_type", "decode_error"])
+def test_daily_upkeep_does_not_cache_an_incomplete_judgment(store, judge, monkeypatch, phase, bad):
+    calls, answers = judge
+    kind, count = ("reference", 2) if phase == "pair" else ("feedback", 3)
+    for i in range(count):
+        store.write(f"{kind}/검토-{i}", title=f"검토 {i}", body=f"서로 다른 검토 내용 {i}", sources=["test"])
+    if phase == "patterns":
+        monkeypatch.setattr(store, "search", lambda *a, **k: [])
+    task = "knowledge_upkeep" if phase == "pair" else "knowledge_patterns"
+    valid = {"same_topic": False, "contradicts": False, "why": "서로 다른 기록"} if phase == "pair" else {"patterns": []}
+    invalid = {"empty": None, "missing": {}, "non_object": [],
+               "bad_type": {"same_topic": "false", "contradicts": False, "why": ""} if phase == "pair" else {"patterns": {}}}
+
+    def malformed(_):
+        if bad == "decode_error":
+            raise json.JSONDecodeError("incomplete response", "{", 1)
+        return invalid[bad]
+
+    answers[task] = malformed
+    now = time.time()
+    report = crema_engine.daily_once(FakeApi({}), now)
+    assert report.get("upkeep_failed") is True
+    assert len([c for c in calls if c["task"] == task]) == 2  # one repair, inside the daily budget
+    key = "upkeep_judged" if phase == "pair" else "upkeep_patterns"
+    assert not store.maintenance_value(key)
+    assert all(p["status"] == "active" for p in store.list())
+    # A later daily pass must still try the same evidence and may then mark it complete.
+    answers[task] = valid
+    before = len(calls)
+    report = crema_engine.daily_once(FakeApi({}), now + crema_engine.DAILY_EVERY_S + 1)
+    assert not report.get("upkeep_failed")
+    assert len(calls) > before and store.maintenance_value(key)
+
+
+@pytest.mark.parametrize("phase", ["pair", "patterns"])
+def test_daily_upkeep_repairs_output_once_and_keeps_valid_empty_results(store, judge, monkeypatch, phase):
+    calls, answers = judge
+    kind, count = ("reference", 2) if phase == "pair" else ("feedback", 3)
+    for i in range(count):
+        store.write(f"{kind}/형식-{i}", title=f"형식 {i}", body=f"개별 근거 {i}", sources=["test"])
+    if phase == "patterns":
+        monkeypatch.setattr(store, "search", lambda *a, **k: [])
+    task = "knowledge_upkeep" if phase == "pair" else "knowledge_patterns"
+    valid = {"same_topic": False, "contradicts": False, "why": ""} if phase == "pair" else {"patterns": []}
+    replies = iter([None, valid])
+    answers[task] = lambda _: next(replies)
+    now = time.time()
+    report = crema_engine.daily_once(FakeApi({}), now)
+    assert not report.get("upkeep_failed")
+    assert len(calls) == 2 and len(calls) <= crema_engine.UPKEEP_MAX_CHECKS
+    assert len(calls[1]["user"]) > len(calls[0]["user"])  # repair gets the actual output error
+    before = len(calls)
+    crema_engine.daily_once(FakeApi({}), now + crema_engine.DAILY_EVERY_S + 1)
+    assert len(calls) == before  # valid "none" is a completed judgment, not a failure
+
+
+@pytest.mark.parametrize("phase", ["pair", "patterns"])
+@pytest.mark.parametrize("edit", ["body", "timeline", "authority"])
+def test_daily_upkeep_rechecks_changed_evidence_on_the_same_day(store, judge, monkeypatch, phase, edit):
+    calls, answers = judge
+    kind, count = ("reference", 2) if phase == "pair" else ("feedback", 3)
+    for i in range(count):
+        store.write(f"{kind}/변경-{i}", title=f"변경 {i}", body=f"개별 근거 {i}", sources=["test"])
+    if phase == "patterns":
+        monkeypatch.setattr(store, "search", lambda *a, **k: [])
+    answers["knowledge_upkeep"] = {"same_topic": False, "contradicts": False, "why": ""}
+    answers["knowledge_patterns"] = {"patterns": []}
+    task = "knowledge_upkeep" if phase == "pair" else "knowledge_patterns"
+    now = time.time()
+    crema_engine.daily_once(FakeApi({}), now)
+    before = len([c for c in calls if c["task"] == task])
+    slug = f"{kind}/변경-{count - 1}"
+    page = store.get(slug)
+    if edit == "timeline":
+        store.add_timeline(slug, "새로 확인한 정정 근거", source="chat:correction")
+    else:
+        store.write(slug, title=page["title"], body="같은 날 고친 새 본문" if edit == "body" else page["body"],
+                    sources=["test"], authority="standing_instruction" if edit == "authority" else page["authority"])
+    assert store.get(slug)["updated"] == page["updated"]  # day-only updated is deliberately identical
+    report = crema_engine.daily_once(FakeApi({}), now + crema_engine.DAILY_EVERY_S + 1)
+    assert not report.get("upkeep_failed")
+    assert len([c for c in calls if c["task"] == task]) > before
+
+
+def test_daily_upkeep_preserves_corrections_in_bounded_model_input(store, judge):
+    calls, answers = judge
+    for i in range(2):
+        store.write(f"reference/긴-본문-{i}", title=f"긴 본문 {i}", body="과거 배경 설명. " * 1000,
+                    sources=["test"], authority="standing_instruction" if i == 0 else "agent_observed")
+    store.add_timeline("reference/긴-본문-0", "현재 정정: 더 이상 이전 방식을 쓰지 않는다", source="chat:correction")
+    answers["knowledge_upkeep"] = {"same_topic": False, "contradicts": False, "why": ""}
+    crema_engine.daily_once(FakeApi({}), time.time())
+    assert calls and all("현재 정정" in c["user"] and "standing_instruction" in c["user"] for c in calls)
+
+
+@pytest.mark.parametrize("already_checked", [False, True])
+def test_daily_upkeep_can_reach_a_later_conflicting_search_candidate(store, judge, monkeypatch, already_checked):
+    calls, answers = judge
+    old, decoy, current = "reference/메시지-예전", "reference/대화-제목", "reference/메시지-현재"
+    for slug, title, body in ((old, "예전 메시지", "wake 옵션을 쓴다"), (decoy, "대화 제목", "제목을 요약한다"),
+                              (current, "현재 메시지", "wake 옵션이 없어졌다")):
+        store.write(slug, title=title, body=body, sources=["test"])
+    targets = [decoy] if already_checked else [decoy, old]
+    monkeypatch.setattr(store, "search", lambda queries, **_: [store.get(current)] + [store.get(s) for s in targets]
+                        if queries == ["현재 메시지"] else [])
+
+    def judgment(user):
+        conflict = f"[{old}]" in user and f"[{current}]" in user
+        return {"same_topic": conflict, "contradicts": conflict, "why": "wake 옵션의 현재 사용법이 다르다" if conflict else "별도 주제"}
+
+    answers["knowledge_upkeep"] = judgment
+    now = time.time()
+    if already_checked:
+        crema_engine.daily_once(FakeApi({}), now)
+        targets.append(old)
+        now += crema_engine.DAILY_EVERY_S + 1
+    report = crema_engine.daily_once(FakeApi({}), now)
+    assert report["conflicts"] == 1
+    assert store.get(old)["status"] == store.get(current)["status"] == "needs_review"
+    assert store.get(decoy)["status"] == "active"
+    assert all(store.get(s)["body"] == b for s, b in ((old, "wake 옵션을 쓴다"), (current, "wake 옵션이 없어졌다")))
+
+
+def test_daily_upkeep_output_repairs_share_the_original_call_budget(store, judge):
+    calls, answers = judge
+    for i in range(20):
+        store.write(f"reference/예산-{i}", title=f"예산 {i}", body=f"자료 {i}", sources=["test"])
+    seen = 0
+
+    def reply(_):
+        nonlocal seen
+        seen += 1
+        return None if seen % 2 else {"same_topic": False, "contradicts": False, "why": ""}
+
+    answers["knowledge_upkeep"] = reply
+    report = crema_engine.daily_once(FakeApi({}), time.time())
+    assert len(calls) <= crema_engine.UPKEEP_MAX_CHECKS
+    assert len(calls) > 1
+    assert not report.get("upkeep_failed")

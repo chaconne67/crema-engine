@@ -56,3 +56,58 @@ def test_frames_outside_the_engine_are_left_out_and_codes_stay_ascii():
         json.loads("{")
     except ValueError as exc:
         assert all(not line.startswith("json/") for line in crema_failures._frames(exc.__traceback__))
+
+
+def test_the_moments_the_user_was_let_down_are_kept_by_kind():
+    import json
+
+    class Manager:
+        _hooks = {}
+
+    crema_failures.observe(Manager)
+    hooks = {name: callbacks[-1] for name, callbacks in Manager._hooks.items()}
+    hooks["on_session_end"](session_id="s", completed=True, failed=False, interrupted=False)  # a finished answer
+    hooks["on_session_end"](completed=False, failed=False, interrupted=True, turn_exit_reason="interrupted")
+    hooks["on_session_end"](completed=False, failed=True, interrupted=False,
+                            turn_exit_reason="max_iterations_reached(90/90)")
+    hooks["post_tool_call"](tool_name="read_file", result='{"content": "x"}', status="ok")
+    hooks["post_tool_call"](tool_name="terminal", result=json.dumps({"output": "C:/Users/김철수", "exit_code": 127}),
+                            status="error", error_message="bash: 비밀: not found")
+    hooks["post_tool_call"](tool_name="mail", result='{"error": "SMTP 535 me@x.kr"}', status="error")
+    hooks["post_tool_call"](tool_name="terminal", result='{"user_summary": "주인님이 거절"}', status="error")
+    hooks["post_approval_response"](choice="deny")
+    hooks["post_approval_response"](choice="timeout")
+    hooks["api_request_error"](provider="openrouter", status_code=429, reason="rate_limit", retryable=True,
+                               retry_count=1, max_retries=3)
+    hooks["api_request_error"](provider="openrouter", status_code=401, reason="auth", retryable=False)
+    taken = crema_failures.take()
+    assert [(f["stage"], f["code"]) for f in taken["failures"]] == [
+        ("turn", "stopped"), ("turn", "max_iterations_reached"), ("tool", "terminal exit 127"), ("tool", "mail"),
+        ("approval", "timeout"), ("model", "openrouter auth")]
+    assert "김철수" not in str(taken) and "SMTP" not in str(taken)
+
+
+def test_a_step_that_raised_keeps_its_class_and_where():
+    try:
+        _bash_missing()
+    except RuntimeError as exc:
+        crema_failures.failed("connect.service", exc)
+    [failure] = crema_failures.take()["failures"]
+    assert (failure["stage"], failure["code"]) == ("connect.service", "RuntimeError")
+    assert failure["details"]["trace"][-1].endswith(" _bash_missing")
+
+
+def test_the_agent_records_a_request_crema_fell_short_of_by_kind_only():
+    import json
+
+    assert json.loads(crema_failures.crema_unmet({"why": "no_tool", "area": "documents"})) == {"recorded": True}
+    assert "error" in json.loads(crema_failures.crema_unmet({"why": "엑셀 수식을 못 고침", "area": "documents"}))
+    assert crema_failures.take()["failures"] == [{"stage": "unmet", "code": "no_tool documents", "details": {}}]
+
+
+def test_crema_offers_the_unmet_tool_directly():
+    from tools.tool_search import _DIRECT_SURFACE_TOOLSETS
+    from toolsets import TOOLSETS
+
+    assert "crema_unmet" in TOOLSETS["hermes-api-server"]["tools"]
+    assert "crema_unmet" in _DIRECT_SURFACE_TOOLSETS

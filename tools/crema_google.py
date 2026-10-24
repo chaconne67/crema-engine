@@ -245,6 +245,10 @@ def finish(code: str, state: str, error: str) -> str:
         flow["status"] = "working"
     reason = "denied" if error else _trade(flow, code)
     flow.update({"status": "failed", "reason": reason} if reason else {"status": "done"})
+    if reason:
+        from tools import crema_failures
+
+        crema_failures.record("connect.google", f"{flow.get('feature', '')} {reason}")
     return reason or "done"
 
 

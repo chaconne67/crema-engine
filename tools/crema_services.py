@@ -134,6 +134,10 @@ def _connect(job: dict, url: str, title: str) -> None:
         sync_services()
         job["error"] = str(exc)
         job["status"] = "cancelled" if job["cancelled"] else "failed"
+        if not job["cancelled"]:
+            from tools import crema_failures
+
+            crema_failures.failed("connect.service", exc)
 
 
 def job_state(job_id: str) -> dict | None:

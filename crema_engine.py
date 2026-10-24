@@ -101,6 +101,7 @@ async def main() -> None:
     from hermes_cli.plugins import get_plugin_manager
 
     get_plugin_manager()._hooks.setdefault("transform_llm_output", []).append(drop_next_input)
+    crema_failures.observe(get_plugin_manager())
 
     import uvicorn
     from fastapi import FastAPI, HTTPException, Request
@@ -361,8 +362,8 @@ async def main() -> None:
                                             or path in (crema_google.CALLBACK, "/api/crema/front"))
         if not back and not hmac.compare_digest(given.encode(), token.encode()):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-        # A settings call that failed (an install, a connection): the route, never what was asked. An exception the
-        # route did not answer comes through here, before the server makes its 500 of it.
+        # A settings call that did not finish (an install, a connection, an address refused): the route, never what
+        # was asked. An exception the route did not answer comes through here, before the server makes its 500 of it.
         def failed(status):
             crema_failures.record("settings", f"{request.method} {getattr(request.scope.get('route'), 'path', '?')} {status}")
 
@@ -371,7 +372,7 @@ async def main() -> None:
         except Exception:
             failed(500)
             raise
-        if response.status_code >= 500:
+        if response.status_code >= 400:
             failed(response.status_code)
         return response
 

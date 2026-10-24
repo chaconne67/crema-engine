@@ -28,11 +28,11 @@ def config(monkeypatch):
 
 def test_off_hides_the_skill_and_on_shows_it_again(monkeypatch, config):
     monkeypatch.setattr(crema_ego, "cli", lambda: "ego-browser")
-    assert crema_ego.enable(False) == {"installed": True, "enabled": False}
+    assert crema_ego.enable(False) == {"installed": True, "enabled": False, "progress": None}
     assert config["skills"]["disabled"] == ["kept-off", "ego-browser"]
     assert crema_ego.enable(False)["enabled"] is False  # off twice: still listed once
     assert config["skills"]["disabled"] == ["kept-off", "ego-browser"]
-    assert crema_ego.enable(True) == {"installed": True, "enabled": True}
+    assert crema_ego.enable(True) == {"installed": True, "enabled": True, "progress": None}
     # A skill the user turned off stays off.
     assert config["skills"]["disabled"] == ["kept-off"]
 
@@ -48,7 +48,7 @@ def _command(folder: Path) -> Path:
 def test_not_installed(monkeypatch, tmp_path):
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.setattr(crema_ego, "_user_path", lambda: "")
-    assert crema_ego.state() == {"installed": False, "enabled": True}
+    assert crema_ego.state() == {"installed": False, "enabled": True, "progress": None}
 
 
 def test_found_in_the_users_new_path_joins_the_engines(monkeypatch, tmp_path):
@@ -56,7 +56,7 @@ def test_found_in_the_users_new_path_joins_the_engines(monkeypatch, tmp_path):
     command = _command(tmp_path / "ego")
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     monkeypatch.setattr(crema_ego, "_user_path", lambda: str(command.parent))
-    assert crema_ego.state() == {"installed": True, "enabled": True}
+    assert crema_ego.state() == {"installed": True, "enabled": True, "progress": None}
     assert os.environ["PATH"].split(os.pathsep)[0] == str(command.parent)
 
 
@@ -76,12 +76,21 @@ class _Install:
         self.ran = []  # the installer's command line, then each ego-browser call's arguments
         self.installed = False
         self.closed = 0  # times ego lite's windows were closed
+        self.seen = []  # where the install said it was, at each download report and each command it ran
         monkeypatch.setattr(crema_ego, "_home", lambda: self.home)
         monkeypatch.setattr(crema_ego, "cli", lambda: "ego-browser" if self.installed else None)
-        monkeypatch.setattr(crema_ego.urllib.request, "urlretrieve", lambda url, path: Path(path).write_bytes(b"MZ"))
+
+        def fetch(url, path, report):
+            for blocks in (0, 3, 8):  # a 64 KB file in 8 KB blocks: 0%, 37%, 100%
+                report(blocks, 8192, 65536)
+                self.seen.append(crema_ego.state()["progress"])
+            Path(path).write_bytes(b"MZ")
+
+        monkeypatch.setattr(crema_ego.urllib.request, "urlretrieve", fetch)
         self.replies = {"list": listed, "import": imported or {"success": True, "new_profile_dirs": []}}
 
         def run(argv, **kw):
+            self.seen.append(crema_ego.state()["progress"])
             if isinstance(argv, str):  # the installer
                 self.ran.append(argv.split('" ', 1)[1])
                 folder = self.home / "Application" / "0.6.0.16"
@@ -103,7 +112,7 @@ class _Install:
 def test_install_sets_ego_lite_up_as_crema_chooses(monkeypatch, tmp_path, config):
     install = _Install(monkeypatch, tmp_path)
     config["skills"]["disabled"].append("ego-browser")  # turned off before: 설치하고 켜기 turns it on
-    assert crema_ego.install() == {"installed": True, "enabled": True}
+    assert crema_ego.install() == {"installed": True, "enabled": True, "progress": None}
     assert install.ran[0] == f'--install="{crema_ego.TAG}" --silent'
     assert "needsadmin=False" in crema_ego.TAG
     # Its welcome screens skipped; the default browser's default profile brought along in place of the empty one;
@@ -120,10 +129,10 @@ def test_bringing_the_sign_ins_along_failed_install_again_finishes_it(monkeypatc
     with pytest.raises(OSError, match="could not bring chrome"):
         crema_ego.install()
     # ego lite is there, but not as Crema sets it up: 설치 stays.
-    assert crema_ego.state() == {"installed": False, "enabled": True}
+    assert crema_ego.state() == {"installed": False, "enabled": True, "progress": None}
     install.ran.clear()
     install.replies["import"] = {"success": True, "new_profile_dirs": []}
-    assert crema_ego.install() == {"installed": True, "enabled": True}
+    assert crema_ego.install() == {"installed": True, "enabled": True, "progress": None}
     assert install.ran == [["import", "list"], ["import", "--browser", "chrome", "--profile", "Default",
                                                 "--clear-existing-profiles", "--no-default"]]
 
@@ -134,7 +143,7 @@ def test_install_leaves_an_earlier_setup_as_it_is(monkeypatch, tmp_path):
     config = install.home / "User Data" / "ego_config.json"
     config.parent.mkdir(parents=True)
     config.write_text('{"not_first_run": true, "kept": 1}')
-    assert crema_ego.install() == {"installed": True, "enabled": True}
+    assert crema_ego.install() == {"installed": True, "enabled": True, "progress": None}
     assert install.ran[1:] == [["import", "list"]]
     assert config.read_text() == '{"not_first_run": true, "kept": 1}'
     assert install.closed == 0
@@ -142,7 +151,7 @@ def test_install_leaves_an_earlier_setup_as_it_is(monkeypatch, tmp_path):
 
 def test_install_with_no_browser_to_bring_along(monkeypatch, tmp_path):
     install = _Install(monkeypatch, tmp_path, listed={"browser_sources": [], "success": True})
-    assert crema_ego.install() == {"installed": True, "enabled": True}
+    assert crema_ego.install() == {"installed": True, "enabled": True, "progress": None}
     assert install.ran[1:] == [["import", "list"]]
 
 
@@ -162,3 +171,21 @@ def test_install_refuses_an_installer_not_signed_by_citro_labs(monkeypatch, tmp_
     with pytest.raises(ValueError, match="not signed by Citro Labs"):
         crema_ego.install()
     assert install.ran == []
+
+
+def test_install_says_where_it_is_until_it_ends(monkeypatch, tmp_path, config):
+    """The 웹 브라우저 조작 card shows each step: the download's percent, the signature check, the installer, the
+    sign-ins brought along; nothing once it has ended."""
+    install = _Install(monkeypatch, tmp_path)
+    crema_ego.install()
+    steps = [dict(seen) for seen in install.seen if seen]
+    assert [(seen["step"], seen["percent"]) for seen in steps[:3]] == [("download", 0), ("download", 37), ("download", 100)]
+    assert [seen["step"] for seen in steps[3:]] == ["check", "install", "install", "import", "import", "import"]
+    assert crema_ego.state()["progress"] is None
+
+
+def test_a_failed_install_leaves_no_step_behind(monkeypatch, tmp_path):
+    _Install(monkeypatch, tmp_path, signer="")
+    with pytest.raises(ValueError):
+        crema_ego.install()
+    assert crema_ego.state()["progress"] is None

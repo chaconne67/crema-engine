@@ -123,7 +123,7 @@
 | 마이크 버튼이 안 보임 | 엔진이 아직 연결되지 않았다. 연결 칩이 "이 PC"가 될 때까지 기다린다 |
 
 ## 승인과 명령
-- 터미널 명령이 "Git Bash not found"로 실행되지 않음: 터미널은 Git for Windows의 bash로 명령을 실행한다. Git for Windows(https://git-scm.com/download/win)를 설치한 뒤 다시 시킨다.
+- 터미널 명령이나 파일 읽기·쓰기가 "Git Bash not found"로 실행되지 않음: 터미널과 파일 도구는 Git for Windows의 bash로 돈다. Crema 설치본에 들어 있으므로 따로 설치할 필요는 없다. 이 오류가 나면 Crema를 최신 판으로 업데이트하거나 다시 설치한다. 그래도 나면 Git for Windows(https://git-scm.com/download/win)를 설치한 뒤 다시 시킨다.
 - "이미 끝났거나 시간이 지난 요청입니다.": 그 승인 요청은 이미 끝났다. 필요하면 다시 시킨다.
 - 에이전트가 명령마다 묻는 게 번거로우면 방패 칩에서 **승인 없이 실행**을 고를 수 있다. 다만 모든 명령이 묻지 않고 실행된다는 점을 함께 알린다.
 

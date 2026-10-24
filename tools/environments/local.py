@@ -455,8 +455,9 @@ def strip_launch_profile_env(env: dict, target_home: "str | Path | None" = None)
 
 # --- Shell discovery ---
 def _windows_bash_candidates() -> list[str]:
-    """Ordered bash.exe candidates on Windows: Git for Windows's install dirs, then PATH last —
-    ``shutil.which`` may return WSL's bash, which fails silently on Windows paths. Neither
+    """Ordered bash.exe candidates on Windows: the Git Crema's installer carries (``CREMA_GIT_BASH``, set by
+    the app, so a PC without Git for Windows still runs commands and works on files), Git for Windows's install
+    dirs, then PATH last — ``shutil.which`` may return WSL's bash, which fails silently on Windows paths. Neither
     ``HERMES_GIT_BASH_PATH`` nor upstream Hermes's PortableGit (%LOCALAPPDATA%\\hermes\\git) is
     consulted: both belong to an upstream Hermes install, another agent program Crema must not use."""
     getenv = os.environ.get
@@ -466,7 +467,7 @@ def _windows_bash_candidates() -> list[str]:
         os.path.join(getenv("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Git", "bin"),
         lad and os.path.join(lad, "Programs", "Git", "bin"),
     ]
-    raw = [os.path.join(r, "bash.exe") for r in roots if r]
+    raw = [getenv("CREMA_GIT_BASH", "")] + [os.path.join(r, "bash.exe") for r in roots if r]
     candidates = list(dict.fromkeys(c for c in raw if c and os.path.isfile(c)))
     found = shutil.which("bash")
     if found and found not in candidates:

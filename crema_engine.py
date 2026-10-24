@@ -361,11 +361,18 @@ async def main() -> None:
                                             or path in (crema_google.CALLBACK, "/api/crema/front"))
         if not back and not hmac.compare_digest(given.encode(), token.encode()):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-        response = await call_next(request)
-        # A settings call that failed (an install, a connection): the route, never what was asked.
+        # A settings call that failed (an install, a connection): the route, never what was asked. An exception the
+        # route did not answer comes through here, before the server makes its 500 of it.
+        def failed(status):
+            crema_failures.record("settings", f"{request.method} {getattr(request.scope.get('route'), 'path', '?')} {status}")
+
+        try:
+            response = await call_next(request)
+        except Exception:
+            failed(500)
+            raise
         if response.status_code >= 500:
-            route = request.scope.get("route")
-            crema_failures.record("settings", f"{request.method} {getattr(route, 'path', '?')} {response.status_code}")
+            failed(response.status_code)
         return response
 
     port = free_port()

@@ -189,3 +189,212 @@ def test_a_failed_install_leaves_no_step_behind(monkeypatch, tmp_path):
     with pytest.raises(ValueError):
         crema_ego.install()
     assert crema_ego.state()["progress"] is None
+
+
+class _Browser:
+    def __init__(self, monkeypatch, tmp_path):
+        self.spaces = {}
+        self.calls = []
+        self.window_calls = []
+        self.visible = []
+        self.launched = 0
+        self.window = {"hwnd": 33, "pid": 44, "created": "100", "title": "owned", "visible": True, "marker": "Crema.Ego.test"}
+        monkeypatch.setattr(crema_ego, "_work_path", lambda session: tmp_path / (session + ".json") if session else
+                            (_ for _ in ()).throw(ValueError("conversation required")))
+        monkeypatch.setattr(crema_ego, "cli", lambda: "ego-browser")
+        monkeypatch.setattr(crema_ego, "_launch_hidden", self.launch)
+        monkeypatch.setattr(crema_ego, "_sdk", self.sdk)
+        monkeypatch.setattr(crema_ego, "_windows", self.windows)
+
+    def launch(self):
+        self.launched += 1
+
+    def windows(self, action, **kw):
+        self.window_calls.append((action, kw))
+        if action == "inspect":
+            return {"roots": [] if not self.launched else [44], "windows": self.visible}
+        if action == "present":
+            assert kw["space"] == self.spaces[1]["name"]
+            assert kw["page_title"] == "Login fixture"
+            return {"window": self.window, "normal_gui": True}
+        if action in {"show", "hide"}:
+            assert kw["window"]["hwnd"] == 33
+            return {"window": self.window, "hidden": action == "hide"}
+        raise AssertionError(action)
+
+    def sdk(self, script, **_):
+        self.calls.append(script)
+        if "listTaskSpaces" in script and ".handOff()" not in script:
+            return {"spaces": list(self.spaces.values())}
+        if "const t=await taskSpace(\"Crema " in script:
+            name = json.loads(script.split("taskSpace(", 1)[1].split(");", 1)[0])
+            self.spaces[1] = {"id": 1, "name": name, "createdBy": "agent", "ownership": "agent"}
+            return {"id": 1}
+        if "p.title()" in script:
+            return {"title": "Login fixture", "targetId": "target-one"}
+        if ".handOff()" in script:
+            self.spaces[1]["ownership"] = "agentDelegatedToUser"
+            return {"handedOff": True}
+        if "takeOverTaskSpace" in script:
+            self.spaces[1]["ownership"] = "agent"
+            return {"id": 1}
+        if ".finish(" in script:
+            del self.spaces[1]
+            return {"finished": True}
+        raise AssertionError(script)
+
+
+def test_browser_starts_hidden_once_and_preserves_user_windows(monkeypatch, tmp_path):
+    fake = _Browser(monkeypatch, tmp_path)
+    fake.visible = [{"hwnd": 7, "visible": True}]  # another window stays exactly as it was
+    first = crema_ego.browser("start", "chat-a")
+    assert first["space_id"] == 1 and first["status"] == "working"
+    assert crema_ego.browser("start", "chat-a") == first
+    assert fake.launched == 1
+    assert [action for action, _ in fake.window_calls] == ["inspect", "inspect"]
+    assert not any(".handOff()" in call for call in fake.calls)
+
+
+def test_browser_handoff_resume_same_space_and_normal_window(monkeypatch, tmp_path):
+    fake = _Browser(monkeypatch, tmp_path)
+    first = crema_ego.browser("start", "chat-a")
+    shown = crema_ego.browser("handoff", "chat-a", page="p1")
+    assert shown == {**first, "status": "waiting_for_user"}
+    assert fake.spaces[1]["ownership"] == "agentDelegatedToUser"
+    assert crema_ego.browser("resume", "chat-a", confirmed=True) == first
+    assert fake.spaces[1]["ownership"] == "agent"
+    assert [a for a, _ in fake.window_calls][-2:] == ["present", "hide"]
+    crema_ego.browser("handoff", "chat-a", page="p1")
+    assert [a for a, _ in fake.window_calls][-1] == "show"
+    assert sum(a == "present" for a, _ in fake.window_calls) == 1
+    crema_ego.browser("resume", "chat-a", confirmed=True)
+    assert crema_ego.browser("finish", "chat-a") == {"status": "finished", "space_id": 1}
+    assert not crema_ego._work_path("chat-a").exists()
+
+
+def test_browser_waits_for_human_and_does_not_finish_their_window(monkeypatch, tmp_path):
+    fake = _Browser(monkeypatch, tmp_path)
+    crema_ego.browser("start", "chat-a")
+    crema_ego.browser("handoff", "chat-a", page="p1")
+    calls = len(fake.window_calls)
+    with pytest.raises(ValueError, match="confirm"):
+        crema_ego.browser("resume", "chat-a")
+    with pytest.raises(ValueError, match="still has"):
+        crema_ego.browser("finish", "chat-a")
+    with pytest.raises(ValueError, match="with the user"):
+        crema_ego.browser("start", "chat-a")
+    assert len(fake.window_calls) == calls
+    assert fake.spaces[1]["ownership"] == "agentDelegatedToUser"
+
+
+def test_browser_does_not_claim_another_chat_or_replaced_space(monkeypatch, tmp_path):
+    fake = _Browser(monkeypatch, tmp_path)
+    crema_ego.browser("start", "chat-a")
+    with pytest.raises(ValueError, match="No browser work"):
+        crema_ego.browser("handoff", "chat-b", page="p1")
+    fake.spaces[1]["name"] = "someone else's Space"
+    before = len(fake.window_calls)
+    with pytest.raises(ValueError, match="no longer exists"):
+        crema_ego.browser("handoff", "chat-a", page="p1")
+    assert len(fake.window_calls) == before
+
+
+def test_failed_gui_selection_does_not_hand_control_to_user(monkeypatch, tmp_path):
+    fake = _Browser(monkeypatch, tmp_path)
+    crema_ego.browser("start", "chat-a")
+    original = fake.windows
+    def windows(action, **kw):
+        if action == "present":
+            raise OSError("Space picker unavailable")
+        return original(action, **kw)
+    monkeypatch.setattr(crema_ego, "_windows", windows)
+    with pytest.raises(OSError, match="picker"):
+        crema_ego.browser("handoff", "chat-a", page="p1")
+    assert fake.spaces[1]["ownership"] == "agent"
+    assert crema_ego._load_work("chat-a")["window"] is None
+
+
+def test_failed_takeover_restores_the_users_normal_window(monkeypatch, tmp_path):
+    fake = _Browser(monkeypatch, tmp_path)
+    crema_ego.browser("start", "chat-a")
+    crema_ego.browser("handoff", "chat-a", page="p1")
+    original = fake.sdk
+    def sdk(script, **_):
+        if "takeOverTaskSpace" in script:
+            raise OSError("Ego refused takeover")
+        return original(script)
+    monkeypatch.setattr(crema_ego, "_sdk", sdk)
+    with pytest.raises(OSError, match="refused"):
+        crema_ego.browser("resume", "chat-a", confirmed=True)
+    assert [action for action, _ in fake.window_calls][-2:] == ["hide", "show"]
+    assert crema_ego._load_work("chat-a")["phase"] == "waiting_for_user"
+
+
+def test_start_cannot_ignore_disabled_browser(monkeypatch, tmp_path, config):
+    fake = _Browser(monkeypatch, tmp_path)
+    config["skills"]["disabled"].append("ego-browser")
+    with pytest.raises(ValueError, match="Enable"):
+        crema_ego.browser("start", "chat-a")
+    assert fake.calls == [] and fake.launched == 0
+
+
+def test_handoff_requires_existing_page_and_verified_gui(monkeypatch, tmp_path):
+    fake = _Browser(monkeypatch, tmp_path)
+    crema_ego.browser("start", "chat-a")
+    with pytest.raises(ValueError, match="page label"):
+        crema_ego.browser("handoff", "chat-a")
+    original = fake.windows
+    monkeypatch.setattr(crema_ego, "_windows", lambda action, **kw: {"window": fake.window} if action == "present"
+                        else original(action, **kw))
+    with pytest.raises(OSError, match="normal GUI"):
+        crema_ego.browser("handoff", "chat-a", page="p1")
+    assert fake.spaces[1]["ownership"] == "agent"
+
+
+def test_browser_tool_rejects_a_missing_session(monkeypatch, tmp_path):
+    _Browser(monkeypatch, tmp_path)
+    result = json.loads(crema_ego.crema_ego({"action": "start"}))
+    assert "conversation required" in str(result)
+
+
+def test_crema_platform_exposes_the_single_browser_lifecycle():
+    from toolsets import TOOLSETS
+    assert "crema_ego" in TOOLSETS["hermes-api-server"]["tools"]
+
+
+def test_unverified_start_cannot_become_success_on_retry(monkeypatch, tmp_path):
+    fake = _Browser(monkeypatch, tmp_path)
+    original = fake.windows
+    inspected = 0
+    def windows(action, **kw):
+        nonlocal inspected
+        if action == "inspect":
+            inspected += 1
+            if inspected == 2:
+                fake.visible = [{"hwnd": 777, "visible": True}]
+        return original(action, **kw)
+    monkeypatch.setattr(crema_ego, "_windows", windows)
+    with pytest.raises(OSError, match="became visible"):
+        crema_ego.browser("start", "chat-a")
+    with pytest.raises(OSError, match="not verified"):
+        crema_ego.browser("start", "chat-a")
+    assert crema_ego._load_work("chat-a")["phase"] == "blocked"
+    with pytest.raises(ValueError, match="working agent-owned"):
+        crema_ego.browser("handoff", "chat-a", page="p1")
+    crema_ego.browser("finish", "chat-a")
+    assert not crema_ego._work_path("chat-a").exists()
+
+
+def test_replaced_window_cannot_take_control_back_from_human(monkeypatch, tmp_path):
+    fake = _Browser(monkeypatch, tmp_path)
+    crema_ego.browser("start", "chat-a")
+    crema_ego.browser("handoff", "chat-a", page="p1")
+    original = fake.windows
+    def windows(action, **kw):
+        if action == "hide":
+            raise OSError("Ego window ownership changed")
+        return original(action, **kw)
+    monkeypatch.setattr(crema_ego, "_windows", windows)
+    with pytest.raises(OSError, match="ownership changed"):
+        crema_ego.browser("resume", "chat-a", confirmed=True)
+    assert fake.spaces[1]["ownership"] == "agentDelegatedToUser"

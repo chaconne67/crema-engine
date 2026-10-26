@@ -95,11 +95,11 @@ def enable(enabled: bool) -> Dict[str, Any]:
     return state()
 
 
-def _ego(command: Path, *args: str) -> Dict[str, Any]:
+def _ego(command: Path, *args: str, timeout: int = 120) -> Dict[str, Any]:
     """Runs ego-browser and reads the JSON it prints. The output goes through a file: ego lite, which the command
     starts when it is not running, would keep a pipe open and the wait for it would never end."""
     with tempfile.TemporaryFile() as out:
-        subprocess.run([str(command), *args], stdout=out, stderr=subprocess.STDOUT, timeout=120, creationflags=NO_WINDOW)
+        subprocess.run([str(command), *args], stdout=out, stderr=subprocess.STDOUT, timeout=timeout, creationflags=NO_WINDOW, check=True)
         out.seek(0)
         text = out.read().decode("utf-8", "replace").strip()
     try:
@@ -185,3 +185,204 @@ def _install() -> None:
             command = commands[-1]
         _set_up(Path(command))
     enable(True)
+
+
+# Browser work follows one lifecycle here; the SDK still performs page operations.
+# Only this controller creates the Space and presents/hides its normal GUI window.
+_browser_lock = threading.Lock()
+
+
+def _work_path(session_id: str) -> Path:
+    import hashlib
+    from hermes_constants import get_hermes_home
+
+    if not session_id:
+        raise ValueError("A Crema conversation is required for browser ownership")
+    return get_hermes_home() / "cache" / "ego-work" / (hashlib.sha256(session_id.encode()).hexdigest() + ".json")
+
+
+def _load_work(session_id: str) -> Optional[dict]:
+    path = _work_path(session_id)
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+def _save_work(session_id: str, work: dict) -> None:
+    path = _work_path(session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(work, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(path)
+
+
+def _windows(action: str, **payload) -> dict:
+    from tools.crema_ego_windows import call
+
+    return call(action, _home() / "Application" / "ego.exe", **payload)
+
+
+def _launch_hidden() -> None:
+    exe = _home() / "Application" / "ego.exe"
+    if not exe.is_file():
+        raise FileNotFoundError(f"Ego is not installed at {exe}")
+    startup = subprocess.STARTUPINFO()
+    startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startup.wShowWindow = 0
+    subprocess.Popen(
+        [str(exe), "--startup-ego-browser-service"], startupinfo=startup,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=NO_WINDOW,
+    )
+
+
+def _sdk(script: str, *, timeout: int = 6) -> dict:
+    command = cli()
+    if not command:
+        raise FileNotFoundError("ego-browser is not installed")
+    return _ego(Path(command), "nodejs", "-e", script, timeout=timeout)
+
+
+def _space(work: dict) -> dict:
+    found = _sdk("console.log(JSON.stringify({spaces:await listTaskSpaces()}))")["spaces"]
+    exact = [space for space in found if space["id"] == work["id"] and space["name"] == work["name"]]
+    if len(exact) != 1 or exact[0].get("createdBy") != "agent":
+        raise ValueError("This conversation's Ego Space no longer exists; no other Space was used")
+    return exact[0]
+
+
+def _summary(work: dict) -> dict:
+    return {"space_id": work["id"], "space_name": work["name"], "status": work["phase"]}
+
+
+def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = False) -> dict:
+    """Lifecycle, not login detection: the model requests handoff and interprets the user's reply.
+    State is per conversation. A timer, a URL word or a hidden window never confirms login."""
+    import uuid
+
+    with _browser_lock:
+        work = _load_work(session_id)
+        if action == "start":
+            if not _enabled() or _pending().exists() or not cli():
+                raise ValueError("Enable 웹 브라우저 조작 in Crema settings before starting browser work")
+            if work:
+                current = _space(work)
+                if work["phase"] == "blocked":
+                    raise OSError("Background startup was not verified; finish this failed task before starting again")
+                if work["phase"] != "working" or current["ownership"] != "agent":
+                    raise ValueError("The browser is with the user; wait for confirmation and resume it")
+                return _summary(work)
+            before = _windows("inspect")
+            if not before["roots"]:
+                _launch_hidden()
+            name = "Crema " + uuid.uuid4().hex[:12]
+            made = _sdk("const t=await taskSpace(" + json.dumps(name) + ");"
+                        "console.log(JSON.stringify({id:t.spaceId}))", timeout=20)
+            work = {"id": made["id"], "name": name, "phase": "working", "window": None}
+            _save_work(session_id, work)
+            visible_before = {w["hwnd"] for w in before["windows"] if w["visible"]}
+            visible_after = {w["hwnd"] for w in _windows("inspect")["windows"] if w["visible"]}
+            if visible_after - visible_before:
+                work["phase"] = "blocked"
+                _save_work(session_id, work)
+                raise OSError("An Ego window became visible during background startup; browser work was not verified")
+            return _summary(work)
+
+        if action not in {"handoff", "resume", "finish"}:
+            raise ValueError("action must be start, handoff, resume or finish")
+        if not work:
+            raise ValueError("No browser work belongs to this conversation; start it first")
+        space = _space(work)
+        sid = json.dumps(work["id"])
+        if action == "handoff":
+            if work["phase"] == "waiting_for_user":
+                return _summary(work)
+            if work["phase"] != "working" or space["ownership"] != "agent" or not page:
+                raise ValueError("handoff needs a working agent-owned Space and its existing page label")
+            info = _sdk("const t=await taskSpace(" + sid + ");const tabs=await t.tabs();"
+                        "const label=" + json.dumps(page) + ";"
+                        "if(!tabs.some(p=>p.label===label))throw new Error('Page label is not in this Space');"
+                        "const p=t.page(label);await p.info();"
+                        "await t.cdp('Target.activateTarget',{targetId:p.targetId});"
+                        "console.log(JSON.stringify({title:await p.title(),targetId:p.targetId}))")
+            if not info.get("title") or not info.get("targetId"):
+                raise ValueError("Ego did not identify the page to display")
+            if work["window"]:
+                _windows("show", window=work["window"])
+            else:
+                shown = _windows("present", space=work["name"], page_title=info["title"])
+                if not shown.get("normal_gui") or not shown.get("window"):
+                    raise OSError("Ego did not verify a normal GUI window for the selected page")
+                work["window"] = shown["window"]
+            work["phase"] = "opening_for_user"
+            _save_work(session_id, work)
+            # The SDK result, not a successful window call, establishes human ownership.
+            _sdk("await(await taskSpace(" + sid + ")).handOff();"
+                 "const s=(await listTaskSpaces()).find(s=>s.id===" + sid + ");"
+                 "if(s?.ownership!=='agentDelegatedToUser')throw new Error('Human handoff not confirmed');"
+                 "console.log(JSON.stringify({handedOff:true}))")
+            work["phase"] = "waiting_for_user"
+            _save_work(session_id, work)
+            return _summary(work)
+
+        if action == "resume":
+            if confirmed is not True:
+                raise ValueError("Wait for the user to confirm they have finished; time is not confirmation")
+            if work["phase"] not in {"waiting_for_user", "opening_for_user"} or not work["window"]:
+                raise ValueError("This conversation has not handed a browser window to the user")
+            if space["ownership"] not in {"agentDelegatedToUser", "agent"}:
+                raise ValueError("Ego control changed outside this handoff; the user's Space was left untouched")
+            _windows("hide", window=work["window"])
+            try:
+                call = "takeOverTaskSpace" if space["ownership"] == "agentDelegatedToUser" else "taskSpace"
+                _sdk("const t=await " + call + "(" + sid + ");"
+                     "console.log(JSON.stringify({id:t.spaceId}))")
+                if _space(work)["ownership"] != "agent":
+                    raise OSError("Ego did not return control to the agent")
+            except Exception:
+                _windows("show", window=work["window"])
+                raise
+            work["phase"] = "working"
+            _save_work(session_id, work)
+            return _summary(work)
+
+        if work["phase"] not in {"working", "blocked"} or space["ownership"] != "agent":
+            raise ValueError("The user still has the browser; do not finish or hide their handoff")
+        if work["window"]:
+            _windows("hide", window=work["window"])
+        _sdk("await(await taskSpace(" + sid + ")).finish({keep:[]});"
+             "console.log(JSON.stringify({finished:true}))")
+        _work_path(session_id).unlink()
+        return {"status": "finished", "space_id": work["id"]}
+
+
+def crema_ego(args: Dict[str, Any], **kwargs) -> str:
+    from tools.registry import tool_error
+
+    try:
+        result = browser(str(args.get("action") or ""), str(kwargs.get("session_id") or ""),
+                         page=str(args.get("page") or ""), confirmed=args.get("confirmed") is True)
+        return json.dumps(result, ensure_ascii=False)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+        return tool_error(str(exc))
+
+
+from tools.registry import registry
+
+registry.register(
+    name="crema_ego", toolset="crema_ego", emoji="🌐",
+    schema={"name": "crema_ego",
+            "description": "Crema's Ego browser lifecycle. start creates or returns this conversation's hidden "
+                           "Space; use its numeric space_id with the installed ego-browser SDK for page work. "
+                           "handoff shows the named existing page in that Space and gives control to the user "
+                           "for login or verification. Then end your response and wait for the user's reply. "
+                           "resume hides the same normal browser window and returns control only after the user "
+                           "says they finished; confirmed must reflect that reply, never a timer or guess. "
+                           "Inspect the page after resuming to see whether authentication succeeded. "
+                           "finish releases this conversation's completed Space. Never use raw window handles, "
+                           "SDK handOff/takeOver/finish or a different browser instead of these transitions.",
+            "parameters": {"type": "object", "properties": {
+                "action": {"type": "string", "enum": ["start", "handoff", "resume", "finish"]},
+                "page": {"type": "string", "description": "handoff: existing SDK page label in the returned Space"},
+                "confirmed": {"type": "boolean", "description": "resume: true only after the user's completion reply"},
+            }, "required": ["action"]}},
+    handler=crema_ego,
+)

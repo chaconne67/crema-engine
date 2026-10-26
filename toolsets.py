@@ -141,6 +141,7 @@ TOOLSETS = {
     "crema_unmet": _ts("Record a request Crema fell short of, kinds only", ["crema_unmet"]),
     # Crema: connect an MCP server the user gives the address of (tools/crema_services.py).
     "crema_services": _ts("Connect, list and remove the services the agent works in", ["crema_services"]),
+    "crema_ego": _ts("Hidden Ego browser work and human login handoff", ["crema_ego"]),
     # Crema: words Thock misheard in the user's message, for Thock to learn (tools/thock_heard_tool.py).
     "thock": _ts("Tell Thock a word it misheard in the user's message", ["thock_heard"]),
     # Crema: the user's mail accounts, connected in Settings → 메일 연결 (tools/crema_mail_tool.py).
@@ -230,7 +231,7 @@ TOOLSETS = {
          "todo_list", "web_search", "web_extract", "vision_analyze",
          "memory", "session_search", "skills_list", "skill_view", "skill_manage",
          "knowledge_search", "knowledge_get", "knowledge_write", "knowledge_think", "crema_backup", "crema_chats",
-         "thock_heard", "mail", "calendar", "drive", "crema_services", "crema_unmet"],
+         "thock_heard", "mail", "calendar", "drive", "crema_services", "crema_ego", "crema_unmet"],
     ),
     "hermes-cli": _bundle("Full interactive CLI toolset - all default tools plus cronjob management"),
 

@@ -163,7 +163,18 @@ try {
   if (!$open) { throw 'Ego Space picker is unavailable' }
   Click-Control $hostWindow $open
   $space=Wait-For {
-    One-Element $hostWindow $r.space ([System.Windows.Automation.ControlType]::Text)
+    # The active task footer repeats the Space name. Scope the name to the
+    # picker anchored by its observed 'Create a new Space' button.
+    $cards=@(Elements (Root $hostWindow) 'Create a new Space' ([System.Windows.Automation.ControlType]::Button))
+    $matches=@{}
+    foreach($create in $cards) {
+      $card=[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($create)
+      foreach($found in (Elements $card $r.space ([System.Windows.Automation.ControlType]::Text))) {
+        $matches[($found.GetRuntimeId() -join ',')]=$found
+      }
+    }
+    if ($matches.Count -eq 1) { return @($matches.Values)[0] }
+    if ($matches.Count -gt 1) { throw 'The requested Space is ambiguous inside the picker' }
   } 3 'The requested Ego Space was not in the picker'
   Click-Control $hostWindow $space
   $separate=Wait-For {

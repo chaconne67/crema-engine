@@ -16,7 +16,8 @@ A refused write costs nothing while it waits. ``settle`` (on each ``GET /api/cre
 app) completes the task of a chat that others wait on once it is not replying and has nothing
 uncommitted in its files; the board then promotes the waiting chats and the app starts them again.
 Terminal commands are not refused (the files they touch are known only afterwards): in a Git folder
-the files a command changed are recorded after it, and an overlap is told to both chats.
+the files of the chat's own folder whose content a command changed are recorded after it, and an overlap is
+told to both chats.
 
 A chat's notes (``crema_note`` events) are its mailbox: what Crema tells it about the files and the messages
 other chats send it with the ``crema_chats`` tool. It reads Crema's notes after its next tool step or at the
@@ -26,6 +27,7 @@ or puts it into a running reply as words the user sends with Enter, and the chat
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -269,20 +271,21 @@ def _uncommitted(path: str) -> bool:
     return status is None or bool(status.strip())
 
 
-def _dirty_files(cwd: str) -> Optional[dict[str, float]]:
-    """Changed files of the Git work tree at ``cwd`` with their modified times; None outside Git."""
-    root = (_git(cwd, "rev-parse", "--show-toplevel") or "").strip()
-    listing = _git(cwd, "status", "--porcelain", "-z", "--untracked-files=all") if root else None
+def _dirty_files(folder: str) -> Optional[dict[str, str]]:
+    """Changed files of the Git work tree inside ``folder`` with a hash of their content; None outside Git.
+    Content, not modified time: a commit or sync in a shared repository rewrites files it leaves the same."""
+    root = (_git(folder, "rev-parse", "--show-toplevel") or "").strip()
+    listing = _git(folder, "status", "--porcelain", "-z", "--untracked-files=all", "--", ".") if root else None
     if listing is None:
         return None
-    found: dict[str, float] = {}
+    found: dict[str, str] = {}
     for entry in listing.split("\0"):
         if len(entry) > 3:
-            path = str(Path(root.strip(), entry[3:]).resolve())
+            path = str(Path(root, entry[3:]).resolve())
             try:
-                found[path] = os.path.getmtime(path)
+                found[path] = hashlib.sha1(Path(path).read_bytes()).hexdigest()
             except OSError:
-                found[path] = -1.0  # deleted
+                found[path] = ""  # deleted
     return found
 
 
@@ -353,10 +356,12 @@ def _written_paths(tool_name: str, args: dict, task_id: str) -> list[str]:
     return list({_key(r): r for r in resolved}.values())
 
 
-def _terminal_cwd(args: dict, task_id: str) -> Optional[str]:
-    from tools.file_tools import _resolve_or_none
+def _chat_folder(task_id: str) -> Optional[str]:
+    """The folder the chat works in: its project folder, else Crema's own (the run's ``cwd``, registered in
+    gateway/platforms/api_server_runs.py). Another project's files in the same repository are not this chat's."""
+    from tools.file_tools_paths import _registered_task_cwd_override
 
-    return args.get("workdir") or _resolve_or_none(".", task_id)
+    return _registered_task_cwd_override(task_id)
 
 
 def before_tool(tool_name: str = "", args: Optional[dict] = None, session_id: str = "", task_id: str = "",
@@ -366,8 +371,8 @@ def before_tool(tool_name: str = "", args: Optional[dict] = None, session_id: st
         return None
     args, task_id = args or {}, task_id or session_id  # the live session resolves relative paths
     if tool_name == "terminal":
-        cwd = _terminal_cwd(args, task_id)
-        state = _dirty_files(cwd) if cwd else None
+        folder = _chat_folder(task_id)
+        state = _dirty_files(folder) if folder else None
         if state is not None and tool_call_id:
             _before_terminal[tool_call_id] = state
         return None
@@ -463,9 +468,9 @@ def after_tool(tool_name: str = "", args: Optional[dict] = None, result: Any = N
         paths = _written_paths(tool_name, args, task_id)
     elif tool_name == "terminal" and tool_call_id in _before_terminal:
         before = _before_terminal.pop(tool_call_id)
-        cwd = _terminal_cwd(args, task_id)
-        after = (_dirty_files(cwd) if cwd else None) or {}
-        paths = [p for p, mtime in after.items() if before.get(p) != mtime]
+        folder = _chat_folder(task_id)
+        after = (_dirty_files(folder) if folder else None) or {}
+        paths = [p for p, digest in after.items() if before.get(p) != digest]
     else:
         return
     if not paths:

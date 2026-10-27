@@ -1,6 +1,8 @@
 """Crema: chats that change the same file take turns (agent/crema_file_turns.py)."""
 import json
+import os
 import subprocess
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -73,6 +75,16 @@ def repo(tmp_path):
     run("add", ".")
     run("commit", "-qm", "start")
     return SimpleNamespace(path=tmp_path, run=run)
+
+
+@pytest.fixture
+def folders():
+    """The folder a chat works in, as the app registers it for each run (gateway/platforms/api_server_runs.py)."""
+    from tools.terminal_tool import clear_task_env_overrides, register_task_env_overrides
+
+    yield lambda session, folder: register_task_env_overrides(session, {"cwd": str(folder), "cwd_source": "session"})
+    for session in (A, B):
+        clear_task_env_overrides(session)
 
 
 def write(session, path, content="x\n"):
@@ -264,16 +276,46 @@ def test_the_judge_sees_both_requests_the_uncommitted_diff_and_the_change(api, j
     assert judge.calls[0]["task"] == "crema_turns"
 
 
-def test_a_terminal_command_that_changes_a_held_file_is_told(api, judge, repo, monkeypatch):
+def test_a_terminal_command_that_changes_a_held_file_is_told(api, judge, repo, folders):
     report = repo.path / "report.py"
     write(A, report, "v2\n")
-    args = {"command": "sed -i s/v2/v9/ report.py", "workdir": str(repo.path)}
+    folders(B, repo.path)
+    args = {"command": "sed -i s/v2/v9/ report.py"}
     turns.before_tool("terminal", args, session_id=B, task_id=B, tool_call_id="t1")
     report.write_text("v9\n", encoding="utf-8")
     turns.after_tool("terminal", args, "ok", session_id=B, task_id=B, tool_call_id="t1")
     told = turns.tool_result("terminal", "ok", tool_call_id="t1")
     assert told.startswith("ok\n\n[Crema]") and "'보고서'" in told
     assert "'메일'" in turns.notes_for_turn(session_id=A)["context"]
+
+
+def test_a_command_that_rewrites_a_file_unchanged_leaves_it_to_its_chat(api, judge, repo, folders):
+    # A commit or sync in a shared repository touches files it leaves the same; 2026-10-28 three chats took a file
+    # only another chat had changed, and that chat then waited on its own uncommitted change.
+    report = repo.path / "report.py"
+    write(A, report, "v2\n")
+    folders(B, repo.path)
+    args = {"command": "git pull --rebase --autostash"}
+    turns.before_tool("terminal", args, session_id=B, task_id=B, tool_call_id="t2")
+    later = time.time() + 60
+    os.utime(report, (later, later))
+    turns.after_tool("terminal", args, "ok", session_id=B, task_id=B, tool_call_id="t2")
+    assert turns.files_since(B, 0) == []
+    assert turns.notes_for_turn(session_id=A) is None
+
+
+def test_a_command_records_only_files_in_its_chats_folder(api, judge, repo, folders):
+    # Projects that share one repository: another project's file that changes meanwhile is not this chat's.
+    (repo.path / "fc").mkdir()
+    (repo.path / "voucher").mkdir()
+    plan = repo.path / "fc" / "plan.md"
+    folders(B, repo.path / "fc")
+    args = {"command": "python write_plan.py"}
+    turns.before_tool("terminal", args, session_id=B, task_id=B, tool_call_id="t3")
+    write(A, repo.path / "voucher" / "boards.py", "new\n")
+    plan.write_text("x\n", encoding="utf-8")
+    turns.after_tool("terminal", args, "ok", session_id=B, task_id=B, tool_call_id="t3")
+    assert turns.files_since(B, 0) == [{"path": str(plan.resolve()), "made": None}]
 
 
 def test_install_puts_the_turn_rule_in_the_engines_pre_tool_call(api, judge, repo, monkeypatch):
@@ -437,8 +479,9 @@ def test_files_since_lists_what_the_chat_made_or_changed_once_each(api, judge, r
     assert turns.files_since("not-a-crema-chat", 0) == []
 
 
-def test_files_since_lists_a_terminal_commands_files_without_saying_made(api, judge, repo):
-    args = {"command": "echo x > notes.md", "workdir": str(repo.path)}
+def test_files_since_lists_a_terminal_commands_files_without_saying_made(api, judge, repo, folders):
+    folders(A, repo.path)
+    args = {"command": "echo x > notes.md"}
     turns.before_tool("terminal", args, session_id=A, task_id=A, tool_call_id="t9")
     (repo.path / "notes.md").write_text("x\n", encoding="utf-8")
     turns.after_tool("terminal", args, "ok", session_id=A, task_id=A, tool_call_id="t9")

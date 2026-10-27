@@ -99,7 +99,7 @@ Both bind 127.0.0.1 only.
    - new: `agent/crema_file_turns.py` — the upstream kanban board (`hermes_cli/kanban_db.py`, kept whole; its
      plugin, dispatcher and worker tools stay unused) holds each chat's current work, the order between chats
      (links) and what happened (events); the rule runs in the `pre_tool_call` hook of `write_file`/`patch`,
-     records written files in `post_tool_call` (terminal commands in a Git folder after they run), tells a chat
+     records written files in `post_tool_call` (after a terminal command: the files of the chat's folder whose content it changed in Git), tells a chat
      its notes in `pre_llm_call`; `tests/agent/test_crema_file_turns.py`
    - `crema_engine.py`: installs the hooks; `GET /api/crema/turns` (settle, then who waits, who the user must
      order, whose turn came), `POST /api/crema/turns/woken|order|release`
@@ -110,7 +110,7 @@ Both bind 127.0.0.1 only.
      (the sidebar's chats, kept in `crema-chats.json`), `GET /api/crema/turns` also lists the messages to hand
      over, `POST /api/crema/turns/handed`
    - the files a reply wrote (Crema plan `Crema-파일-링크-계획-2026-10-09.md`): every write of `write_file`/`patch`
-     (made or changed) and every file a terminal command changed in a Git folder is a `crema_wrote` event;
+     (made or changed) and every file of the chat's folder whose content a terminal command changed in Git is a `crema_wrote` event;
      `GET /api/crema/files?session_id=&since=` lists those still there, for the app's line under the reply
 13. Removed (not used by the engine; nothing kept imports them):
    - top level: `apps/ website/` (except `website/static/api/model-catalog.json`) `ui-tui/ web/ skills/ (Crema's own is item 14) optional-skills/

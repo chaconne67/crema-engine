@@ -1,9 +1,9 @@
 ---
 name: crema-guide
 description: "Crema(크레마) 사용법·설정·기능·오류 질문이면 먼저 읽는 설명서"
-version: 1.0.0
-author: Aishift
 metadata:
+  version: 1.0.0
+  author: Aishift
   hermes:
     tags: [crema, help, settings, troubleshooting]
 ---

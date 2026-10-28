@@ -1,10 +1,11 @@
-"""Crema: the user's mail (Crema plan 메일 연결 4-1, 2026-10-16). One way for every mail company: IMAP to read,
-SMTP to send, with the Python standard library. An account is its address and its company (the servers come from
-PROVIDERS, the user never types them); its secret stays in this engine's .env and never reaches the terminal's
-commands (tools/environments/local_env_policy.py): an app password made at the company, or for Google (plan 4-3,
-2026-10-17) the user's own Google sign-in (tools/crema_google.py), which signs in with XOAUTH2 instead. Settings →
-메일 연결 adds and removes accounts (connect / remove, after a real sign-in); the `mail` tool works in them. Sending
-always asks the user first on an approval card, whatever the 명령 승인 chip says: a sent mail cannot be taken back."""
+"""Crema: the user's mail (Crema plan 메일 연결 4-1, 2026-10-16). Every mail company with an app password: IMAP to
+read, SMTP to send, with the Python standard library. Gmail (plan 4-3, 2026-10-17) with the user's own Google sign-in
+(tools/crema_google.py) instead, and Gmail's API: its narrower permission (gmail.modify, no deleting for good) does
+not let IMAP or SMTP in. Both are a mailbox (_mailbox) the tool works in the same way. An account is its address and
+its company (the servers come from PROVIDERS, the user never types them); its secret stays in this engine's .env and
+never reaches the terminal's commands (tools/environments/local_env_policy.py). Settings → 메일 연결 adds and
+removes accounts (connect / remove, after a real sign-in); the `mail` tool works in them. Sending always asks the
+user first on an approval card, whatever the 명령 승인 chip says: a sent mail cannot be taken back."""
 from __future__ import annotations
 
 import base64
@@ -14,22 +15,22 @@ import mimetypes
 import re
 import smtplib
 import time
+import urllib.parse
 from contextlib import contextmanager
 from email import message_from_bytes, policy
+from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.utils import formatdate, getaddresses, make_msgid
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from tools.registry import registry, tool_error
 
 # Mail companies Crema connects: their servers (SSL), by the domains of their addresses. `sign_in: google`: the
-# account signs in with the user's Google sign-in (tools/crema_google.py), never an app password; Gmail keeps a
-# copy of what its SMTP sends (`keeps_sent`).
+# account signs in with the user's Google sign-in (tools/crema_google.py), never an app password, and is Gmail's API.
 PROVIDERS = {
-    "google": {"name": "구글", "domains": ("gmail.com", "googlemail.com"), "imap": ("imap.gmail.com", 993),
-               "smtp": ("smtp.gmail.com", 465), "sign_in": "google", "keeps_sent": True},
+    "google": {"name": "구글", "domains": ("gmail.com", "googlemail.com"), "sign_in": "google"},
     "naver": {"name": "네이버", "domains": ("naver.com",), "imap": ("imap.naver.com", 993), "smtp": ("smtp.naver.com", 465)},
     "daum": {"name": "다음", "domains": ("daum.net", "hanmail.net"), "imap": ("imap.daum.net", 993), "smtp": ("smtp.daum.net", 465)},
     "kakao": {"name": "카카오", "domains": ("kakao.com",), "imap": ("imap.kakao.com", 993), "smtp": ("smtp.kakao.com", 465)},
@@ -45,6 +46,13 @@ ROLE_NAMES = {"보낸메일함": "sent", "보낸편지함": "sent", "sent": "sen
               "sentitems": "sent", "휴지통": "trash", "trash": "trash", "deleted": "trash", "deletedmessages": "trash",
               "deleteditems": "trash", "임시보관함": "drafts", "drafts": "drafts", "스팸메일함": "junk",
               "스팸편지함": "junk", "junk": "junk", "spam": "junk", "junkemail": "junk"}
+IMAP_MARKS = {"read": ("+", "\\Seen"), "unread": ("-", "\\Seen"), "flagged": ("+", "\\Flagged"),
+              "unflagged": ("-", "\\Flagged")}
+GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me"
+# Gmail's labels that are a folder's role (its own labels are folders too), and the label a mark adds or takes away.
+GMAIL_ROLES = {"INBOX": "inbox", "SENT": "sent", "TRASH": "trash", "DRAFT": "drafts", "SPAM": "junk"}
+GMAIL_MARKS = {"read": ("removeLabelIds", "UNREAD"), "unread": ("addLabelIds", "UNREAD"),
+               "flagged": ("addLabelIds", "STARRED"), "unflagged": ("removeLabelIds", "STARRED")}
 
 
 def provider_of(address: str) -> Optional[str]:
@@ -126,25 +134,13 @@ def _google(account: Dict[str, str]) -> bool:
     return PROVIDERS[account["provider"]].get("sign_in") == "google"
 
 
-def _xoauth2(address: str, token: Optional[str]) -> str:
-    """A Google sign-in for IMAP and SMTP (XOAUTH2): `token` is an access token, else the account's, refreshed."""
-    if not token:
-        from tools.crema_google import access_token
-
-        token = access_token(address)
-    return f"user={address}\x01auth=Bearer {token}\x01\x01"
-
-
 @contextmanager
 def _imap(account: Dict[str, str], password: Optional[str] = None):
-    """Signed in to the account's IMAP; `password` stands in for its kept one (for Google, an access token)."""
+    """Signed in to the account's IMAP; `password` stands in for its kept one."""
     host, port = PROVIDERS[account["provider"]]["imap"]
     imap = imaplib.IMAP4_SSL(host, port, timeout=TIMEOUT)
     try:
-        if _google(account):
-            imap.authenticate("XOAUTH2", lambda _: _xoauth2(account["address"], password).encode())
-        else:
-            imap.login(account["address"], password or _password(account["address"]))
+        imap.login(account["address"], password or _password(account["address"]))
         yield imap
     finally:
         try:
@@ -156,11 +152,7 @@ def _imap(account: Dict[str, str], password: Optional[str] = None):
 def _smtp(account: Dict[str, str], password: Optional[str] = None) -> smtplib.SMTP_SSL:
     host, port = PROVIDERS[account["provider"]]["smtp"]
     smtp = smtplib.SMTP_SSL(host, port, timeout=TIMEOUT)
-    if _google(account):
-        smtp.ehlo()  # auth(), unlike login(), does not greet the server first; Gmail refuses it then (530)
-        smtp.auth("XOAUTH2", lambda challenge=None: _xoauth2(account["address"], password), initial_response_ok=True)
-    else:
-        smtp.login(account["address"], password or _password(account["address"]))
+    smtp.login(account["address"], password or _password(account["address"]))
     return smtp
 
 
@@ -255,12 +247,12 @@ def _folders(imap: imaplib.IMAP4) -> List[Dict[str, str]]:
     return found
 
 
-def _folder_named(imap: imaplib.IMAP4, folder: Optional[str]) -> str:
+def _folder_named(listed: Callable[[], List[Dict[str, str]]], folder: Optional[str]) -> str:
     """The folder the user means: a name as listed, or a role (inbox, sent, trash, drafts, junk)."""
     wanted = (folder or "inbox").strip()
     if wanted.upper() == "INBOX":
         return "INBOX"
-    folders = _folders(imap)
+    folders = listed()
     found = next((f["name"] for f in folders if f["name"] == wanted), None) \
         or next((f["name"] for f in folders if f.get("role") == wanted.lower()), None)
     if found is None:
@@ -401,21 +393,19 @@ def _message(imap: imaplib.IMAP4, uid: str):
     return message_from_bytes(items[0]["body"], policy=policy.default), items[0]
 
 
-def _read(imap: imaplib.IMAP4, uid: str) -> Dict[str, Any]:
-    message, item = _message(imap, uid)
+def _read(message, uid: str, unread: bool) -> Dict[str, Any]:
     body = message.get_body(preferencelist=("plain", "html"))
     text = _text_of(body) if body is not None else ""
     attachments = [{"name": part.get_filename() or "(이름 없음)", "type": part.get_content_type(),
                     "size": len(part.get_payload(decode=True) or b"")} for part in message.iter_attachments()]
     return {"uid": str(uid), "date": _header(message, "date"), "from": _header(message, "from"),
             "to": _header(message, "to"), "cc": _header(message, "cc"), "subject": _header(message, "subject"),
-            "unread": "\\Seen" not in item["flags"],
+            "unread": unread,
             "body": text[:BODY_LIMIT] + ("\n…(뒷부분 생략)" if len(text) > BODY_LIMIT else ""),
             "attachments": attachments}
 
 
-def _save_attachments(imap: imaplib.IMAP4, uid: str, folder: Optional[str]) -> List[str]:
-    message, _ = _message(imap, uid)
+def _save_attachments(message, folder: Optional[str]) -> List[str]:
     target = Path(folder).expanduser() if folder else Path.home() / "Downloads" / "Crema 메일"
     target.mkdir(parents=True, exist_ok=True)
     saved = []
@@ -437,6 +427,148 @@ def _move(imap: imaplib.IMAP4, uid: str, to_folder: str) -> None:
     _check(*imap.uid("COPY", str(uid), target), "copy")
     _check(*imap.uid("STORE", str(uid), "+FLAGS.SILENT", "(\\Deleted)"), "store")
     imap.expunge()
+
+
+# --- Mailboxes: the same few things over IMAP, or over Gmail's API --------------------------------------------------
+
+class _Imap:
+    """A company's mailbox over IMAP (folders by name, a mail by its uid in its folder); it sends over SMTP."""
+
+    def __init__(self, account: Dict[str, str], imap: imaplib.IMAP4):
+        self.account, self.imap = account, imap
+
+    def folders(self) -> List[Dict[str, str]]:
+        return _folders(self.imap)
+
+    def folder(self, name: Optional[str]) -> str:
+        return _folder_named(self.folders, name)
+
+    def search(self, folder: str, args: Dict[str, Any], limit: int) -> Tuple[int, List[Dict[str, Any]]]:
+        _select(self.imap, folder)
+        uids = _search(self.imap, args)
+        return len(uids), _search_results(self.imap, list(reversed(uids[-limit:])))
+
+    def message(self, folder: str, uid: str):
+        _select(self.imap, folder)
+        message, item = _message(self.imap, uid)
+        return message, "\\Seen" not in item["flags"]
+
+    def move(self, folder: str, uid: str, to_folder: str) -> None:
+        _select(self.imap, folder, readonly=False)
+        _move(self.imap, uid, to_folder)
+
+    def mark(self, folder: str, uid: str, mark: str) -> None:
+        sign, flag = IMAP_MARKS[mark]
+        _select(self.imap, folder, readonly=False)
+        _check(*self.imap.uid("STORE", uid, sign + "FLAGS.SILENT", f"({flag})"), "store")
+
+    def send(self, message: EmailMessage, recipients: List[str]) -> str:
+        """Sent; the company's SMTP keeps no copy, so it goes into 보낸메일함 too: that folder's name, if it did."""
+        smtp = _smtp(self.account)
+        try:
+            smtp.send_message(message, from_addr=self.account["address"], to_addrs=recipients)
+        finally:
+            smtp.quit()
+        try:
+            sent = next((f["name"] for f in self.folders() if f.get("role") == "sent"), None)
+            if sent:
+                _check(*self.imap.append(_quoted(sent), "(\\Seen)", imaplib.Time2Internaldate(time.time()),
+                                         message.as_bytes()), "append")
+                return sent
+        except (imaplib.IMAP4.error, OSError):
+            pass
+        return ""
+
+
+class _Gmail:
+    """Gmail over its API with the account's Google sign-in: its labels are the folders, a mail's id is its uid (the
+    same in every label). Gmail keeps its own copy of what it sends."""
+
+    def __init__(self, address: str):
+        from tools import crema_google
+
+        self.google, self.token, self.labels = crema_google, crema_google.access_token(address), None
+
+    def _call(self, method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        sent = {} if body is None else {"body": json.dumps(body).encode(), "content_type": "application/json"}
+        return self.google._json(method, GMAIL + path, token=self.token, **sent)
+
+    def _labels(self) -> List[Dict[str, str]]:
+        if self.labels is None:
+            self.labels = [label for label in self._call("GET", "/labels").get("labels", [])
+                           if label.get("type") == "user" or label.get("id") in GMAIL_ROLES]
+        return self.labels
+
+    def _id(self, folder: str) -> str:
+        return next(label["id"] for label in self._labels() if label["name"] == folder)
+
+    def folders(self) -> List[Dict[str, str]]:
+        return [{"name": label["name"], **({"role": GMAIL_ROLES[label["id"]]} if label["id"] in GMAIL_ROLES else {})}
+                for label in self._labels()]
+
+    def folder(self, name: Optional[str]) -> str:
+        return _folder_named(self.folders, name)
+
+    def search(self, folder: str, args: Dict[str, Any], limit: int) -> Tuple[int, List[Dict[str, Any]]]:
+        terms = ["is:unread"] if args.get("unread_only") else []
+        if args.get("since"):
+            terms.append("after:" + time.strftime("%Y/%m/%d", time.strptime(str(args["since"])[:10], "%Y-%m-%d")))
+        if str(args.get("sender") or "").strip():
+            terms.append('from:"' + str(args["sender"]).strip().replace('"', "") + '"')
+        if str(args.get("query") or "").strip():
+            terms.append(str(args["query"]).strip())
+        label = self._id(folder)
+        query = {"labelIds": label, "maxResults": str(limit), **({"q": " ".join(terms)} if terms else {}),
+                 **({"includeSpamTrash": "true"} if label in ("TRASH", "SPAM") else {})}
+        found = self._call("GET", "/messages?" + urllib.parse.urlencode(query))
+        mails = [self._summary(item["id"]) for item in found.get("messages", [])]
+        return max(int(found.get("resultSizeEstimate") or 0), len(mails)), mails
+
+    def _summary(self, uid: str) -> Dict[str, Any]:
+        heads = urllib.parse.urlencode([("metadataHeaders", name) for name in ("From", "To", "Subject", "Date")])
+        item = self._call("GET", f"/messages/{urllib.parse.quote(uid, safe='')}?format=metadata&{heads}")
+        payload, labels = item.get("payload") or {}, item.get("labelIds") or []
+        found = {}
+        for head in payload.get("headers") or []:
+            try:
+                found[head["name"].lower()] = str(make_header(decode_header(head["value"])))
+            except Exception:  # a header too broken to decode
+                found[head["name"].lower()] = str(head.get("value") or "")
+        return {"uid": uid, "date": found.get("date", ""), "from": found.get("from", ""), "to": found.get("to", ""),
+                "subject": found.get("subject", ""), "unread": "UNREAD" in labels,
+                **({"flagged": True} if "STARRED" in labels else {}),
+                **({"attachments": True} if payload.get("mimeType") == "multipart/mixed" else {})}
+
+    def message(self, folder: str, uid: str):
+        item = self._call("GET", f"/messages/{urllib.parse.quote(uid, safe='')}?format=raw")
+        raw = base64.urlsafe_b64decode(item["raw"] + "=" * (-len(item["raw"]) % 4))
+        return message_from_bytes(raw, policy=policy.default), "UNREAD" in (item.get("labelIds") or [])
+
+    def move(self, folder: str, uid: str, to_folder: str) -> None:
+        path, source, target = f"/messages/{urllib.parse.quote(uid, safe='')}", self._id(folder), self._id(to_folder)
+        if source == "TRASH":
+            self._call("POST", path + "/untrash", {})
+        if target == "TRASH":
+            self._call("POST", path + "/trash", {})
+            return
+        self._call("POST", path + "/modify", {"addLabelIds": [target], "removeLabelIds": [] if source == "TRASH" else [source]})
+
+    def mark(self, folder: str, uid: str, mark: str) -> None:
+        change, label = GMAIL_MARKS[mark]
+        self._call("POST", f"/messages/{urllib.parse.quote(uid, safe='')}/modify", {change: [label]})
+
+    def send(self, message: EmailMessage, recipients: List[str]) -> str:
+        self._call("POST", "/messages/send", {"raw": base64.urlsafe_b64encode(message.as_bytes()).decode()})
+        return ""
+
+
+@contextmanager
+def _mailbox(account: Dict[str, str]):
+    if _google(account):
+        yield _Gmail(account["address"])
+        return
+    with _imap(account) as imap:
+        yield _Imap(account, imap)
 
 
 # --- Sending -------------------------------------------------------------------------------------------------------
@@ -478,10 +610,8 @@ def _send(account: Dict[str, str], args: Dict[str, Any]) -> Dict[str, Any]:
     original = None
     reply_uid, forward_uid = args.get("reply_to_uid"), args.get("forward_uid")
     if reply_uid or forward_uid:
-        with _imap(account) as imap:
-            folder = _folder_named(imap, args.get("folder"))
-            _select(imap, folder)
-            original, _ = _message(imap, str(reply_uid or forward_uid))
+        with _mailbox(account) as box:
+            original, _ = box.message(box.folder(args.get("folder")), str(reply_uid or forward_uid))
     message = EmailMessage()
     if reply_uid:
         if not to:
@@ -505,6 +635,8 @@ def _send(account: Dict[str, str], args: Dict[str, Any]) -> Dict[str, Any]:
     message["From"], message["To"], message["Subject"] = me, ", ".join(to), subject
     if cc:
         message["Cc"] = ", ".join(cc)
+    if bcc:
+        message["Bcc"] = ", ".join(bcc)  # Gmail sends to it; SMTP's send_message leaves it out of what it sends
     message["Date"] = formatdate(localtime=True)
     message["Message-ID"] = make_msgid(domain=me.rpartition("@")[2])
     message.set_content(str(args.get("body") or ""))
@@ -522,28 +654,16 @@ def _send(account: Dict[str, str], args: Dict[str, Any]) -> Dict[str, Any]:
     refused = ask_to_send(summary)
     if refused:
         return {"sent": False, "why": refused}
-    smtp = _smtp(account)
-    try:
-        smtp.send_message(message, from_addr=me, to_addrs=to + cc + bcc)
-    finally:
-        smtp.quit()
-    kept = ""
-    # The company's SMTP does not keep a copy (Gmail's does): put it in 보낸메일함.
-    if not PROVIDERS[account["provider"]].get("keeps_sent"):
-        try:
-            with _imap(account) as imap:
-                sent = next((f["name"] for f in _folders(imap) if f.get("role") == "sent"), None)
-                if sent:
-                    _check(*imap.append(_quoted(sent), "(\\Seen)", imaplib.Time2Internaldate(time.time()), message.as_bytes()), "append")
-                    kept = sent
-        except (imaplib.IMAP4.error, OSError):
-            pass
+    with _mailbox(account) as box:
+        kept = box.send(message, to + cc + bcc)
     return {"sent": True, "to": to, "cc": cc, "subject": subject, **({"kept_in": kept} if kept else {})}
 
 
 # --- The tool ------------------------------------------------------------------------------------------------------
 
 def mail(args: Dict[str, Any], **_: Any) -> str:
+    from tools.crema_google import GoogleError
+
     action = args.get("action")
     try:
         if action == "accounts":
@@ -552,42 +672,38 @@ def mail(args: Dict[str, Any], **_: Any) -> str:
         account = _account(args.get("account"))
         if action == "send":
             return json.dumps(_send(account, args), ensure_ascii=False)
-        with _imap(account) as imap:
+        with _mailbox(account) as box:
             if action == "folders":
-                return json.dumps({"account": account["address"], "folders": _folders(imap)}, ensure_ascii=False)
-            folder = _folder_named(imap, args.get("folder"))
+                return json.dumps({"account": account["address"], "folders": box.folders()}, ensure_ascii=False)
+            folder = box.folder(args.get("folder"))
             if action == "search":
-                _select(imap, folder)
-                limit = max(1, min(int(args.get("limit") or 20), 50))
-                uids = _search(imap, args)
-                newest = list(reversed(uids[-limit:]))
-                return json.dumps({"account": account["address"], "folder": folder, "total": len(uids),
-                                   "mails": _search_results(imap, newest)}, ensure_ascii=False)
+                total, mails = box.search(folder, args, max(1, min(int(args.get("limit") or 20), 50)))
+                return json.dumps({"account": account["address"], "folder": folder, "total": total, "mails": mails},
+                                  ensure_ascii=False)
             uid = str(args.get("uid") or "").strip()
             if not uid:
                 raise ValueError("uid is needed (from search)")
             if action == "read":
-                _select(imap, folder)
-                return json.dumps({"account": account["address"], "folder": folder, **_read(imap, uid)}, ensure_ascii=False)
+                message, unread = box.message(folder, uid)
+                return json.dumps({"account": account["address"], "folder": folder, **_read(message, uid, unread)},
+                                  ensure_ascii=False)
             if action == "save_attachments":
-                _select(imap, folder)
-                return json.dumps({"saved": _save_attachments(imap, uid, args.get("save_to"))}, ensure_ascii=False)
+                return json.dumps({"saved": _save_attachments(box.message(folder, uid)[0], args.get("save_to"))},
+                                  ensure_ascii=False)
             if action == "move":
-                to_folder = _folder_named(imap, args.get("to_folder"))
-                _select(imap, folder, readonly=False)
-                _move(imap, uid, to_folder)
+                to_folder = box.folder(args.get("to_folder"))
+                box.move(folder, uid, to_folder)
                 return json.dumps({"moved": uid, "from": folder, "to": to_folder}, ensure_ascii=False)
             if action == "mark":
-                change = {"read": ("+", "\\Seen"), "unread": ("-", "\\Seen"),
-                          "flagged": ("+", "\\Flagged"), "unflagged": ("-", "\\Flagged")}.get(args.get("mark") or "")
-                if change is None:
+                if args.get("mark") not in IMAP_MARKS:
                     raise ValueError("mark is one of read, unread, flagged, unflagged")
-                _select(imap, folder, readonly=False)
-                _check(*imap.uid("STORE", uid, change[0] + "FLAGS.SILENT", f"({change[1]})"), "store")
+                box.mark(folder, uid, args["mark"])
                 return json.dumps({"marked": uid, "as": args.get("mark")}, ensure_ascii=False)
         return tool_error(f"unknown action {action!r}")
     except (LookupError, ValueError, FileNotFoundError) as error:
         return tool_error(str(error))
+    except GoogleError as error:
+        return tool_error(f"Google refused it ({error.reason}): {error}")
     except imaplib.IMAP4.error as error:
         return tool_error(f"the mail server refused it: {_said(error)}")
     except (OSError, smtplib.SMTPException) as error:

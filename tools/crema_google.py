@@ -11,7 +11,7 @@ the refresh token stays in this engine's .env (SECRET_PREFIX, never passed to th
 Windows user can open it, the account and its features in the config (CONFIG_KEY). 연결 끊기 takes one feature
 away; with none left Google takes the sign-in back and the account goes.
 
-Gmail is the `mail` tool (XOAUTH2 with `access_token`). Calendar and Drive are the `calendar` and `drive` tools,
+Gmail is the `mail` tool (Gmail's API with `access_token`). Calendar and Drive are the `calendar` and `drive` tools,
 with Google's REST APIs and the Python standard library. A calendar change that notifies other people asks the
 user first on an approval card, as sending a mail does. Drive files are never deleted or shared here."""
 from __future__ import annotations
@@ -44,9 +44,9 @@ CALLBACK = "/api/crema/google/callback"
 # sign-in. Kept in main /srv/consolidation/secrets/crema-google-app.env, changed there and here together.
 CLIENT_ID = "380565197593-qfug92np3s0ai5r3jeffom522houf6hr.apps.googleusercontent.com"
 CLIENT_SECRET = "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"
-# The permissions each feature asks for (Gmail's IMAP and SMTP take only the full mail scope; Calendar changes events
-# and lists the calendars; Drive reads the files there and adds new ones), and who allowed it.
-FEATURES = {"mail": "https://mail.google.com/",
+# The narrowest permissions each feature works with (Gmail reads, sorts and sends mail but cannot delete it for good;
+# Calendar changes events and lists the calendars; Drive reads the files there and adds new ones), and who allowed it.
+FEATURES = {"mail": "https://www.googleapis.com/auth/gmail.modify",
             "calendar": "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly",
             "drive": "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file"}
 IDENTITY = "openid email"
@@ -280,10 +280,9 @@ def _trade(flow: Dict[str, Any], code: str) -> str:
         return "account"  # allowed with another Google account than the one connected
     if flow["feature"] == "mail":
         try:
-            with mail._imap({"address": address, "provider": "google"}, tokens["access_token"]):
-                pass
-        except mail.imaplib.IMAP4.error:
-            return "account"
+            _json("GET", f"{mail.GMAIL}/profile", token=tokens["access_token"])
+        except GoogleError:
+            return "account"  # a Google account without Gmail
         except OSError:
             return "server"
     from hermes_cli.config import save_env_value

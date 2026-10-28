@@ -1,9 +1,9 @@
-"""Crema's Google account (tools/crema_google.py) against a fake Google and a fake Gmail IMAP and SMTP."""
+"""Crema's Google account (tools/crema_google.py) against a fake Google: its sign-in, Gmail, Calendar and Drive."""
 import base64
-import imaplib
 import json
-import smtplib
 import urllib.parse
+from email import message_from_bytes, policy
+from email.message import EmailMessage
 
 import pytest
 
@@ -17,35 +17,24 @@ def id_token(email):
     return f"head.{payload}.sig"
 
 
-class FakeGmail:
-    """IMAP and SMTP at once: lets in only `token` for `user`."""
-    token, user, sent = "ya29.live", "me@gmail.com", []
+TOKEN, USER = "ya29.live", "me@gmail.com"
 
-    def __init__(self, host, port, timeout=None):
-        self.host = host
-        self.capabilities = ("IMAP4REV1",)
 
-    def authenticate(self, mechanism, answer):
-        if answer(b"") != f"user={self.user}\x01auth=Bearer {self.token}\x01\x01".encode():
-            raise imaplib.IMAP4.error(b"[AUTHENTICATIONFAILED] Invalid credentials")
-        return "OK", [b""]
+def gmail_raw(subject, body):
+    message = EmailMessage()
+    message["From"], message["To"], message["Subject"] = "김철수 <kim@example.com>", USER, subject
+    message["Message-ID"] = "<m1@example.com>"
+    message.set_content(body)
+    return base64.urlsafe_b64encode(message.as_bytes()).decode().rstrip("=")
 
-    def ehlo(self):
-        self.greeted = True
 
-    def auth(self, mechanism, answer, initial_response_ok=True):
-        if not getattr(self, "greeted", False):  # as Gmail: AUTH before EHLO is refused
-            raise smtplib.SMTPSenderRefused(530, b"5.7.0 Must issue a STARTTLS command first", self.user)
-        assert mechanism == "XOAUTH2" and answer() == f"user={self.user}\x01auth=Bearer {self.token}\x01\x01"
-
-    def send_message(self, message, from_addr=None, to_addrs=None):
-        FakeGmail.sent.append(message)
-
-    def logout(self):
-        return "BYE", [b""]
-
-    def quit(self):
-        pass
+# Gmail's labels: its own folders, a category (not a folder), and one the user made.
+LABELS = [{"id": "INBOX", "name": "INBOX", "type": "system"}, {"id": "SENT", "name": "SENT", "type": "system"},
+          {"id": "TRASH", "name": "TRASH", "type": "system"}, {"id": "CATEGORY_SOCIAL", "name": "CATEGORY_SOCIAL", "type": "system"},
+          {"id": "Label_1", "name": "정리", "type": "user"}]
+SUMMARIES = {"m1": {"labelIds": ["INBOX", "UNREAD"], "payload": {"mimeType": "multipart/mixed", "headers": [
+                 {"name": "From", "value": "김철수 <kim@example.com>"}, {"name": "Subject", "value": "=?UTF-8?B?6rKs7KCB7ISc?="}]}},
+             "m2": {"labelIds": ["INBOX"], "payload": {"mimeType": "text/plain", "headers": [{"name": "Subject", "value": "회의"}]}}}
 
 
 class FakeGoogle:
@@ -53,7 +42,7 @@ class FakeGoogle:
 
     def __init__(self):
         # What Google says was allowed and by whom; None: the feature asked for, by the user.
-        self.calls, self.token_scope, self.allowed_by, self.refreshes = [], None, FakeGmail.user, 0
+        self.calls, self.token_scope, self.allowed_by, self.refreshes = [], None, USER, 0
 
     def __call__(self, method, url, *, form=None, body=None, token="", content_type=""):
         self.calls.append((method, url, form, body))
@@ -62,12 +51,26 @@ class FakeGoogle:
         if url == google.TOKEN:
             if form["grant_type"] == "refresh_token":
                 self.refreshes += 1
-                return json.dumps({"access_token": FakeGmail.token, "expires_in": 3600}).encode()
+                return json.dumps({"access_token": TOKEN, "expires_in": 3600}).encode()
             asked = urllib.parse.parse_qs(urllib.parse.urlsplit(self.consent).query)["scope"][0]
-            return json.dumps({"access_token": FakeGmail.token, "refresh_token": "1//refresh", "expires_in": 3600,
+            return json.dumps({"access_token": TOKEN, "refresh_token": "1//refresh", "expires_in": 3600,
                                "scope": self.token_scope if self.token_scope is not None else asked,
                                "id_token": id_token(self.allowed_by)}).encode()
-        assert token == FakeGmail.token
+        assert token == TOKEN
+        if url.startswith(mail_tool.GMAIL):
+            path = url[len(mail_tool.GMAIL):]
+            if path == "/profile":
+                return json.dumps({"emailAddress": USER}).encode()
+            if path == "/labels":
+                return json.dumps({"labels": LABELS}).encode()
+            if path.startswith("/messages?"):
+                return json.dumps({"messages": [{"id": "m1"}, {"id": "m2"}], "resultSizeEstimate": 2}).encode()
+            if "format=metadata" in path:
+                return json.dumps(SUMMARIES[path.split("/")[2].split("?")[0]]).encode()
+            if path == "/messages/m1?format=raw":
+                return json.dumps({"raw": gmail_raw("견적서", "견적서를 보내드립니다."), "labelIds": ["INBOX", "UNREAD"]}).encode()
+            if method == "POST":
+                return b"{}"
         if url.endswith("/users/me/calendarList/primary"):
             return json.dumps({"timeZone": "Asia/Seoul"}).encode()
         if "/events/ev1" in url and method == "GET":
@@ -86,9 +89,6 @@ class FakeGoogle:
 
 @pytest.fixture
 def fake(monkeypatch):
-    FakeGmail.sent = []
-    monkeypatch.setattr(imaplib, "IMAP4_SSL", FakeGmail)
-    monkeypatch.setattr(smtplib, "SMTP_SSL", FakeGmail)
     global FAKE
     found = FAKE = FakeGoogle()
     monkeypatch.setattr(google, "_http", found)
@@ -117,7 +117,7 @@ def test_each_feature_asks_only_its_permission_and_the_account_keeps_what_it_has
 
     started, query, how = sign_in()
     assert query["redirect_uri"] == "http://127.0.0.1:5555" + google.CALLBACK
-    assert query["scope"] == "https://mail.google.com/ openid email" and query["include_granted_scopes"] == "true"
+    assert query["scope"] == "https://www.googleapis.com/auth/gmail.modify openid email" and query["include_granted_scopes"] == "true"
     assert query["access_type"] == "offline" and query["login_hint"] == "me@gmail.com" and query["code_challenge_method"] == "S256"
     assert query["client_id"] == google.CLIENT_ID
     assert how == "done" and google.status(started["flow"]) == {"status": "done", "address": "me@gmail.com", "feature": "mail"}
@@ -168,19 +168,46 @@ def test_a_permission_left_unchecked_or_another_account_is_not_kept(fake):
     found.allowed_by = "other@gmail.com"
     _, _, how = sign_in()
     assert how == "account"
-    found.allowed_by = FakeGmail.user
+    found.allowed_by = USER
     _, _, how = sign_in(error="access_denied")
     assert how == "denied"
     assert mail_tool.accounts() == [] and google.accounts() == []
     # An app password cannot connect Gmail: it goes through Google's sign-in.
     assert mail_tool.connect("me@gmail.com", "abcdabcdabcdabcd") == {"ok": False, "reason": "unknown"}
-def test_gmail_is_the_mail_tool_with_googles_sign_in_and_keeps_its_own_sent_copy(fake):
+def test_gmail_is_the_mail_tool_over_gmails_api(fake):
     found, asked = fake
     sign_in()
     google._tokens.clear()
-    result = json.loads(mail_tool.mail({"action": "send", "to": ["kim@example.com"], "subject": "안녕", "body": "본문"}))
-    assert result["sent"] is True and "kept_in" not in result
-    assert FakeGmail.sent[-1]["From"] == "me@gmail.com" and asked[-1][0] == "메일 보내기"
+
+    def call(**args):
+        return json.loads(mail_tool.mail(args))
+
+    def posted(path):
+        return [json.loads(c[3]) for c in found.calls if c[0] == "POST" and c[1] == mail_tool.GMAIL + path]
+
+    # Its labels are the folders: Gmail's own by their role, the user's by name; categories are not folders.
+    assert call(action="folders")["folders"] == [{"name": "INBOX", "role": "inbox"}, {"name": "SENT", "role": "sent"},
+                                                  {"name": "TRASH", "role": "trash"}, {"name": "정리"}]
+    found_mail = call(action="search", query="견적", sender="kim", since="2026-10-20", unread_only=True)
+    listed = next(c[1] for c in found.calls if "/messages?" in c[1])
+    query = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(listed).query))
+    assert query["labelIds"] == "INBOX" and query["q"] == 'is:unread after:2026/10/20 from:"kim" 견적'
+    assert found_mail["mails"][0] == {"uid": "m1", "date": "", "from": "김철수 <kim@example.com>", "to": "",
+                                      "subject": "견적서", "unread": True, "attachments": True}
+    assert call(action="read", uid="m1")["body"] == "견적서를 보내드립니다."
+    # Sorting: into a label (out of the inbox), to the trash (never deleted for good), marked read.
+    assert call(action="move", uid="m2", to_folder="정리") == {"moved": "m2", "from": "INBOX", "to": "정리"}
+    assert posted("/messages/m2/modify") == [{"addLabelIds": ["Label_1"], "removeLabelIds": ["INBOX"]}]
+    assert call(action="move", uid="m1", to_folder="trash")["to"] == "TRASH" and posted("/messages/m1/trash") == [{}]
+    call(action="mark", uid="m1", mark="read")
+    assert posted("/messages/m1/modify") == [{"removeLabelIds": ["UNREAD"]}]
+    # A reply goes after the approval card, through Gmail, which keeps its own sent copy.
+    result = call(action="send", reply_to_uid="m1", bcc=["boss@example.com"], body="잘 받았습니다.")
+    assert result["sent"] is True and "kept_in" not in result and asked[-1][0] == "메일 보내기"
+    raw = posted("/messages/send")[0]["raw"]
+    sent = message_from_bytes(base64.urlsafe_b64decode(raw), policy=policy.default)
+    assert (sent["From"], sent["To"], sent["Bcc"], sent["Subject"]) == (USER, "kim@example.com", "boss@example.com", "Re: 견적서")
+    assert sent["In-Reply-To"] == "<m1@example.com>"
     # The access token was refreshed once and reused.
     assert found.refreshes == 1
     mail_tool.remove("me@gmail.com")

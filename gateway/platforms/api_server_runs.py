@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -623,6 +624,8 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
         user_message = raw_input[-1].get("content", "") if isinstance(raw_input, list) else ""
     if not user_message:
         return _json_error(_openai_error, "No user message found in input", status=400)
+    # Crema: "/name …" names a skill (the app's '/' menu); the agent gets that skill's whole text to follow.
+    user_message = _skill_invocation(user_message)
     # Crema: the folder the run works in (the chat's project folder, else Crema's own). One that is not
     # there is refused: the run never falls back to another folder.
     cwd = body.get("cwd")
@@ -727,6 +730,16 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
     if hasattr(task, "add_done_callback"):
         task.add_done_callback(self._background_tasks.discard)
     return _accepted_response(run_id, "started", gateway_session_key, replayed=False)
+
+
+def _skill_invocation(text: Any) -> Any:
+    """"/skill-name what to do" -> the skill's full text with that instruction; any other message unchanged."""
+    match = re.match(r"/(\S+)\s*([\s\S]*)", text) if isinstance(text, str) else None
+    if not match:
+        return text
+    from agent.skill_commands import build_skill_invocation_message, resolve_skill_command_key
+    key = resolve_skill_command_key(match[1])
+    return (build_skill_invocation_message(key, user_instruction=match[2].strip()) if key else None) or text
 
 
 def _run_usage(agent) -> Dict[str, int]:

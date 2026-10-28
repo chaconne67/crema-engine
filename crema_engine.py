@@ -347,6 +347,14 @@ async def main() -> None:
     async def failures():
         return crema_failures.take()
 
+    # The skills the app's '/' menu lists; "/name …" in a message has the agent follow one (api_server_runs).
+    @settings.get("/api/crema/skills")
+    async def skills():
+        from agent.skill_commands import get_skill_commands
+
+        commands = await asyncio.to_thread(get_skill_commands)
+        return [{"name": key[1:], "description": info.get("description") or ""} for key, info in sorted(commands.items())]
+
     @settings.post("/api/crema/turns/handed")
     async def turns_handed(body: dict):
         await asyncio.to_thread(crema_file_turns.handed, str(body.get("session_id") or ""), int(body.get("upto") or 0))

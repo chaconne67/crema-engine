@@ -290,6 +290,30 @@ class TestStartRun:
         assert captured.get("turn_author", "absent") == expected
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("text, expected", [
+        ("/crema-guide 설명해 줘", "[skill crema-guide] 설명해 줘"),
+        ("/crema_guide", "[skill crema-guide] "),
+        ("/none hello", "/none hello"),
+        ("hello /crema-guide", "hello /crema-guide"),
+    ], ids=["skill and instruction", "skill alone", "not a skill", "not at the start"])
+    async def test_start_expands_a_leading_skill_name(self, adapter, text, expected):
+        """Crema's '/' menu: a message starting with a skill's name reaches the agent as that skill's text."""
+        app = _create_runs_app(adapter)
+        captured = {}
+        skills = {"/crema-guide": {"name": "crema-guide"}}
+
+        async with TestClient(TestServer(app)) as cli:
+            with patch.object(adapter, "_create_agent", return_value=self._capturing_agent(captured)), \
+                    patch("agent.skill_commands.get_skill_commands", return_value=skills), \
+                    patch("agent.skill_commands.build_skill_invocation_message",
+                          side_effect=lambda key, user_instruction="": f"[skill {key[1:]}] {user_instruction}"):
+                resp = await cli.post("/v1/runs", json={"input": text})
+                assert resp.status == 202
+                await self._wait_completed(cli, (await resp.json())["run_id"])
+
+        assert captured["user_message"] == expected
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("author", ["dixie", ["dixie"], 7])
     async def test_start_rejects_non_object_author(self, adapter, author):
         app = _create_runs_app(adapter)

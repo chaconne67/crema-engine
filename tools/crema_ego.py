@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -227,11 +228,18 @@ def _launch_hidden() -> None:
     startup = subprocess.STARTUPINFO()
     startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     startup.wShowWindow = 0
-    subprocess.Popen(
-        [str(exe), "--startup-ego-browser-service"], startupinfo=startup,
+    # Ego closes with Crema (a restart, an update), so it starts as after a crash; Chromium's restore prompt would show.
+    started = subprocess.Popen(
+        [str(exe), "--startup-ego-browser-service", "--hide-crash-restore-bubble"], startupinfo=startup,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=NO_WINDOW,
     )
+    # ego-browser starts its own Ego, without that flag, when it finds none up: wait for this one's hidden windows.
+    deadline = time.monotonic() + 20
+    while not any(window["pid"] == started.pid for window in _windows("inspect")["windows"]):
+        if started.poll() is not None or time.monotonic() > deadline:
+            raise OSError("Ego did not start in the background")
+        time.sleep(0.5)
 
 
 def _sdk(script: str, *, timeout: int = 6) -> dict:

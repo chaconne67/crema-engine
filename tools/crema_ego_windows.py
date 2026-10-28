@@ -47,11 +47,17 @@ public static class EgoWindows {
 }
 "@
 [void][EgoWindows]::SetProcessDPIAware()
+# A PC has hundreds of windows; each owner process is looked up once per call (about 4 s a scan otherwise).
+$owners=@{}
 function Window-Record($h) {
   [uint32]$ownerId=0
   [void][EgoWindows]::GetWindowThreadProcessId($h,[ref]$ownerId)
-  try { $proc=Get-Process -Id $ownerId -ErrorAction Stop; if ($proc.Path -ine $r.exe) { return } }
-  catch { return }
+  if (!$owners.ContainsKey($ownerId)) {
+    $owners[$ownerId]=$null
+    try { $found=Get-Process -Id $ownerId -ErrorAction Stop; if ($found.Path -ieq $r.exe) { $owners[$ownerId]=$found } } catch {}
+  }
+  $proc=$owners[$ownerId]
+  if (!$proc) { return }
   $kind=New-Object Text.StringBuilder 256
   [void][EgoWindows]::GetClassName($h,$kind,256)
   if ($kind.ToString() -ne 'Chrome_WidgetWin_1') { return }

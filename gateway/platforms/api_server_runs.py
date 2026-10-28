@@ -838,6 +838,10 @@ def _make_approval_notify(self, run: _RunLaunch, *, _api_server) -> Callable[[Di
         if "command" in event:
             from gateway.run import _redact_approval_command
             event["command"] = _redact_approval_command(event.get("command"))
+        # Crema: the approval box says in Korean what the command would do; pattern_key keeps the engine's name.
+        if "description" in event:
+            from agent.crema_approval_words import korean_description
+            event["description"] = korean_description(event.get("description"))
         event.update(_run_event(run_id, "approval.request", choices=_api_server._approval_event_choices(
             smart_denied=bool(event.get("smart_denied")),
             allow_session=event.get("allow_session") is not False,

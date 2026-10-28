@@ -251,7 +251,9 @@ def _sdk(script: str, *, timeout: int = 6) -> dict:
 
 def _space(work: dict) -> dict:
     found = _sdk("console.log(JSON.stringify({spaces:await listTaskSpaces()}))")["spaces"]
-    exact = [space for space in found if space["id"] == work["id"] and space["name"] == work["name"]]
+    # Picking the Space in Ego's picker puts the caret at the end of its name: keys typed in that moment are added to
+    # the name. The random name Crema gave it still begins it.
+    exact = [space for space in found if space["id"] == work["id"] and space["name"].startswith(work["name"])]
     if len(exact) != 1 or exact[0].get("createdBy") != "agent":
         raise ValueError("This conversation's Ego Space no longer exists; no other Space was used")
     return exact[0]
@@ -316,7 +318,7 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
             if work["window"]:
                 _windows("show", window=work["window"])
             else:
-                shown = _windows("present", space=work["name"], page_title=info["title"])
+                shown = _windows("present", space=space["name"], page_title=info["title"])
                 if not shown.get("normal_gui") or not shown.get("window"):
                     raise OSError("Ego did not verify a normal GUI window for the selected page")
                 work["window"] = shown["window"]

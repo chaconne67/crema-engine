@@ -272,6 +272,16 @@ def test_browser_handoff_resume_same_space_and_normal_window(monkeypatch, tmp_pa
     assert not crema_ego._work_path("chat-a").exists()
 
 
+def test_keys_typed_into_the_space_name_during_handoff_keep_the_space(monkeypatch, tmp_path):
+    fake = _Browser(monkeypatch, tmp_path)
+    first = crema_ego.browser("start", "chat-a")
+    crema_ego.browser("handoff", "chat-a", page="p1")
+    fake.spaces[1]["name"] += "hrh"  # typed while Ego's picker had the caret in the name (2026-10-28)
+    assert crema_ego.browser("resume", "chat-a", confirmed=True) == first
+    assert fake.spaces[1]["ownership"] == "agent"
+    assert crema_ego.browser("finish", "chat-a") == {"status": "finished", "space_id": 1}
+
+
 def test_browser_waits_for_human_and_does_not_finish_their_window(monkeypatch, tmp_path):
     fake = _Browser(monkeypatch, tmp_path)
     crema_ego.browser("start", "chat-a")

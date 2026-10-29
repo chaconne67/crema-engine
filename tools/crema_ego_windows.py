@@ -38,6 +38,10 @@ public static class EgoWindows {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern bool SetProp(IntPtr h, string name, IntPtr value);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr GetProp(IntPtr h, string name);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out Rect r);
+  [DllImport("user32.dll")] public static extern bool SystemParametersInfo(uint action, uint param, out Rect r, uint ini);
+  public struct Rect { public int Left, Top, Right, Bottom; }
 
   public static IntPtr[] All() {
     var found = new List<IntPtr>();
@@ -118,10 +122,23 @@ function Click-Control($w,$element) {
   [EgoWindows]::mouse_event(2,0,0,0,[UIntPtr]::Zero)
   [EgoWindows]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
 }
+# A hidden Ego window still showed as a blank box where it stood (2026-10-29), so hidden ones wait off-screen and
+# a shown one comes back to the middle of the screen. 0x15: keep size and order, do not activate.
+function Park($hwnd) { [void][EgoWindows]::SetWindowPos([IntPtr][long]$hwnd,[IntPtr]::Zero,-32000,-32000,0,0,0x15) }
+function Center($hwnd) {
+  $box=New-Object EgoWindows+Rect
+  $area=New-Object EgoWindows+Rect
+  [void][EgoWindows]::GetWindowRect([IntPtr][long]$hwnd,[ref]$box)
+  [void][EgoWindows]::SystemParametersInfo(0x30,0,[ref]$area,0)
+  $x=$area.Left+[Math]::Max(0,[int](($area.Right-$area.Left-($box.Right-$box.Left))/2))
+  $y=$area.Top+[Math]::Max(0,[int](($area.Bottom-$area.Top-($box.Bottom-$box.Top))/2))
+  [void][EgoWindows]::SetWindowPos([IntPtr][long]$hwnd,[IntPtr]::Zero,$x,$y,0,0,0x15)
+}
 function Hide-Owned($saved) {
   $now=Check-Window $saved
   [void][EgoWindows]::ShowWindow([IntPtr][long]$now.hwnd,0)
   if ([EgoWindows]::IsWindowVisible([IntPtr][long]$now.hwnd)) { throw 'Ego did not hide its owned window' }
+  Park $now.hwnd
 }
 $hostWindow=$null
 $shown=$null
@@ -144,6 +161,7 @@ try {
   if ($r.action -eq 'show') {
     $w=Check-Window $r.window
     # Only a normal GUI window produced by 'present' is accepted by the Python caller.
+    Center $w.hwnd
     [void][EgoWindows]::ShowWindow([IntPtr][long]$w.hwnd,9)
     [void][EgoWindows]::SetForegroundWindow([IntPtr][long]$w.hwnd)
     if (![EgoWindows]::IsWindowVisible([IntPtr][long]$w.hwnd)) { throw 'Ego did not show its owned GUI window' }
@@ -165,6 +183,7 @@ try {
     if ($found.Count -eq 1) { $found[0] }
     elseif ($found.Count -gt 1) { throw 'More than one new Ego host window appeared' }
   } 7 'Ego did not create a new normal host window; existing user windows were not selected'
+  Center $hostWindow.hwnd  # a new Ego window takes the place of the last one, which may be off-screen
   $open=One-Element $hostWindow 'Open Space (Alt+S)' ([System.Windows.Automation.ControlType]::Button)
   if (!$open) { throw 'Ego Space picker is unavailable' }
   Click-Control $hostWindow $open
@@ -195,6 +214,7 @@ try {
     if ($found.Count -eq 1) { $found[0] }
     elseif ($found.Count -gt 1) { throw 'The displayed Ego page is ambiguous' }
   } 5 'Ego did not show the selected page in its own normal window'
+  Center $shown.hwnd
   $marker='Crema.Ego.'+$r.space
   if (![EgoWindows]::SetProp([IntPtr][long]$shown.hwnd,$marker,[IntPtr]1)) {
     throw 'Could not mark the verified Ego window as owned'

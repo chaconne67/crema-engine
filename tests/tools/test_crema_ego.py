@@ -198,6 +198,7 @@ class _Browser:
         self.window_calls = []
         self.visible = []
         self.launched = 0
+        self.running = False
         self.window = {"hwnd": 33, "pid": 44, "created": "100", "title": "owned", "visible": True, "marker": "Crema.Ego.test"}
         monkeypatch.setattr(crema_ego, "_work_path", lambda session: tmp_path / (session + ".json") if session else
                             (_ for _ in ()).throw(ValueError("conversation required")))
@@ -208,11 +209,17 @@ class _Browser:
 
     def launch(self):
         self.launched += 1
+        self.running = True
+
+    @property
+    def touched(self):
+        # Window calls that act on a window; 'inspect' only reads, before every action (2026-10-29).
+        return [action for action, _ in self.window_calls if action != "inspect"]
 
     def windows(self, action, **kw):
         self.window_calls.append((action, kw))
         if action == "inspect":
-            return {"roots": [] if not self.launched else [44], "windows": self.visible}
+            return {"roots": [44] if self.running else [], "windows": self.visible}
         if action == "present":
             assert kw["space"] == self.spaces[1]["name"]
             assert kw["page_title"] == "Login fixture"
@@ -223,6 +230,7 @@ class _Browser:
         raise AssertionError(action)
 
     def sdk(self, script, **_):
+        assert self.running, "ego-browser finding no Ego up starts it on screen"
         self.calls.append(script)
         if "listTaskSpaces" in script and ".handOff()" not in script:
             return {"spaces": list(self.spaces.values())}
@@ -251,8 +259,16 @@ def test_browser_starts_hidden_once_and_preserves_user_windows(monkeypatch, tmp_
     assert first["space_id"] == 1 and first["status"] == "working"
     assert crema_ego.browser("start", "chat-a") == first
     assert fake.launched == 1
-    assert [action for action, _ in fake.window_calls] == ["inspect", "inspect"]
+    assert fake.touched == []
     assert not any(".handOff()" in call for call in fake.calls)
+
+
+def test_work_taken_up_after_ego_closed_starts_it_hidden_first(monkeypatch, tmp_path):
+    fake = _Browser(monkeypatch, tmp_path)
+    first = crema_ego.browser("start", "chat-a")
+    fake.running = False  # Ego closed with Crema (a restart); the conversation then takes its work up again
+    assert crema_ego.browser("start", "chat-a") == first
+    assert fake.launched == 2
 
 
 def test_browser_handoff_resume_same_space_and_normal_window(monkeypatch, tmp_path):
@@ -263,7 +279,7 @@ def test_browser_handoff_resume_same_space_and_normal_window(monkeypatch, tmp_pa
     assert fake.spaces[1]["ownership"] == "agentDelegatedToUser"
     assert crema_ego.browser("resume", "chat-a", confirmed=True) == first
     assert fake.spaces[1]["ownership"] == "agent"
-    assert [a for a, _ in fake.window_calls][-2:] == ["present", "hide"]
+    assert fake.touched[-2:] == ["present", "hide"]
     crema_ego.browser("handoff", "chat-a", page="p1")
     assert [a for a, _ in fake.window_calls][-1] == "show"
     assert sum(a == "present" for a, _ in fake.window_calls) == 1
@@ -286,14 +302,14 @@ def test_browser_waits_for_human_and_does_not_finish_their_window(monkeypatch, t
     fake = _Browser(monkeypatch, tmp_path)
     crema_ego.browser("start", "chat-a")
     crema_ego.browser("handoff", "chat-a", page="p1")
-    calls = len(fake.window_calls)
+    calls = len(fake.touched)
     with pytest.raises(ValueError, match="confirm"):
         crema_ego.browser("resume", "chat-a")
     with pytest.raises(ValueError, match="still has"):
         crema_ego.browser("finish", "chat-a")
     with pytest.raises(ValueError, match="with the user"):
         crema_ego.browser("start", "chat-a")
-    assert len(fake.window_calls) == calls
+    assert len(fake.touched) == calls
     assert fake.spaces[1]["ownership"] == "agentDelegatedToUser"
 
 
@@ -303,10 +319,10 @@ def test_browser_does_not_claim_another_chat_or_replaced_space(monkeypatch, tmp_
     with pytest.raises(ValueError, match="No browser work"):
         crema_ego.browser("handoff", "chat-b", page="p1")
     fake.spaces[1]["name"] = "someone else's Space"
-    before = len(fake.window_calls)
+    before = len(fake.touched)
     with pytest.raises(ValueError, match="no longer exists"):
         crema_ego.browser("handoff", "chat-a", page="p1")
-    assert len(fake.window_calls) == before
+    assert len(fake.touched) == before
 
 
 def test_failed_gui_selection_does_not_hand_control_to_user(monkeypatch, tmp_path):

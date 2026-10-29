@@ -229,8 +229,10 @@ def _launch_hidden() -> None:
     startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     startup.wShowWindow = 0
     # Ego closes with Crema (a restart, an update), so it starts as after a crash; Chromium's restore prompt would show.
+    # Its hidden windows still showed as a blank box where they stood (2026-10-29): they are made off-screen.
     started = subprocess.Popen(
-        [str(exe), "--startup-ego-browser-service", "--hide-crash-restore-bubble"], startupinfo=startup,
+        [str(exe), "--startup-ego-browser-service", "--hide-crash-restore-bubble", "--window-position=-32000,-32000"],
+        startupinfo=startup,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=NO_WINDOW,
     )
@@ -270,9 +272,15 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
 
     with _browser_lock:
         work = _load_work(session_id)
+        if action == "start" and (not _enabled() or _pending().exists() or not cli()):
+            raise ValueError("Enable 웹 브라우저 조작 in Crema settings before starting browser work")
+        # Ego closes with Crema; ego-browser, finding none up, starts it on screen: a blank '새 탭' window over the
+        # chats (2026-10-29, a conversation's work taken up after a restart). So Ego is up, hidden, before any call.
+        if work or action == "start":
+            before = _windows("inspect")
+            if not before["roots"]:
+                _launch_hidden()
         if action == "start":
-            if not _enabled() or _pending().exists() or not cli():
-                raise ValueError("Enable 웹 브라우저 조작 in Crema settings before starting browser work")
             if work:
                 current = _space(work)
                 if work["phase"] == "blocked":
@@ -280,9 +288,6 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
                 if work["phase"] != "working" or current["ownership"] != "agent":
                     raise ValueError("The browser is with the user; wait for confirmation and resume it")
                 return _summary(work)
-            before = _windows("inspect")
-            if not before["roots"]:
-                _launch_hidden()
             name = "Crema " + uuid.uuid4().hex[:12]
             made = _sdk("const t=await taskSpace(" + json.dumps(name) + ");"
                         "console.log(JSON.stringify({id:t.spaceId}))", timeout=20)

@@ -360,6 +360,12 @@ async def main() -> None:
         await asyncio.to_thread(crema_file_turns.handed, str(body.get("session_id") or ""), int(body.get("upto") or 0))
         return {"ok": True}
 
+    # A reply another chat's message started is finished: that chat is told, and goes on with it.
+    @settings.post("/api/crema/turns/finished")
+    async def turns_finished(body: dict):
+        problem = await asyncio.to_thread(crema_file_turns.finished, str(body.get("session_id") or ""), str(body.get("to") or ""))
+        return {"ok": not problem, **({"problem": problem} if problem else {})}
+
     @settings.middleware("http")
     async def only_crema(request: Request, call_next):
         given = request.headers.get("X-Hermes-Session-Token", "")

@@ -407,6 +407,22 @@ def test_a_message_keeps_who_sent_it_as_it_was(api, sidebar):
     assert (item["from_title"], item["from_project"]) == ("보고서", "회사")
 
 
+def test_a_finished_reply_is_told_to_the_chat_that_sent_its_message(api, sidebar):
+    turns.send(A, "b", "견적을 조사해 주세요")
+    turns.handed(B, turns.state()["messages"][0]["upto"])
+    assert turns.finished(B, "a") is None
+    [message] = turns.state()["messages"]
+    [item] = message["items"]
+    assert message["session_id"] == A
+    assert (item["from_chat"], item["from_title"], item["text"], item["finished"]) == ("b", "메일", "맡긴 일을 마쳤어요.", True)
+    assert item["prompt"].startswith("[Crema] The chat '메일' (number b) finished the work this chat sent it")
+    # A chat no longer in the sidebar is not told; a message is not marked finished.
+    assert "No chat numbered 'gone'" in turns.finished(B, "gone")
+    turns.handed(A, message["upto"])
+    turns.send(A, "b", "하나 더")
+    assert "finished" not in turns.state()["messages"][0]["items"][0]
+
+
 def test_crema_notes_still_reach_the_chat_and_messages_do_not_mix_with_them(api, sidebar):
     turns.send(A, "b", "안녕")
     conn = turns._board()

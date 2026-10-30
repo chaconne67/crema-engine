@@ -325,6 +325,19 @@ def test_browser_does_not_claim_another_chat_or_replaced_space(monkeypatch, tmp_
     assert len(fake.touched) == before
 
 
+def test_a_space_closed_outside_crema_does_not_lock_the_chat_out(monkeypatch, tmp_path):
+    # A chat's own script closed its Space with the SDK's finish() (2026-10-29): Crema's note of it stayed, and every
+    # later start and finish failed with 'no longer exists' until the note was removed by hand.
+    fake = _Browser(monkeypatch, tmp_path)
+    crema_ego.browser("start", "chat-a")
+    del fake.spaces[1]
+    again = crema_ego.browser("start", "chat-a")
+    assert again["status"] == "working" and again["space_name"] == fake.spaces[1]["name"]
+    del fake.spaces[1]
+    assert crema_ego.browser("finish", "chat-a") == {"status": "finished", "space_id": 1}
+    assert not crema_ego._work_path("chat-a").exists()
+
+
 def test_failed_gui_selection_does_not_hand_control_to_user(monkeypatch, tmp_path):
     fake = _Browser(monkeypatch, tmp_path)
     crema_ego.browser("start", "chat-a")

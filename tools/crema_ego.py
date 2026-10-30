@@ -251,8 +251,11 @@ def _sdk(script: str, *, timeout: int = 6) -> dict:
     return _ego(Path(command), "nodejs", "-e", script, timeout=timeout)
 
 
-def _space(work: dict) -> dict:
+def _space(work: dict) -> Optional[dict]:
+    """This conversation's Space as Ego lists it; None when Ego has no Space by its number any more."""
     found = _sdk("console.log(JSON.stringify({spaces:await listTaskSpaces()}))")["spaces"]
+    if not any(space["id"] == work["id"] for space in found):
+        return None
     # Picking the Space in Ego's picker puts the caret at the end of its name: keys typed in that moment are added to
     # the name. The random name Crema gave it still begins it.
     exact = [space for space in found if space["id"] == work["id"] and space["name"].startswith(work["name"])]
@@ -280,9 +283,18 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
             before = _windows("inspect")
             if not before["roots"]:
                 _launch_hidden()
+        space = _space(work) if work else None
+        if work and space is None:
+            # Closed outside Crema (a chat's own script called the SDK's finish(), 2026-10-29): only Crema's note of it
+            # was left, and it kept the conversation from Ego for good. Another chat's or the user's Space is never
+            # taken: a Space by this number that this conversation did not make still stops it (_space).
+            _work_path(session_id).unlink()
+            if action == "finish":
+                return {"status": "finished", "space_id": work["id"]}
+            work = None
         if action == "start":
             if work:
-                current = _space(work)
+                current = space
                 if work["phase"] == "blocked":
                     raise OSError("Background startup was not verified; finish this failed task before starting again")
                 if work["phase"] != "working" or current["ownership"] != "agent":
@@ -305,7 +317,6 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
             raise ValueError("action must be start, handoff, resume or finish")
         if not work:
             raise ValueError("No browser work belongs to this conversation; start it first")
-        space = _space(work)
         sid = json.dumps(work["id"])
         if action == "handoff":
             if work["phase"] == "waiting_for_user":
@@ -350,7 +361,7 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
                 call = "takeOverTaskSpace" if space["ownership"] == "agentDelegatedToUser" else "taskSpace"
                 _sdk("const t=await " + call + "(" + sid + ");"
                      "console.log(JSON.stringify({id:t.spaceId}))")
-                if _space(work)["ownership"] != "agent":
+                if (_space(work) or {}).get("ownership") != "agent":
                     raise OSError("Ego did not return control to the agent")
             except Exception:
                 _windows("show", window=work["window"])

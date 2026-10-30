@@ -603,7 +603,9 @@ def set_chats(chats: list) -> None:
              "project": str(c.get("project") or ""),
              **{key: str(c[key]) for key in ("role", "parent") if c.get(key)}}
             for c in chats if c.get("id") and c.get("session")]
-    _write_directory(rows)
+    # A chat just started here (``start``) that the app has not made yet stays: its starter waits for it.
+    known = {row["id"] for row in rows}
+    _write_directory(rows + [row for row in _directory() if row.get("pending") and row["id"] not in known])
 
 
 def _write_directory(rows: list) -> None:
@@ -634,14 +636,27 @@ def _name(row: dict) -> str:
     return " · ".join(part for part in (row.get("role"), row["title"]) if part)
 
 
+def _works_with(me: dict, other: dict) -> bool:
+    """The chain of command (주인님 2026-10-31): a chat another chat started works only with that chat and the chats it
+    starts, so what it finds goes up through the chat that asked for it; the user's own chats work with each other."""
+    return (other.get("parent") == me["id"] or other["id"] == me.get("parent")
+            or not (me.get("parent") or other.get("parent")))
+
+
+def _mine(rows: list, me: Optional[str]) -> dict:
+    """This chat's sidebar row; one of the user's own chats when it has none."""
+    return next((row for row in rows if me and row["session"] == me), {"id": ""})
+
+
 def chats(session_id: str) -> list[dict]:
-    """The other chats this chat can send to, each with the number of the chat that started it, if one did."""
+    """The other chats this chat works with, each with the number of the chat that started it, if one did."""
     me = _chat(session_id)
     rows = _directory()
+    mine = _mine(rows, me)
     return [{"number": _number(row), "title": _name(row), "project": row["project"],
              "state": "replying" if _replying(row["session"]) else "idle",
              **{"started_by": _number(parent) for parent in rows if parent["id"] == row.get("parent")}}
-            for row in rows if row["session"] != me]
+            for row in rows if row["session"] != me and _works_with(mine, row)]
 
 
 def _addressed(session_id: str, to: str) -> tuple[Optional[str], Optional[dict], Optional[str]]:
@@ -650,12 +665,16 @@ def _addressed(session_id: str, to: str) -> tuple[Optional[str], Optional[dict],
     if not me:
         return None, None, "Only a Crema chat can send to or read another chat."
     to = str(to or "").strip()
-    found = [row for row in _directory() if to and row["id"].startswith(to)]
+    rows = _directory()
+    found = [row for row in rows if to and row["id"].startswith(to)]
     if len(found) != 1:
         return me, None, (f"No chat numbered '{to}'" + (" (more than one starts so)" if found else "")
                           + ". Call crema_chats with action list for the numbers.")
     if found[0]["session"] == me:
         return me, None, "That is this chat."
+    if not _works_with(_mine(rows, me), found[0]):
+        return me, None, ("This chat does not work with that chat: a chat another chat started works only with that "
+                          "chat and the chats it starts. Go through the chat between them.")
     return me, found[0], None
 
 
@@ -716,7 +735,7 @@ def start(session_id: str, role: str, message: str) -> dict:
     chat = str(uuid.uuid4())
     # Known at once, so the message can be left for it before the app makes it.
     _write_directory([*rows, {"id": chat, "session": CHAT_PREFIX + chat, "title": "", "project": mine["project"],
-                              "role": role, "parent": mine["id"]}])
+                              "role": role, "parent": mine["id"], "pending": True}])
     _, problem = _leave(session_id, chat, message, MESSAGE_HEAD, start={"id": chat, "role": role, "parent": mine["id"]})
     if problem:
         return {"error": problem}
@@ -725,16 +744,43 @@ def start(session_id: str, role: str, message: str) -> dict:
                         "chat when it finishes."}
 
 
-def finished(session_id: str, to: str) -> Optional[str]:
-    """Tells chat ``to`` that this chat finished a reply its message started (the app knows when; never for a reply
-    such a word started, so two chats do not start each other again and again), and which chats are still doing its
-    work. Why it could not, if so."""
+def finished(session_id: str, to: str = "") -> Optional[str]:
+    """This chat finished a reply chat ``to``'s message started (the app knows when). Chat ``to`` is told once the
+    work this chat sent on to other chats is finished too (the chain of command, 주인님 2026-10-31): till then the word
+    waits, and the reply the last of those chats' finished words starts passes it on (``to`` ""). A reply a finished
+    word started tells no one of its own, so two chats do not start each other again and again. Why it could not,
+    if so."""
+    me = _chat(session_id)
+    if not me:
+        return "Only a Crema chat can send to or read another chat."
+    conn = _board()
+    try:
+        mine = _task_for(conn, me).id
+        if to:
+            _, target, problem = _addressed(session_id, to)
+            if problem:
+                return problem
+            _add_event(conn, mine, "crema_finish_owed", {"to": target["id"], "session": target["session"]})
+        events = _session_events(conn, me)
+        owed = [e for e in events if e.kind == "crema_finish_owed" and e.id > _upto(events, "crema_finish_told")]
+        # The chats owed the word are not waited for: one may be doing work this chat sent it, and waits for the word.
+        if not owed or _still_doing(conn, me, {_chat(e.payload["session"]) or e.payload["session"] for e in owed}):
+            return None
+        _add_event(conn, mine, "crema_finish_told", {"upto": max(e.id for e in owed)})
+    finally:
+        conn.close()
+    problems = [_tell_finished(session_id, chat) for chat in dict.fromkeys(e.payload["to"] for e in owed)]
+    return next((problem for problem in problems if problem), None)
+
+
+def _tell_finished(session_id: str, to: str) -> Optional[str]:
+    """Tells chat ``to`` that this chat finished its work, and which chats are still doing its work."""
     me, target, problem = _addressed(session_id, to)
     if problem:
         return problem
     conn = _board()
     try:
-        still = _still_doing(conn, target["session"], me)
+        still = [f"'{_title(row['session'])}' (number {_number(row)})" for row in _still_doing(conn, target["session"], {me})]
     finally:
         conn.close()
     still = (f"Chats still doing work this chat sent them: {', '.join(still)}." if still
@@ -743,19 +789,19 @@ def finished(session_id: str, to: str) -> Optional[str]:
     return _leave(session_id, to, FINISHED_TEXT, head, finished=True)[1]
 
 
-def _still_doing(conn, sender: str, done: str) -> list[str]:
-    """The other chats on work chat ``sender`` sent them that they have not finished: replying, about to start with
-    it, or waiting for a file. Claude Code's way (주인님 2026-10-30): the sending chat knows whether to go on or end its
-    reply without asking."""
+def _still_doing(conn, sender: str, skip: set) -> list[dict]:
+    """The chats (not ``skip``) on work chat ``sender`` sent them that they have not finished: replying, about to
+    start with it, or waiting for a file. Claude Code's way (주인님 2026-10-30): the sending chat knows whether to go
+    on or end its reply without asking."""
     sender = _chat(sender) or sender
     told = {}
     for event in _session_events(conn, sender):
         if event.kind == "crema_note" and (event.payload or {}).get("finished"):
             told[event.payload.get("sender")] = event.id
-    names = []
+    rows = []
     for row in _directory():
         chat = _chat(row["session"]) or row["session"]
-        if chat in (sender, done):
+        if chat == sender or chat in skip:
             continue
         events = _session_events(conn, row["session"])
         sent = [e.id for e in events if e.kind == "crema_note" and (e.payload or {}).get("sender") == sender
@@ -765,8 +811,8 @@ def _still_doing(conn, sender: str, done: str) -> list[str]:
         wait = _last(events, ("crema_waiting", "crema_woken", "crema_released"))
         if (_replying(row["session"]) or max(sent) > _upto(events, "crema_messages_handed")
                 or (wait and wait.kind == "crema_waiting")):
-            names.append(f"'{_title(row['session'])}' (number {_number(row)})")
-    return names
+            rows.append(row)
+    return rows
 
 
 def read(session_id: str, to: str) -> dict:

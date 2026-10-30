@@ -436,8 +436,11 @@ def test_a_chat_starts_a_new_chat_under_it_with_its_first_message(api, sidebar):
     assert item["start"]["role"] == "c 담당" and item["start"]["parent"] == "a"
     assert item["start"]["id"].startswith(number) and item["text"] == "1번부터 30번까지 판정해 주세요"
     assert (item["from_chat"], item["from_title"]) == ("a", "보고서")
-    listed = next(chat for chat in turns.chats(B) if chat["number"] == number)
+    listed = next(chat for chat in turns.chats(A) if chat["number"] == number)
     assert (listed["title"], listed["project"], listed["started_by"]) == ("c 담당", "회사", "a")
+    # The app's report from before it made the chat does not lose it.
+    turns.set_chats([{"id": "a", "session": A, "title": "보고서", "project": "회사"}])
+    assert [chat["number"] for chat in turns.chats(A)] == [number]
     # The app reports it once made, with its title: still under chat a, still taking its finished word to a.
     session = message["session_id"]
     turns.set_chats([{"id": "a", "session": A, "title": "보고서", "project": "회사"},
@@ -449,6 +452,42 @@ def test_a_chat_starts_a_new_chat_under_it_with_its_first_message(api, sidebar):
     assert turns.state()["messages"][0]["session_id"] == A
     assert turns.start(A, "", "일") == {"error": "Give the new chat a role of up to 20 characters, the part of the work it does."}
     assert "Only a chat in the sidebar" in turns.start("agent-client-gone", "조사", "일")["error"]
+
+
+def test_chats_work_along_the_chain_of_command(api, sidebar):
+    # 주인님 2026-10-31: a chat another chat started reports to that chat alone, and once the work it sent on is
+    # finished too; the top chat hears the result through the chat between, never from below it.
+    lead = turns.start(A, "조사", "1번부터 조사해 주세요")
+    [message] = turns.state()["messages"]
+    middle = message["session_id"]
+    turns.handed(middle, message["upto"])
+    worker = turns.start(middle, "1번 담당", "1번을 조사해 주세요")
+    [message] = turns.state()["messages"]
+    bottom = message["session_id"]
+    assert [chat["number"] for chat in turns.chats(A)] == ["b", "c", lead["number"]]
+    assert [chat["number"] for chat in turns.chats(middle)] == ["a", worker["number"]]
+    assert [chat["number"] for chat in turns.chats(bottom)] == [lead["number"]]
+    assert [chat["number"] for chat in turns.chats(B)] == ["a", "c"]
+    assert "does not work with that chat" in turns.send(bottom, "a", "다 했어요")["error"]
+    assert "does not work with that chat" in turns.read(A, worker["number"])["error"]
+    # The middle chat ends its reply while the bottom one has yet to start: the top chat is not told.
+    assert turns.finished(middle, "a") is None
+    [message] = turns.state()["messages"]
+    assert message["session_id"] == bottom
+    turns.handed(bottom, message["upto"])
+    # The bottom chat finishes: the middle chat alone is told.
+    assert turns.finished(bottom, lead["number"]) is None
+    [message] = turns.state()["messages"]
+    assert message["session_id"] == middle and message["items"][0]["finished"]
+    turns.handed(middle, message["upto"])
+    # The reply that word started ends: now the top chat is told, once.
+    assert turns.finished(middle) is None
+    [message] = turns.state()["messages"]
+    assert message["session_id"] == A
+    assert message["items"][0]["prompt"].startswith("[Crema] The chat '조사' (number " + lead["number"])
+    turns.handed(A, message["upto"])
+    assert turns.finished(middle) is None
+    assert "messages" not in turns.state()
 
 
 def test_a_finished_reply_is_told_to_the_chat_that_sent_its_message(api, sidebar):

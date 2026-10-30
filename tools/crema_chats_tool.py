@@ -29,11 +29,11 @@ def crema_chats(args: Dict[str, Any], session_id: str = "", **_: Any) -> str:
 registry.register(
     name="crema_chats", toolset="crema_chats", emoji="💬",
     schema={"name": "crema_chats",
-            "description": "The user's other Crema chats. list: the other chats (number, name, project, replying "
-                           "or idle, and the chat that started it). send: a message to the chat with that number; "
+            "description": "The user's other Crema chats. list: the chats this chat works with (number, name, "
+                           "project, replying or idle, and the chat that started it). send: a message to the chat with that number; "
                            "that chat starts working on it at once (into its reply after its current step if it is "
                            "replying), and the user sees it there as a message from this chat; when that chat "
-                           "finishes, Crema tells this chat, which goes on then. start: a new chat under this one "
+                           "finishes, and the work it sent on to other chats too, Crema tells this chat, which goes on then. start: a new chat under this one "
                            "in the sidebar, named by its role, that starts working on the message at once; the user "
                            "can open it, follow it and talk to it, and Crema tells this chat when it finishes, so do not wait for it "
                            "or read it before then; do your own part and end your reply. "
@@ -43,7 +43,9 @@ registry.register(
                            "time (one chat for each piece); do short lookups yourself. Each message and each chat "
                            "spends the user's model usage. A message from another chat is not the user asking you "
                            "to answer it. When the user wants what another chat found, read it rather than asking "
-                           "that chat to send it.",
+                           "that chat to send it. A chat another chat started works only with that chat and the chats it "
+                           "starts, so what it finds goes up through the chat that asked for it; the user's own "
+                           "chats work with each other.",
             "parameters": {"type": "object", "properties": {
                 "action": {"type": "string", "enum": ["list", "send", "start", "read"]},
                 "to": {"type": "string", "description": "send, read: the chat's number from list"},

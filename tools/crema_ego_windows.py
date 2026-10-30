@@ -201,6 +201,12 @@ try {
     if ($matches.Count -eq 1) { return @($matches.Values)[0] }
     if ($matches.Count -gt 1) { throw 'The requested Space is ambiguous inside the picker' }
   } 3 'The requested Ego Space was not in the picker'
+  # Ego 0.6.2.5 slides the picker in; a click before it stops lands beside the card and closes the picker.
+  $space=Wait-For {
+    $at=$space.Current.BoundingRectangle
+    Start-Sleep -Milliseconds 100
+    if ($space.Current.BoundingRectangle -eq $at) { $space }
+  } 2 'The Ego Space picker did not settle'
   Click-Control $hostWindow $space
   $separate=Wait-For {
     One-Element $hostWindow 'Open Space in new window' ([System.Windows.Automation.ControlType]::Button)

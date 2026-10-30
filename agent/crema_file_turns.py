@@ -232,7 +232,7 @@ def _replying(chat: str) -> bool:
 
 def _title(session_id: str) -> str:
     """The chat's name in the app's sidebar, else its engine session's title, else its number."""
-    title = next((c["title"] for c in _directory() if c["session"] == session_id), None)
+    title = next((_name(c) for c in _directory() if c["session"] == session_id), None)
     if not title:
         try:
             title = (_session_db().get_session(session_id) or {}).get("title")
@@ -597,11 +597,18 @@ FINISHED_TEXT = "맡긴 일을 마쳤어요."
 
 
 def set_chats(chats: list) -> None:
-    """The app's sidebar chats that can get messages (not archived): id, engine session, title, project."""
+    """The app's sidebar chats that can get messages (not archived): id, engine session, title, project, and the
+    chat's role and the chat that started it when it has them."""
+    rows = [{"id": str(c["id"]), "session": str(c["session"]), "title": str(c.get("title") or ""),
+             "project": str(c.get("project") or ""),
+             **{key: str(c[key]) for key in ("role", "parent") if c.get(key)}}
+            for c in chats if c.get("id") and c.get("session")]
+    _write_directory(rows)
+
+
+def _write_directory(rows: list) -> None:
     from hermes_constants import get_hermes_home
 
-    rows = [{"id": str(c["id"]), "session": str(c["session"]), "title": str(c.get("title") or ""),
-             "project": str(c.get("project") or "")} for c in chats if c.get("id") and c.get("session")]
     path = Path(get_hermes_home()) / CHATS_FILE
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
@@ -622,12 +629,19 @@ def _number(row: dict) -> str:
     return row["id"][:8]
 
 
+def _name(row: dict) -> str:
+    """The chat's name as the sidebar shows it: its role, then its title, which changes with its work."""
+    return " · ".join(part for part in (row.get("role"), row["title"]) if part)
+
+
 def chats(session_id: str) -> list[dict]:
-    """The other chats this chat can send to."""
+    """The other chats this chat can send to, each with the number of the chat that started it, if one did."""
     me = _chat(session_id)
-    return [{"number": _number(row), "title": row["title"], "project": row["project"],
-             "state": "replying" if _replying(row["session"]) else "idle"}
-            for row in _directory() if row["session"] != me]
+    rows = _directory()
+    return [{"number": _number(row), "title": _name(row), "project": row["project"],
+             "state": "replying" if _replying(row["session"]) else "idle",
+             **{"started_by": _number(parent) for parent in rows if parent["id"] == row.get("parent")}}
+            for row in rows if row["session"] != me]
 
 
 def _addressed(session_id: str, to: str) -> tuple[Optional[str], Optional[dict], Optional[str]]:
@@ -679,6 +693,36 @@ def send(session_id: str, to: str, message: str) -> dict:
     return {"sent_to": target["title"],
             "delivery": "Crema hands it over: into that chat's reply after its current step if it is replying, "
                         "else that chat starts with it"}
+
+
+def start(session_id: str, role: str, message: str) -> dict:
+    """A new chat under this one in the sidebar, named ``role``, which starts with ``message``: the app makes it when
+    it hands the message over (the message carries what to make)."""
+    import uuid
+
+    role, message = " ".join(str(role or "").split()), str(message or "").strip()
+    if not role or len(role) > 20:
+        return {"error": "Give the new chat a role of up to 20 characters, the part of the work it does."}
+    if not message:
+        return {"error": "The message is empty."}
+    if len(message) > MESSAGE_MAX:
+        return {"error": f"The message is longer than {MESSAGE_MAX} characters. Put the details in a file and "
+                         "start the chat with a short message naming it."}
+    me = _chat(session_id)
+    rows = _directory()
+    mine = next((row for row in rows if row["session"] == me), None) if me else None
+    if not mine:
+        return {"error": "Only a chat in the sidebar (not archived) can start another chat."}
+    chat = str(uuid.uuid4())
+    # Known at once, so the message can be left for it before the app makes it.
+    _write_directory([*rows, {"id": chat, "session": CHAT_PREFIX + chat, "title": "", "project": mine["project"],
+                              "role": role, "parent": mine["id"]}])
+    _, problem = _leave(session_id, chat, message, MESSAGE_HEAD, start={"id": chat, "role": role, "parent": mine["id"]})
+    if problem:
+        return {"error": problem}
+    return {"started": role, "number": chat[:8],
+            "delivery": "The app makes the chat under this one and it starts with the message; Crema tells this "
+                        "chat when it finishes."}
 
 
 def finished(session_id: str, to: str) -> Optional[str]:
@@ -820,7 +864,8 @@ def state() -> dict:
                 messages.append({"session_id": session, "upto": pending[-1].id, "items": [
                     {"from_chat": e.payload.get("sender_chat", ""), "from_title": e.payload.get("sender_title", ""),
                      "from_project": e.payload.get("sender_project", ""), "text": e.payload["message"],
-                     "prompt": e.payload["text"], **({"finished": True} if e.payload.get("finished") else {})}
+                     "prompt": e.payload["text"], **({"finished": True} if e.payload.get("finished") else {}),
+                     **({"start": e.payload["start"]} if e.payload.get("start") else {})}
                     for e in pending]})
         # ``messages`` only when there is something, so the shape stays what it was without them.
         return {"waiting": waiting, "ask": ask, "wake": wake, **({"messages": messages} if messages else {})}

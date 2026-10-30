@@ -425,6 +425,32 @@ def test_a_message_keeps_who_sent_it_as_it_was(api, sidebar):
     assert (item["from_title"], item["from_project"]) == ("보고서", "회사")
 
 
+def test_a_chat_starts_a_new_chat_under_it_with_its_first_message(api, sidebar):
+    # 2026-10-30: the voucher lead could not open chats for more workers and asked the user to.
+    started = turns.start(A, "  c 담당 ", "1번부터 30번까지 판정해 주세요")
+    number = started["number"]
+    assert started["started"] == "c 담당"
+    [message] = turns.state()["messages"]
+    [item] = message["items"]
+    assert message["session_id"].startswith(turns.CHAT_PREFIX + number)
+    assert item["start"]["role"] == "c 담당" and item["start"]["parent"] == "a"
+    assert item["start"]["id"].startswith(number) and item["text"] == "1번부터 30번까지 판정해 주세요"
+    assert (item["from_chat"], item["from_title"]) == ("a", "보고서")
+    listed = next(chat for chat in turns.chats(B) if chat["number"] == number)
+    assert (listed["title"], listed["project"], listed["started_by"]) == ("c 담당", "회사", "a")
+    # The app reports it once made, with its title: still under chat a, still taking its finished word to a.
+    session = message["session_id"]
+    turns.set_chats([{"id": "a", "session": A, "title": "보고서", "project": "회사"},
+                     {"id": item["start"]["id"], "session": session, "title": "판정", "project": "회사",
+                      "role": "c 담당", "parent": "a"}])
+    turns.handed(session, message["upto"])
+    assert turns._title(session) == "c 담당 · 판정"
+    assert turns.finished(session, "a") is None
+    assert turns.state()["messages"][0]["session_id"] == A
+    assert turns.start(A, "", "일") == {"error": "Give the new chat a role of up to 20 characters, the part of the work it does."}
+    assert "Only a chat in the sidebar" in turns.start("agent-client-gone", "조사", "일")["error"]
+
+
 def test_a_finished_reply_is_told_to_the_chat_that_sent_its_message(api, sidebar):
     turns.send(A, "b", "견적을 조사해 주세요")
     turns.handed(B, turns.state()["messages"][0]["upto"])

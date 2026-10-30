@@ -356,11 +356,15 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
         if action == "resume":
             if confirmed is not True:
                 raise ValueError("Wait for the user to confirm they have finished; time is not confirmation")
-            if work["phase"] not in {"waiting_for_user", "opening_for_user"} or not work["window"]:
+            # Ego may delegate a working Space itself, without Crema presenting a window.
+            # _space already verified this conversation's identity; confirmation is still required above.
+            delegated = work["phase"] == "working" and space["ownership"] == "agentDelegatedToUser"
+            if not delegated and (work["phase"] not in {"waiting_for_user", "opening_for_user"} or not work["window"]):
                 raise ValueError("This conversation has not handed a browser window to the user")
             if space["ownership"] not in {"agentDelegatedToUser", "agent"}:
                 raise ValueError("Ego control changed outside this handoff; the user's Space was left untouched")
-            _windows("hide", window=work["window"])
+            if work["window"]:
+                _windows("hide", window=work["window"])
             try:
                 call = "takeOverTaskSpace" if space["ownership"] == "agentDelegatedToUser" else "taskSpace"
                 _sdk("const t=await " + call + "(" + sid + ");"
@@ -368,7 +372,8 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
                 if (_space(work) or {}).get("ownership") != "agent":
                     raise OSError("Ego did not return control to the agent")
             except Exception:
-                _windows("show", window=work["window"])
+                if work["window"]:
+                    _windows("show", window=work["window"])
                 raise
             work["phase"] = "working"
             _save_work(session_id, work)
@@ -404,15 +409,17 @@ registry.register(
                            "Space; use its numeric space_id with the installed ego-browser SDK for page work. "
                            "handoff shows the named existing page in that Space and gives control to the user "
                            "for login or verification. Then end your response and wait for the user's reply. "
-                           "resume hides the same normal browser window and returns control only after the user "
-                           "says they finished; confirmed must reflect that reply, never a timer or guess. "
-                           "Inspect the page after resuming to see whether authentication succeeded. "
+                           "resume returns control of this conversation's Space only after the user explicitly "
+                           "says they finished or authorizes taking control back, including when Ego delegated it "
+                           "without a Crema handoff. It hides only a window Crema recorded for this Space. "
+                           "confirmed must reflect that reply, never a timer or guess. Inspect the page after resuming "
+                           "to check its actual state; control returning does not establish successful authentication. "
                            "finish releases this conversation's completed Space. Never use raw window handles, "
                            "SDK handOff/takeOver/finish or a different browser instead of these transitions.",
             "parameters": {"type": "object", "properties": {
                 "action": {"type": "string", "enum": ["start", "handoff", "resume", "finish"]},
                 "page": {"type": "string", "description": "handoff: existing SDK page label in the returned Space"},
-                "confirmed": {"type": "boolean", "description": "resume: true only after the user's completion reply"},
+                "confirmed": {"type": "boolean", "description": "resume: true only after the user confirms completion or explicitly authorizes taking control back"},
             }, "required": ["action"]}},
     handler=crema_ego,
 )

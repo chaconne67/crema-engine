@@ -304,6 +304,75 @@ def test_browser_handoff_resume_same_space_and_normal_window(monkeypatch, tmp_pa
     assert not crema_ego._work_path("chat-a").exists()
 
 
+def test_automatic_handoff_resumes_only_with_user_confirmation(monkeypatch, tmp_path):
+    # Ego can delegate a hidden Space without Crema ever having presented its window.
+    real_work_path = crema_ego._work_path
+    fake = _Browser(monkeypatch, tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(crema_ego, "_work_path", real_work_path)
+    handler = crema_ego.registry.get_entry("crema_ego").handler
+    first = json.loads(handler({"action": "start"}, session_id="chat-a"))
+    fake.spaces[1]["ownership"] = "agentDelegatedToUser"
+    path = crema_ego._work_path("chat-a")
+    assert path.is_relative_to(tmp_path)
+    saved = path.read_bytes()
+    assert crema_ego._load_work("chat-a")["window"] is None
+
+    refused = json.loads(handler({"action": "resume"}, session_id="chat-a"))
+    assert "confirm" in refused["error"]
+    assert path.read_bytes() == saved
+    assert fake.spaces[1]["ownership"] == "agentDelegatedToUser"
+    assert not any("takeOverTaskSpace" in call for call in fake.calls)
+
+    resumed = json.loads(handler({"action": "resume", "confirmed": True}, session_id="chat-a"))
+    assert resumed == first
+    assert fake.spaces[1]["ownership"] == "agent"
+    assert crema_ego._load_work("chat-a")["phase"] == "working"
+    assert fake.touched == []  # no window was claimed, so no window is hidden or shown
+    assert json.loads(handler({"action": "start"}, session_id="chat-a")) == first
+
+
+@pytest.mark.parametrize("failure", ["blocked", "renamed", "created_by_user", "user_owned",
+                                     "takeover_refused", "takeover_unconfirmed"])
+def test_automatic_handoff_keeps_ownership_and_failure_guards(monkeypatch, tmp_path, failure):
+    fake = _Browser(monkeypatch, tmp_path)
+    handler = crema_ego.registry.get_entry("crema_ego").handler
+    handler({"action": "start"}, session_id="chat-a")
+    fake.spaces[1]["ownership"] = "agentDelegatedToUser"
+    if failure == "blocked":
+        work = crema_ego._load_work("chat-a")
+        work["phase"] = "blocked"
+        crema_ego._save_work("chat-a", work)
+    elif failure == "renamed":
+        fake.spaces[1]["name"] = "Another conversation's Space"
+    elif failure == "created_by_user":
+        fake.spaces[1]["createdBy"] = "user"
+    elif failure == "user_owned":
+        fake.spaces[1]["ownership"] = "user"
+    original = fake.sdk
+    def sdk(script, **kw):
+        if "takeOverTaskSpace" in script:
+            if failure == "takeover_refused":
+                raise OSError("Ego refused takeover")
+            if failure == "takeover_unconfirmed":
+                return {"id": 1}  # a successful call is not proof of agent ownership
+        return original(script, **kw)
+    monkeypatch.setattr(crema_ego, "_sdk", sdk)
+    saved = crema_ego._work_path("chat-a").read_bytes()
+    spaces = json.loads(json.dumps(fake.spaces))
+    refused = json.loads(handler({"action": "resume", "confirmed": True}, session_id="chat-a"))
+    assert "error" in refused
+    if failure == "takeover_refused":
+        assert "refused takeover" in refused["error"]
+    elif failure == "takeover_unconfirmed":
+        assert "did not return control" in refused["error"]
+    else:
+        assert not any("takeOverTaskSpace" in call for call in fake.calls)
+    assert crema_ego._work_path("chat-a").read_bytes() == saved
+    assert json.loads(json.dumps(fake.spaces)) == spaces
+    assert fake.touched == []
+
+
 def test_keys_typed_into_the_space_name_during_handoff_keep_the_space(monkeypatch, tmp_path):
     fake = _Browser(monkeypatch, tmp_path)
     first = crema_ego.browser("start", "chat-a")

@@ -227,6 +227,10 @@ class _Browser:
         if action in {"show", "hide"}:
             assert kw["window"]["hwnd"] == 33
             return {"window": self.window, "hidden": action == "hide"}
+        if action == "decline":
+            asked = [w for w in self.visible if w.get("title") == "Help improve ego(lite)?"]
+            self.visible = [w for w in self.visible if w not in asked]
+            return {"declined": len(asked)}
         raise AssertionError(action)
 
     def sdk(self, script, **_):
@@ -261,6 +265,18 @@ def test_browser_starts_hidden_once_and_preserves_user_windows(monkeypatch, tmp_
     assert fake.launched == 1
     assert fake.touched == []
     assert not any(".handOff()" in call for call in fake.calls)
+
+
+def test_ego_usage_data_question_on_a_fresh_start_is_answered_not_now(monkeypatch, tmp_path):
+    fake = _Browser(monkeypatch, tmp_path)
+    original = fake.windows
+    def windows(action, **kw):
+        if action == "inspect" and fake.launched and not any(w["hwnd"] == 9 for w in fake.visible)                 and not any(a == "decline" for a, _ in fake.window_calls):
+            fake.visible = [{"hwnd": 9, "visible": True, "title": "Help improve ego(lite)?"}]
+        return original(action, **kw)
+    monkeypatch.setattr(crema_ego, "_windows", windows)
+    assert crema_ego.browser("start", "chat-a")["status"] == "working"
+    assert fake.touched == ["decline"]
 
 
 def test_work_taken_up_after_ego_closed_starts_it_hidden_first(monkeypatch, tmp_path):

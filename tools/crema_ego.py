@@ -308,6 +308,10 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
             visible_before = {w["hwnd"] for w in before["windows"] if w["visible"]}
             visible_after = {w["hwnd"] for w in _windows("inspect")["windows"] if w["visible"]}
             if visible_after - visible_before:
+                # Ego 0.6.2.5's usage-data question shows on a fresh start; it is answered 'Not now' and looked at again.
+                _windows("decline")
+                visible_after = {w["hwnd"] for w in _windows("inspect")["windows"] if w["visible"]}
+            if visible_after - visible_before:
                 work["phase"] = "blocked"
                 _save_work(session_id, work)
                 raise OSError("An Ego window became visible during background startup; browser work was not verified")

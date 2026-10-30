@@ -168,6 +168,16 @@ try {
     @{window=$w} | ConvertTo-Json -Depth 4 -Compress
     exit 0
   }
+  if ($r.action -eq 'decline') {
+    # Ego 0.6.2.5 asks on a fresh start whether to send usage data; Crema answers 'Not now' (주인님 2026-10-30).
+    $asked=@(Windows | Where-Object { $_.visible -and $_.title -eq 'Help improve ego(lite)?' })
+    foreach($w in $asked) {
+      $no=One-Element $w 'Not now' ([System.Windows.Automation.ControlType]::Button)
+      if ($no) { Click-Control $w $no }
+    }
+    @{declined=$asked.Count} | ConvertTo-Json -Compress
+    exit 0
+  }
   if ($r.action -ne 'present') { throw 'Unknown Ego window action' }
   $before=@(Windows | Where-Object { $_.visible } | ForEach-Object { $_.hwnd })
   $launch=New-Object Diagnostics.ProcessStartInfo

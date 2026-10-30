@@ -594,6 +594,13 @@ FINISHED_HEAD = ("[Crema] The chat '{title}' (number {number}) finished the work
                  "can go on, end this reply: Crema tells this chat as each one finishes, so there is no need to check on "
                  "them.")
 FINISHED_TEXT = "맡긴 일을 마쳤어요."
+# A reply that ended before its work was done (an error, or the user stopped it), with why as the app saw it
+# (주인님 2026-10-31): the sending chat knows its work is not done and why, and decides what to do.
+FAILED_HEAD = ("[Crema] The chat '{title}' (number {number}) ended without finishing the work this chat sent it; the "
+               "user did not type this. Why, as Crema saw it: {problem} {still} Its work is not done: read its reply "
+               "with crema_chats (action read) for what it got done, then send it the rest again, give the rest to "
+               "another chat, or tell the user when only they can fix the cause.")
+FAILED_TEXT = "맡긴 일을 끝내지 못했어요."
 
 
 def set_chats(chats: list) -> None:
@@ -744,11 +751,12 @@ def start(session_id: str, role: str, message: str) -> dict:
                         "chat when it finishes."}
 
 
-def finished(session_id: str, to: str = "") -> Optional[str]:
+def finished(session_id: str, to: str = "", problem: str = "") -> Optional[str]:
     """This chat finished a reply chat ``to``'s message started (the app knows when). Chat ``to`` is told once the
     work this chat sent on to other chats is finished too (the chain of command, 주인님 2026-10-31): till then the word
     waits, and the reply the last of those chats' finished words starts passes it on (``to`` ""). A reply a finished
-    word started tells no one of its own, so two chats do not start each other again and again. Why it could not,
+    word started tells no one of its own, so two chats do not start each other again and again. A reply that ended
+    unfinished (``problem``: why) is told at once to every chat owed a word, waiting for nothing. Why it could not,
     if so."""
     me = _chat(session_id)
     if not me:
@@ -757,27 +765,29 @@ def finished(session_id: str, to: str = "") -> Optional[str]:
     try:
         mine = _task_for(conn, me).id
         if to:
-            _, target, problem = _addressed(session_id, to)
-            if problem:
-                return problem
+            _, target, refused = _addressed(session_id, to)
+            if refused:
+                return refused
             _add_event(conn, mine, "crema_finish_owed", {"to": target["id"], "session": target["session"]})
         events = _session_events(conn, me)
         owed = [e for e in events if e.kind == "crema_finish_owed" and e.id > _upto(events, "crema_finish_told")]
         # The chats owed the word are not waited for: one may be doing work this chat sent it, and waits for the word.
-        if not owed or _still_doing(conn, me, {_chat(e.payload["session"]) or e.payload["session"] for e in owed}):
+        if not owed or (not problem and _still_doing(conn, me, {_chat(e.payload["session"]) or e.payload["session"]
+                                                                 for e in owed})):
             return None
         _add_event(conn, mine, "crema_finish_told", {"upto": max(e.id for e in owed)})
     finally:
         conn.close()
-    problems = [_tell_finished(session_id, chat) for chat in dict.fromkeys(e.payload["to"] for e in owed)]
-    return next((problem for problem in problems if problem), None)
+    refusals = [_tell_finished(session_id, chat, problem) for chat in dict.fromkeys(e.payload["to"] for e in owed)]
+    return next((refused for refused in refusals if refused), None)
 
 
-def _tell_finished(session_id: str, to: str) -> Optional[str]:
-    """Tells chat ``to`` that this chat finished its work, and which chats are still doing its work."""
-    me, target, problem = _addressed(session_id, to)
-    if problem:
-        return problem
+def _tell_finished(session_id: str, to: str, problem: str = "") -> Optional[str]:
+    """Tells chat ``to`` that this chat finished its work, or ended without finishing it (``problem``: why), and which
+    chats are still doing its work."""
+    me, target, refused = _addressed(session_id, to)
+    if refused:
+        return refused
     conn = _board()
     try:
         still = [f"'{_title(row['session'])}' (number {_number(row)})" for row in _still_doing(conn, target["session"], {me})]
@@ -785,7 +795,11 @@ def _tell_finished(session_id: str, to: str) -> Optional[str]:
         conn.close()
     still = (f"Chats still doing work this chat sent them: {', '.join(still)}." if still
              else "No other chat is still doing work this chat sent.")
-    head = FINISHED_HEAD.replace("{still}", still.replace("{", "{{").replace("}", "}}"))
+    escape = lambda text: text.replace("{", "{{").replace("}", "}}")  # noqa: E731 - _leave formats the head
+    if problem:
+        head = FAILED_HEAD.replace("{problem}", escape(problem)).replace("{still}", escape(still))
+        return _leave(session_id, to, f"{FAILED_TEXT} {problem}", head, finished=True, failed=True)[1]
+    head = FINISHED_HEAD.replace("{still}", escape(still))
     return _leave(session_id, to, FINISHED_TEXT, head, finished=True)[1]
 
 

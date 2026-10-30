@@ -425,7 +425,16 @@ def test_a_message_keeps_who_sent_it_as_it_was(api, sidebar):
     assert (item["from_title"], item["from_project"]) == ("보고서", "회사")
 
 
-def test_a_chat_starts_a_new_chat_under_it_with_its_first_message(api, sidebar):
+@pytest.fixture
+def new_ids(monkeypatch):
+    """Chats started here get numbers of digits only, so none starts like the sidebar's chats a, b and c."""
+    import uuid
+
+    made = iter(uuid.UUID(f"{n}" * 32) for n in range(1, 10))
+    monkeypatch.setattr(uuid, "uuid4", lambda: next(made))
+
+
+def test_a_chat_starts_a_new_chat_under_it_with_its_first_message(api, sidebar, new_ids):
     # 2026-10-30: the voucher lead could not open chats for more workers and asked the user to.
     started = turns.start(A, "  c 담당 ", "1번부터 30번까지 판정해 주세요")
     number = started["number"]
@@ -454,7 +463,7 @@ def test_a_chat_starts_a_new_chat_under_it_with_its_first_message(api, sidebar):
     assert "Only a chat in the sidebar" in turns.start("agent-client-gone", "조사", "일")["error"]
 
 
-def test_chats_work_along_the_chain_of_command(api, sidebar):
+def test_chats_work_along_the_chain_of_command(api, sidebar, new_ids):
     # 주인님 2026-10-31: a chat another chat started reports to that chat alone, and once the work it sent on is
     # finished too; the top chat hears the result through the chat between, never from below it.
     lead = turns.start(A, "조사", "1번부터 조사해 주세요")
@@ -488,6 +497,27 @@ def test_chats_work_along_the_chain_of_command(api, sidebar):
     turns.handed(A, message["upto"])
     assert turns.finished(middle) is None
     assert "messages" not in turns.state()
+
+
+def test_a_reply_that_ended_unfinished_is_told_at_once_with_why(api, sidebar, new_ids):
+    # 2026-10-31: four workers the voucher lead started were refused by the engine (too many runs at once), and the
+    # lead never heard of it; a word that only says "finished" would have hidden it.
+    lead = turns.start(A, "조사", "1번부터 조사해 주세요")
+    [message] = turns.state()["messages"]
+    middle = message["session_id"]
+    turns.handed(middle, message["upto"])
+    turns.start(middle, "1번 담당", "1번을 조사해 주세요")
+    # Ended unfinished while the chat it started still works: told at once, with why, never waiting for it.
+    why = "Crema 엔진이 요청을 처리하지 못했습니다. (server {500})"
+    assert turns.finished(middle, "a", why) is None
+    told = next(m for m in turns.state()["messages"] if m["session_id"] == A)
+    [item] = told["items"]
+    assert item["finished"] and item["text"] == f"맡긴 일을 끝내지 못했어요. {why}"
+    assert item["prompt"].startswith(f"[Crema] The chat '조사' (number {lead['number']}) ended without finishing")
+    assert why in item["prompt"] and "Its work is not done" in item["prompt"]
+    turns.handed(A, told["upto"])
+    assert turns.finished(middle, "", why) is None
+    assert all(m["session_id"] != A for m in turns.state().get("messages", []))
 
 
 def test_a_finished_reply_is_told_to_the_chat_that_sent_its_message(api, sidebar):

@@ -16,8 +16,8 @@ A refused write costs nothing while it waits. ``settle`` (on each ``GET /api/cre
 app) completes the task of a chat that others wait on once it is not replying and has nothing
 uncommitted in its files; the board then promotes the waiting chats and the app starts them again.
 Terminal commands are not refused (the files they touch are known only afterwards): in a Git folder
-the files of the chat's own folder whose content a command changed are recorded after it, and an overlap is
-told to both chats.
+the files of the chat's own folder whose content a command changed are recorded after it (not a file another chat
+holds whose own step ran meanwhile), and an overlap is told to both chats.
 
 A chat's notes (``crema_note`` events) are its mailbox: what Crema tells it about the files and the messages
 other chats send it with the ``crema_chats`` tool. It reads Crema's notes after its next tool step or at the
@@ -67,6 +67,10 @@ _path_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 # tool_call_id -> Git state before a terminal command / what to tell the chat after it.
 _before_terminal: dict[str, dict[str, float]] = {}
 _after_terminal: dict[str, str] = {}
+# tool_call_id -> chat of each write or terminal step running now; terminal tool_call_id -> the other chats whose
+# steps ran while it ran (a file one of them holds may be its own change, not the command's).
+_running: dict[str, str] = {}
+_meanwhile: dict[str, set[str]] = {}
 # tool_call_id -> files a write claimed before it ran, given back when the write fails (audit ER-2).
 _claims: dict[str, list[str]] = {}
 # tool_call_id -> {path: whether it existed before the write} (made or changed, for the files a reply wrote).
@@ -370,6 +374,14 @@ def before_tool(tool_name: str = "", args: Optional[dict] = None, session_id: st
     if not chat:
         return None
     args, task_id = args or {}, task_id or session_id  # the live session resolves relative paths
+    if tool_call_id:
+        with _guard:
+            for call, others in _meanwhile.items():
+                if _running.get(call) != chat:
+                    others.add(chat)
+            if tool_name == "terminal":
+                _meanwhile[tool_call_id] = {other for other in _running.values() if other != chat}
+            _running[tool_call_id] = chat
     if tool_name == "terminal":
         folder = _chat_folder(task_id)
         state = _dirty_files(folder) if folder else None
@@ -451,6 +463,9 @@ def _wait(conn, me, holder, path: str, reason: str, *, ask: bool) -> str:
 
 def after_tool(tool_name: str = "", args: Optional[dict] = None, result: Any = None, session_id: str = "",
                task_id: str = "", tool_call_id: str = "", **_: Any) -> None:
+    with _guard:
+        _running.pop(tool_call_id, None)
+        meanwhile = _meanwhile.pop(tool_call_id, set())
     chat = _chat(session_id) if tool_name in WRITE_TOOLS or tool_call_id in _before_terminal else None
     if not chat:
         return
@@ -478,6 +493,10 @@ def after_tool(tool_name: str = "", args: Optional[dict] = None, result: Any = N
     conn = _board()
     try:
         me = _task_for(conn, session_id)
+        if tool_name == "terminal":
+            # Another chat's save that lands while the command runs shows in the same Git status (2026-10-30: a
+            # script's chat took the file another chat was patching meanwhile, and that chat then waited on itself).
+            paths = [p for p in paths if not any(h.session_id in meanwhile for h in _holders(conn, p, session_id))]
         for path in paths:
             if not _holds(conn, me, path):
                 _add_event(conn, me.id, "crema_file", _file_event(path))
@@ -754,10 +773,10 @@ def state() -> dict:
                 done = [p for p in parents if p.status == "done"]
                 info["after"] = [{"title": _title(p.session_id), "result": p.result} for p in done]
                 wake.append(info)
-        # A chat that waits for a file, or for the user's order, gets its messages once it goes on.
-        held = {info["session_id"] for info in (*waiting, *ask)}
+        # A chat that waits for a file gets its messages too: one may be what lets it go on (2026-10-30, a message
+        # to work in another file was held until the user let the chat go).
         for session in dict.fromkeys(t.session_id for t in tasks if t.session_id):
-            pending = _pending(conn, session) if session not in held else []
+            pending = _pending(conn, session)
             if pending:
                 messages.append({"session_id": session, "upto": pending[-1].id, "items": [
                     {"from_chat": e.payload.get("sender_chat", ""), "from_title": e.payload.get("sender_title", ""),

@@ -318,6 +318,24 @@ def test_a_command_records_only_files_in_its_chats_folder(api, judge, repo, fold
     assert turns.files_since(B, 0) == [{"path": str(plan.resolve()), "made": None}]
 
 
+def test_a_command_leaves_a_file_another_chat_saved_meanwhile_to_that_chat(api, judge, repo, folders):
+    # 2026-10-30: f's patch of its own CSV landed while c's script saved c's CSV; c took f's file, and f then
+    # waited on c for the file only f was changing.
+    report, mine = repo.path / "report.py", repo.path / "mine.csv"
+    folders(B, repo.path)
+    edit = {"path": str(report), "old_string": "v1", "new_string": "v2"}
+    assert turns.before_tool("patch", edit, session_id=A, task_id=A, tool_call_id="w1") is None
+    command = {"command": "python save_mine.py"}
+    turns.before_tool("terminal", command, session_id=B, task_id=B, tool_call_id="t4")
+    report.write_text("v2\n", encoding="utf-8")
+    mine.write_text("row\n", encoding="utf-8")
+    turns.after_tool("terminal", command, "ok", session_id=B, task_id=B, tool_call_id="t4")
+    turns.after_tool("patch", edit, json.dumps({"success": True}), session_id=A, task_id=A, tool_call_id="w1")
+    assert turns.files_since(B, 0) == [{"path": str(mine.resolve()), "made": None}]
+    assert turns.notes_for_turn(session_id=A) is None
+    assert write(A, report, "v3\n") is None
+
+
 def test_install_puts_the_turn_rule_in_the_engines_pre_tool_call(api, judge, repo, monkeypatch):
     from hermes_cli.plugins import _dispatch_pre_tool_call_hooks, get_plugin_manager
 
@@ -434,7 +452,7 @@ def test_crema_notes_still_reach_the_chat_and_messages_do_not_mix_with_them(api,
     assert turns.state()["messages"][0]["items"][0]["text"] == "안녕"
 
 
-def test_a_chat_waiting_for_a_file_gets_its_messages_once_it_goes_on(api, judge, repo, sidebar):
+def test_a_chat_waiting_for_a_file_gets_its_messages_at_once(api, judge, repo, sidebar):
     report = repo.path / "report.py"
     write(A, report, "v2\n")
     api.replying(A)
@@ -442,9 +460,7 @@ def test_a_chat_waiting_for_a_file_gets_its_messages_once_it_goes_on(api, judge,
     assert write(B, report, "v3\n")
     turns.send(C, "b", "급해요")
     state = turns.state()
-    assert [w["session_id"] for w in state["waiting"]] == [B] and "messages" not in state
-    turns.release(B)
-    assert turns.state()["messages"][0]["session_id"] == B
+    assert [w["session_id"] for w in state["waiting"]] == [B] and state["messages"][0]["session_id"] == B
 
 
 def test_read_gives_the_other_chats_latest_reply(api, sidebar, monkeypatch):

@@ -199,6 +199,7 @@ class _Browser:
         self.visible = []
         self.launched = 0
         self.running = False
+        self.reason = "manual_takeover"
         self.window = {"hwnd": 33, "pid": 44, "created": "100", "title": "owned", "visible": True, "marker": "Crema.Ego.test"}
         monkeypatch.setattr(crema_ego, "_work_path", lambda session: tmp_path / (session + ".json") if session else
                             (_ for _ in ()).throw(ValueError("conversation required")))
@@ -250,6 +251,10 @@ class _Browser:
         if "takeOverTaskSpace" in script:
             self.spaces[1]["ownership"] = "agent"
             return {"id": 1}
+        if "ego.listTabs()" in script:
+            if self.spaces[1]["ownership"] == "agentDelegatedToUser":
+                return {"error": self.reason, "error_code": "EGO_TASK_SPACE_USER_IN_CONTROL"}
+            return {"tabs": []}
         if ".finish(" in script:
             del self.spaces[1]
             return {"finished": True}
@@ -304,7 +309,7 @@ def test_browser_handoff_resume_same_space_and_normal_window(monkeypatch, tmp_pa
     assert not crema_ego._work_path("chat-a").exists()
 
 
-def test_automatic_handoff_resumes_only_with_user_confirmation(monkeypatch, tmp_path):
+def test_a_takeover_by_a_person_resumes_only_with_user_confirmation(monkeypatch, tmp_path):
     # Ego can delegate a hidden Space without Crema ever having presented its window.
     real_work_path = crema_ego._work_path
     fake = _Browser(monkeypatch, tmp_path)
@@ -325,11 +330,30 @@ def test_automatic_handoff_resumes_only_with_user_confirmation(monkeypatch, tmp_
     assert not any("takeOverTaskSpace" in call for call in fake.calls)
 
     resumed = json.loads(handler({"action": "resume", "confirmed": True}, session_id="chat-a"))
-    assert resumed == first
+    assert resumed == {**first, "reason": "manual_takeover"}
     assert fake.spaces[1]["ownership"] == "agent"
     assert crema_ego._load_work("chat-a")["phase"] == "working"
     assert fake.touched == []  # no window was claimed, so no window is hidden or shown
     assert json.loads(handler({"action": "start"}, session_id="chat-a")) == first
+
+
+def test_a_page_prompt_handoff_is_taken_back_without_the_user_and_says_why(monkeypatch, tmp_path):
+    # 2026-10-30: a bank page reaching its security program on this PC made Ego give the hidden Space to the user;
+    # nobody had touched it, and the chat stopped until 주인님 said to go on.
+    fake = _Browser(monkeypatch, tmp_path)
+    handler = crema_ego.registry.get_entry("crema_ego").handler
+    first = json.loads(handler({"action": "start"}, session_id="chat-a"))
+    fake.spaces[1]["ownership"] = "agentDelegatedToUser"
+    fake.reason = "local_network_access"
+    resumed = json.loads(handler({"action": "resume"}, session_id="chat-a"))
+    assert resumed == {**first, "reason": "local_network_access"}
+    assert fake.spaces[1]["ownership"] == "agent"
+    assert crema_ego._load_work("chat-a")["phase"] == "working"
+    assert fake.touched == []
+    # A Space Crema handed to the user still waits for the user's word, whatever Ego says.
+    crema_ego.browser("handoff", "chat-a", page="p1")
+    assert "confirm" in json.loads(handler({"action": "resume"}, session_id="chat-a"))["error"]
+    assert fake.spaces[1]["ownership"] == "agentDelegatedToUser"
 
 
 @pytest.mark.parametrize("failure", ["blocked", "renamed", "created_by_user", "user_owned",

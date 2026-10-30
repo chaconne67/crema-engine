@@ -264,6 +264,13 @@ def _space(work: dict) -> Optional[dict]:
     return exact[0]
 
 
+def _control_reason(work: dict) -> Optional[str]:
+    """Why Ego gave this conversation's Space to the user: 'manual_takeover' when a person took it, else what a page
+    asked (local_network_access, protocol_handler, permission_prompt, ...). None when the agent has it."""
+    found = _sdk("ego.useTaskSpace(" + json.dumps(work["id"]) + ");console.log(JSON.stringify(await ego.listTabs()))")
+    return found.get("error") if found.get("error_code") == "EGO_TASK_SPACE_USER_IN_CONTROL" else None
+
+
 def _summary(work: dict) -> dict:
     return {"space_id": work["id"], "space_name": work["name"], "status": work["phase"]}
 
@@ -354,11 +361,14 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
             return _summary(work)
 
         if action == "resume":
-            if confirmed is not True:
-                raise ValueError("Wait for the user to confirm they have finished; time is not confirmation")
-            # Ego may delegate a working Space itself, without Crema presenting a window.
-            # _space already verified this conversation's identity; confirmation is still required above.
+            # Ego may delegate a working Space itself, without Crema presenting a window. A page's own prompt does it
+            # too, nobody touching the browser (2026-10-30: a bank page reaching its security program on this PC,
+            # local_network_access): that is taken back without the user, and its reason goes to the agent.
             delegated = work["phase"] == "working" and space["ownership"] == "agentDelegatedToUser"
+            reason = _control_reason(work) if delegated else None
+            if confirmed is not True and (not reason or reason == "manual_takeover"):
+                raise ValueError(("A person took this Space over in Ego; " if reason else "") +
+                                 "Wait for the user to confirm they have finished; time is not confirmation")
             if not delegated and (work["phase"] not in {"waiting_for_user", "opening_for_user"} or not work["window"]):
                 raise ValueError("This conversation has not handed a browser window to the user")
             if space["ownership"] not in {"agentDelegatedToUser", "agent"}:
@@ -377,7 +387,7 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
                 raise
             work["phase"] = "working"
             _save_work(session_id, work)
-            return _summary(work)
+            return {**_summary(work), "reason": reason} if reason else _summary(work)
 
         if work["phase"] not in {"working", "blocked"} or space["ownership"] != "agent":
             raise ValueError("The user still has the browser; do not finish or hide their handoff")
@@ -409,17 +419,21 @@ registry.register(
                            "Space; use its numeric space_id with the installed ego-browser SDK for page work. "
                            "handoff shows the named existing page in that Space and gives control to the user "
                            "for login or verification. Then end your response and wait for the user's reply. "
-                           "resume returns control of this conversation's Space only after the user explicitly "
-                           "says they finished or authorizes taking control back, including when Ego delegated it "
-                           "without a Crema handoff. It hides only a window Crema recorded for this Space. "
-                           "confirmed must reflect that reply, never a timer or guess. Inspect the page after resuming "
-                           "to check its actual state; control returning does not establish successful authentication. "
+                           "resume returns control of this conversation's Space. When an ego-browser command stops "
+                           "because control is with the user and this conversation did not hand it off, call resume "
+                           "without confirmed: "
+                           "if a page's own prompt made Ego hand the Space over, Crema takes it back and returns that "
+                           "reason; if a person took it over, resume refuses and you ask the user. After a handoff or "
+                           "such a refusal, resume only once the user says they finished or authorizes taking control "
+                           "back; confirmed must reflect that reply, never a timer or guess. It hides only a window "
+                           "Crema recorded for this Space. Inspect the page after resuming to check its actual state; "
+                           "control returning does not establish successful authentication. "
                            "finish releases this conversation's completed Space. Never use raw window handles, "
                            "SDK handOff/takeOver/finish or a different browser instead of these transitions.",
             "parameters": {"type": "object", "properties": {
                 "action": {"type": "string", "enum": ["start", "handoff", "resume", "finish"]},
                 "page": {"type": "string", "description": "handoff: existing SDK page label in the returned Space"},
-                "confirmed": {"type": "boolean", "description": "resume: true only after the user confirms completion or explicitly authorizes taking control back"},
+                "confirmed": {"type": "boolean", "description": "resume: true only after the user confirms completion or explicitly authorizes taking control back; leave it out after an unexpected stop"},
             }, "required": ["action"]}},
     handler=crema_ego,
 )

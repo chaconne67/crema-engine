@@ -589,9 +589,10 @@ MESSAGE_HEAD = ("[Message from another chat] The chat '{title}' (number {number}
                 "your reply itself.")
 # The app's word when a reply a message started is finished (주인님 2026-10-29): the sending chat goes on with it.
 FINISHED_HEAD = ("[Crema] The chat '{title}' (number {number}) finished the work this chat sent it; the user did not "
-                 "type this. Go on with the user's task in this chat, reading that chat's reply with crema_chats (action "
-                 "read) when this chat needs what it found. If this chat still waits for other chats, end this reply: "
-                 "Crema tells this chat as each one finishes, so there is no need to check on them.")
+                 "type this. {still} Go on with the user's task in this chat, reading that chat's reply with crema_chats "
+                 "(action read) when this chat needs what it found. If this chat needs the work still going on before it "
+                 "can go on, end this reply: Crema tells this chat as each one finishes, so there is no need to check on "
+                 "them.")
 FINISHED_TEXT = "맡긴 일을 마쳤어요."
 
 
@@ -682,8 +683,46 @@ def send(session_id: str, to: str, message: str) -> dict:
 
 def finished(session_id: str, to: str) -> Optional[str]:
     """Tells chat ``to`` that this chat finished a reply its message started (the app knows when; never for a reply
-    such a word started, so two chats do not start each other again and again). Why it could not, if so."""
-    return _leave(session_id, to, FINISHED_TEXT, FINISHED_HEAD, finished=True)[1]
+    such a word started, so two chats do not start each other again and again), and which chats are still doing its
+    work. Why it could not, if so."""
+    me, target, problem = _addressed(session_id, to)
+    if problem:
+        return problem
+    conn = _board()
+    try:
+        still = _still_doing(conn, target["session"], me)
+    finally:
+        conn.close()
+    still = (f"Chats still doing work this chat sent them: {', '.join(still)}." if still
+             else "No other chat is still doing work this chat sent.")
+    head = FINISHED_HEAD.replace("{still}", still.replace("{", "{{").replace("}", "}}"))
+    return _leave(session_id, to, FINISHED_TEXT, head, finished=True)[1]
+
+
+def _still_doing(conn, sender: str, done: str) -> list[str]:
+    """The other chats on work chat ``sender`` sent them that they have not finished: replying, about to start with
+    it, or waiting for a file. Claude Code's way (주인님 2026-10-30): the sending chat knows whether to go on or end its
+    reply without asking."""
+    sender = _chat(sender) or sender
+    told = {}
+    for event in _session_events(conn, sender):
+        if event.kind == "crema_note" and (event.payload or {}).get("finished"):
+            told[event.payload.get("sender")] = event.id
+    names = []
+    for row in _directory():
+        chat = _chat(row["session"]) or row["session"]
+        if chat in (sender, done):
+            continue
+        events = _session_events(conn, row["session"])
+        sent = [e.id for e in events if e.kind == "crema_note" and (e.payload or {}).get("sender") == sender
+                and not (e.payload or {}).get("finished")]
+        if not sent or max(sent) < told.get(chat, 0):
+            continue
+        wait = _last(events, ("crema_waiting", "crema_woken", "crema_released"))
+        if (_replying(row["session"]) or max(sent) > _upto(events, "crema_messages_handed")
+                or (wait and wait.kind == "crema_waiting")):
+            names.append(f"'{_title(row['session'])}' (number {_number(row)})")
+    return names
 
 
 def read(session_id: str, to: str) -> dict:

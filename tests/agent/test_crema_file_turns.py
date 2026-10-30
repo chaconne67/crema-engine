@@ -441,6 +441,23 @@ def test_a_finished_reply_is_told_to_the_chat_that_sent_its_message(api, sidebar
     assert "finished" not in turns.state()["messages"][0]["items"][0]
 
 
+def test_a_finished_word_names_the_chats_still_doing_the_work(api, sidebar):
+    # 2026-10-30: the voucher lead was started by each worker's finished word and had to work out itself whether
+    # another worker was still going.
+    turns.send(A, "b", "1번을 조사해 주세요")
+    turns.send(A, "c", "2번을 조사해 주세요")
+    for message in turns.state()["messages"]:
+        turns.handed(message["session_id"], message["upto"])
+    api.replying(C)
+    assert turns.finished(B, "a") is None
+    [message] = turns.state()["messages"]
+    assert "Chats still doing work this chat sent them: '견적' (number c)." in message["items"][0]["prompt"]
+    turns.handed(A, message["upto"])
+    api.replying(C, on=False)
+    assert turns.finished(C, "a") is None
+    assert "No other chat is still doing work this chat sent." in turns.state()["messages"][0]["items"][0]["prompt"]
+
+
 def test_crema_notes_still_reach_the_chat_and_messages_do_not_mix_with_them(api, sidebar):
     turns.send(A, "b", "안녕")
     conn = turns._board()

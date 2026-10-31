@@ -546,8 +546,13 @@ def _merge_consecutive_roles(result: List[Dict[str, Any]]) -> List[Dict[str, Any
     return fixed
 
 
+def _only_tool_results(content: Any) -> bool:
+    """A user message that only carries tool results: a tool step of the turn, not a new turn."""
+    return isinstance(content, list) and bool(content) and all(_block_type(b) == "tool_result" for b in content)
+
+
 def _keep_valid_latest_thinking(content: List[Any], signature_dead: bool) -> List[Any]:
-    """Latest assistant turn on direct Anthropic: keep signed thinking, demote unsigned to text so
+    """An assistant message of the current turn on direct Anthropic: keep signed thinking, demote unsigned to text so
     the reasoning isn't lost. If orphan-stripping mutated THIS turn every signature is dead (and a
     bare signed block with no tool_use is also invalid), so demote ALL of them."""
     new_content = []
@@ -568,8 +573,14 @@ def _manage_thinking_signatures(result: List[Dict[str, Any]], base_url: str | No
     """Strip or preserve thinking blocks per endpoint. Mutates ``result`` in place.
 
     Anthropic signs thinking blocks against the full turn; any upstream mutation invalidates them
-    (400 "Invalid signature in thinking block"), so on direct Anthropic only the LATEST assistant
-    turn keeps signed blocks. Signatures are proprietary: third-party endpoints strip all thinking.
+    (400 "Invalid signature in thinking block"), so on direct Anthropic only the assistant messages
+    of the current turn (after its last real user message) keep signed blocks: those are still in
+    memory as the model wrote them, while earlier turns may come back from disk reordered, and the
+    API drops earlier turns' thinking anyway. Keeping every one of the current turn, not only the
+    latest, keeps each tool step's request a byte-stable extension of the one before: stripping the
+    step before the latest each call changed the prompt cache's prefix there, and a turn's second
+    call, with no older cache entry, rewrote the whole conversation (38% of second calls in 2 days
+    of Crema logs, 2026-10-31). Signatures are proprietary: third-party endpoints strip all thinking.
     Kimi replays as-is; DeepSeek needs unsigned blocks round-tripped but rejects signed ones. Nous
     Portal proxies Claude with sticky sessions and validates the same signatures, so it takes the
     native path despite not being anthropic.com.
@@ -580,6 +591,8 @@ def _manage_thinking_signatures(result: List[Dict[str, Any]], base_url: str | No
         is_third_party and _model_name_is_deepseek_thinking(model)
     )
     last_assistant_idx = next((i for i in range(len(result) - 1, -1, -1) if result[i].get("role") == "assistant"), None)
+    turn_start = next((i for i in range(len(result) - 1, -1, -1) if result[i].get("role") == "user"
+                       and not _only_tool_results(result[i].get("content"))), -1)
     for idx, m in _assistant_block_lists(result):
         if is_kimi:
             pass  # shared cleanup below still strips cache markers + the flag
@@ -590,7 +603,7 @@ def _manage_thinking_signatures(result: List[Dict[str, Any]], base_url: str | No
                 if _block_type(b) not in _THINKING_TYPES or not (b.get("signature") or b.get("data"))
             ]
             m["content"] = new_content or [_text_block("(empty)")]
-        elif is_third_party or idx != last_assistant_idx:
+        elif is_third_party or (idx < turn_start and idx != last_assistant_idx):
             m["content"] = _strip_thinking(m["content"]) or [_text_block("(thinking elided)")]
         else:
             new_content = _keep_valid_latest_thinking(m["content"], bool(m.get("_thinking_signature_invalidated")))

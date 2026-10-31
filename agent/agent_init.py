@@ -1350,6 +1350,9 @@ def _apply_agent_section(agent, _agent_cfg):
     # of each other (gates in agent/system_prompt.py).
     agent._tool_use_enforcement = _agent_section.get("tool_use_enforcement", "auto")
     agent._execution_guidance = _agent_section.get("execution_guidance", "auto")
+    # "assistant" (FC-CRM ADR 0026): a lean prompt — SOUL.md, guidance for the loaded tools, memory and the
+    # date — for a narrow assistant served from the same engine. Anything else keeps the full Crema prompt.
+    agent._prompt_mode = str(_agent_section.get("prompt_mode") or "crema").strip().lower()
 
     # Wall-clock run budget from config — only when the constructor arg was not given.
     if agent.run_budget_seconds is None:

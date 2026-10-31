@@ -728,6 +728,19 @@ def _join_tier(parts: List[Optional[str]]) -> str:
     return "\n\n".join(p.strip() for p in parts if p and p.strip())
 
 
+def _assistant_prompt_parts(agent: Any, system_message: Optional[str], ctx_len: Optional[int]) -> Dict[str, str]:
+    """``agent.prompt_mode: assistant`` (FC-CRM ADR 0026): only what a narrow assistant uses — SOUL.md (who it
+    is and its work rules), guidance for the tools actually loaded, memory (this user) and the date. None of
+    Crema's working method, coding posture, skills index, context files, profile line or runtime environment:
+    they cost tokens and turns on every call and steer a customer-facing assistant toward developer habits.
+    Same three tiers, so everything shared across profiles stays in the cacheable prefix."""
+    stable, _ = _identity_parts(agent, ctx_len)
+    stable.append(_tool_guidance_block(agent))
+    context = [system_message] if system_message is not None else []
+    volatile = [*_memory_parts(agent), _timestamp_line(agent)]
+    return {"stable": _join_tier(stable), "context": _join_tier(context), "volatile": _join_tier(volatile)}
+
+
 def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, str]:
     """Assemble the system prompt as three ordered cache tiers: ``stable`` (identity,
     guidance and the coding brief), ``context`` (caller ``system_message``, project
@@ -739,6 +752,8 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # Model context window scales the context-file caps; stable per conversation.
     _cc_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
     _ctx_len = _cc_len if isinstance(_cc_len, int) and _cc_len > 0 else None
+    if getattr(agent, "_prompt_mode", "crema") == "assistant":
+        return _assistant_prompt_parts(agent, system_message, _ctx_len)
     # ── Stable tier ────────────────────────────────────────────────
     stable_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
     # Crema: no "You run on Hermes Agent" help pointer — the identity comes from SOUL.md alone.

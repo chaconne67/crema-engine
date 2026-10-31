@@ -28,7 +28,7 @@ def test_translation_uses_the_learning_review_model_and_keeps_english_when_it_fa
             patch("agent.auxiliary_client.call_llm", side_effect=call_llm):
         assert crema_thinking.translate("I'll check the log first.") == "로그를 먼저 봅니다."
     assert (calls[0]["provider"], calls[0]["model"]) == ("anthropic", "claude-haiku-5-5")
-    assert calls[0]["messages"][1]["content"] == "I'll check the log first."
+    assert calls[0]["messages"][1]["content"] == "<summary>\nI'll check the log first.\n</summary>"
 
     with patch("agent.background_review.load_background_review_settings", return_value=(True, {})), \
             patch("agent.auxiliary_client.call_llm", side_effect=RuntimeError("down")):

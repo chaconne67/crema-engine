@@ -922,7 +922,8 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
     _redact_api_error_text = _api_server._redact_api_error_text
     run_id, loop = run.run_id, asyncio.get_running_loop()
 
-    # The step's thinking so far, its number in this run, and the translations still being written.
+    # The paragraph of thinking being written, the number of the last one sent in this run, and the
+    # translations still being written.
     thought: Dict[str, Any] = {"step": 0, "text": "", "translating": []}
 
     def _put_thought(step: int, text: str) -> None:
@@ -930,15 +931,15 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
             with suppress(Exception):
                 loop.call_soon_threadsafe(run.put_event, _run_event(run_id, "reasoning.step", step=step, text=text))
 
-    def _end_thought() -> None:
-        # A step's thinking goes out whole when its model call writes, says something or uses a tool, so English
-        # is never shown (주인님 2026-11-01). One mostly in English goes out empty to hold its place, and again in
-        # Korean once translated beside the turn, so the work does not wait for it.
+    def _put_paragraph(text: str) -> None:
+        # Thinking goes out a whole paragraph at a time, so English is never shown (주인님 2026-11-01). One mostly in
+        # English goes out empty to hold its place, and again in Korean once translated beside the turn, so the
+        # work does not wait for it.
         from agent import crema_thinking
-        text, step = thought["text"], thought["step"]
-        thought["text"] = ""
-        if not text:
+        if not text.strip():
             return
+        thought["step"] += 1
+        step = thought["step"]
         english = crema_thinking.needs_translation(text)
         _put_thought(step, "" if english else text)
         if not english:
@@ -950,6 +951,11 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
         worker = threading.Thread(target=_translate, name=f"crema-thinking-{run_id}", daemon=True)
         worker.start()
         thought["translating"].append(worker)
+
+    def _end_thought() -> None:
+        # A step's thinking ends when its model call writes, says something or uses a tool: its last paragraph.
+        text, thought["text"] = thought["text"], ""
+        _put_paragraph(text)
 
     def _run_and_settle():
         # The run's last translations land before its terminal event closes the stream (60s at most).
@@ -980,12 +986,12 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
                 run_id, "message.interim", text=text, already_streamed=bool(already_streamed)))
 
     def _reasoning_cb(text: Optional[str]) -> None:
-        # The model's thinking (Anthropic's summarized thinking), gathered until its step ends.
+        # The model's thinking (Anthropic's summarized thinking): each paragraph goes out once it is finished.
         if not text or run_id not in self._run_streams:
             return
-        if not thought["text"]:
-            thought["step"] += 1
-        thought["text"] += text
+        *finished, thought["text"] = (thought["text"] + text).split("\n\n")
+        for paragraph in finished:
+            _put_paragraph(paragraph)
 
     run_event_cb = self._make_run_event_callback(run_id, loop)
 

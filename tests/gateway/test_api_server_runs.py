@@ -481,6 +481,41 @@ class TestStartRun:
         assert max(i for i, n in enumerate(names) if n == "reasoning.step") < names.index("run.completed")
 
     @pytest.mark.asyncio
+    async def test_thinking_goes_out_a_paragraph_at_a_time(self, adapter):
+        """A finished paragraph of thinking goes out at once, before the step ends; the last one when it does."""
+        import json
+        from agent.conversation_compression import COMPACTION_STATUS
+
+        app = _create_runs_app(adapter)
+
+        def create_agent(**kwargs):
+            reasoning, status = kwargs["reasoning_callback"], kwargs["status_callback"]
+            agent = MagicMock()
+
+            def run_conversation(**_kw):
+                reasoning("첫 단락을 ")
+                reasoning("씁니다.\n\n둘째 ")
+                status("lifecycle", COMPACTION_STATUS)
+                reasoning("단락입니다.")
+                return {"final_response": "Done."}
+
+            agent.run_conversation.side_effect = run_conversation
+            agent.session_prompt_tokens = agent.session_completion_tokens = agent.session_total_tokens = 0
+            return agent
+
+        async with TestClient(TestServer(app)) as cli:
+            with patch.object(adapter, "_create_agent", side_effect=create_agent):
+                resp = await cli.post("/v1/runs", json={"input": "hello"})
+                run_id = (await resp.json())["run_id"]
+                body = await (await cli.get(f"/v1/runs/{run_id}/events")).text()
+
+        events = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
+        shown = [(e["event"], e.get("step"), e.get("text") or e.get("kind")) for e in events
+                 if e["event"] in ("reasoning.step", "status.update")]
+        assert shown == [("reasoning.step", 1, "첫 단락을 씁니다."), ("status.update", None, "compacting"),
+                         ("reasoning.step", 2, "둘째 단락입니다.")]
+
+    @pytest.mark.asyncio
     async def test_start_passes_request_model_provider_options_to_create_agent(self, adapter):
         app = _create_runs_app(adapter)
         model_options = {"reasoning_effort": "medium", "service_tier": "priority"}

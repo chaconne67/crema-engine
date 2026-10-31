@@ -23,8 +23,9 @@ def test_the_tool_lists_and_sends_through_the_registry(monkeypatch):
     turns.set_models([{"model": "gpt-6-luna", "provider": "openai-codex"}, {"model": "claude-opus-5-5", "provider": "anthropic"},
                       {"model": "gpt-6-luna", "provider": "openrouter"}, {"model": "no-provider"}])
     listed = json.loads(registry.dispatch("crema_chats", {"action": "list"}, session_id=A))
-    assert listed == {"chats": [{"number": "b", "title": "메일", "project": "", "state": "idle"}],
-                      "models": ["claude-opus-5-5", "gpt-6-luna"]}
+    assert listed == {"chats": [{"number": "b", "title": "메일", "project": "", "state": "idle"}]}
+    models = json.loads(registry.dispatch("crema_chats", {"action": "models"}, session_id=A))
+    assert models == {"models": ["claude-opus-5-5", "gpt-6-luna"]}
     sent = json.loads(registry.dispatch("crema_chats", {"action": "send", "to": "b", "message": "안녕"}, session_id=A))
     assert sent["sent_to"] == "메일" and sent["delivery"].startswith("Crema hands it over")
     assert "error" in json.loads(registry.dispatch("crema_chats", {"action": "read", "to": "z"}, session_id=A))

@@ -3,11 +3,14 @@
 # Crema: the agent's identity and persona come from SOUL.md alone. This is the text seeded into a new
 # HERMES_HOME and used when SOUL.md is missing or empty (agent/prompt_builder.py's DEFAULT_AGENT_IDENTITY
 # is this same string); the person rewrites it in Crema's onboarding or its Persona setting.
+# "과정 중계" once forbade the report's replay of the work, as Hermes' original meant; models read it as "say
+# nothing while working" and wrote text on 6% of tool steps against Claude Code's 14% (주인님 2026-11-01).
 DEFAULT_SOUL_MD = (
     "당신은 Crema의 AI 에이전트입니다. 사용자가 쓰는 언어로 답합니다. 답의 길이는 요청의 무게에 맞춥니다. "
     "쉬운 말로, 결론을 먼저 쓰고, 세 가지 이상은 항목으로 나눠 씁니다. "
-    "짧은 질문에는 짧게 답하고, 끝낸 작업은 바뀐 것·확인한 것·남은 것만 짧게 보고합니다. 군더더기 인사, "
-    "요청 되풀이, 과정 중계는 하지 않습니다. 모르면 모른다고 말하고, 사용자 말이 틀렸으면 맞장구치지 않습니다."
+    "짧은 질문에는 짧게 답하고, 끝낸 작업은 바뀐 것·확인한 것·남은 것만 짧게 보고합니다. 군더더기 인사와 "
+    "요청 되풀이는 하지 않고, 끝낸 작업을 보고할 때 지나온 과정을 되풀이하지 않습니다. 모르면 모른다고 말하고, "
+    "사용자 말이 틀렸으면 맞장구치지 않습니다."
 )
 
 # Hermes' seeded default before Crema (auto-seeded, never user-written): upgraded in place below.
@@ -57,6 +60,13 @@ _LEGACY_TEMPLATE_SOULS = (
     # (scripts/install.ps1 wrote that one).
     _HERMES_SOUL_MD,
     _HERMES_SOUL_MD.replace("\u2014", "--"),
+    # Crema's second default (2026-09-29 .. 2026-11-01), whose "과정 중계" ban silenced the work in progress.
+    (
+    "당신은 Crema의 AI 에이전트입니다. 사용자가 쓰는 언어로 답합니다. 답의 길이는 요청의 무게에 맞춥니다. "
+    "쉬운 말로, 결론을 먼저 쓰고, 세 가지 이상은 항목으로 나눠 씁니다. "
+    "짧은 질문에는 짧게 답하고, 끝낸 작업은 바뀐 것·확인한 것·남은 것만 짧게 보고합니다. 군더더기 인사, "
+    "요청 되풀이, 과정 중계는 하지 않습니다. 모르면 모른다고 말하고, 사용자 말이 틀렸으면 맞장구치지 않습니다."
+    ),
     # Crema's first default (2026-09-26 .. 2026-09-29), before the answer-style sentence.
     (
         "당신은 Crema의 AI 에이전트입니다. 사용자가 쓰는 언어로 답합니다. 답의 길이는 요청의 무게에 맞춥니다. "

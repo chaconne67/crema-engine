@@ -1188,8 +1188,8 @@ class TestThinkingBlockSignatureManagement:
                 assert "cache_control" not in block
 
 
-    def test_multi_turn_conversation_preserves_only_last(self):
-        """Full multi-turn conversation: only last assistant keeps thinking."""
+    def test_multi_turn_conversation_keeps_every_turns_thinking(self):
+        """Full multi-turn conversation: every assistant keeps its signed thinking, as Claude Code sends it."""
         messages = [
             {"role": "user", "content": "Question 1"},
             {
@@ -1221,21 +1221,11 @@ class TestThinkingBlockSignatureManagement:
         assistants = [m for m in result if m["role"] == "assistant"]
         assert len(assistants) == 3
 
-        # First two: no thinking blocks
-        for a in assistants[:2]:
-            assert not any(
-                b.get("type") in {"thinking", "redacted_thinking"}
-                for b in a["content"]
-                if isinstance(b, dict)
-            )
-
-        # Last one: thinking preserved
-        last_thinking = [
-            b for b in assistants[2]["content"]
-            if isinstance(b, dict) and b.get("type") == "thinking"
+        signatures = [
+            [b["signature"] for b in a["content"] if isinstance(b, dict) and b.get("type") == "thinking"]
+            for a in assistants
         ]
-        assert len(last_thinking) == 1
-        assert last_thinking[0]["signature"] == "sig_3"
+        assert signatures == [["sig_1"], ["sig_2"], ["sig_3"]]
 
 
 # ---------------------------------------------------------------------------

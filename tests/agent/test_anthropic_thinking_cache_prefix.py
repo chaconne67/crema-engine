@@ -1,7 +1,8 @@
-"""Crema (주인님 2026-10-31): each tool step's Anthropic request extends the one before byte for byte.
+"""Crema (주인님 2026-10-31, 2026-11-01): each Anthropic request extends the one before byte for byte.
 
-Stripping thinking from every assistant message but the latest changed the message before the latest on
-every call, so the prompt cache missed from there; a turn's second call rewrote the whole conversation.
+Stripping thinking from earlier messages changed the conversation there, so the prompt cache missed from
+that point and the call rewrote the whole conversation: first within a turn's tool steps, then on the first
+two calls after each new user message.
 """
 
 import json
@@ -31,6 +32,14 @@ def test_a_tool_step_extends_the_previous_request_unchanged():
     first = _wire(earlier + turn + _step(1))
     second = _wire(earlier + turn + _step(1) + _step(2))
     assert second[:len(first)] == first
-    # The current turn's steps keep their signed thinking; the earlier turn's is dropped as before.
-    assert any('"sig-1"' in m for m in second)
-    assert not any('"sig-0"' in m for m in second)
+
+
+def test_a_new_user_message_extends_the_previous_request_unchanged():
+    turn = [{"role": "user", "content": "이전 일"}, *_step(0), *_step(1), {"role": "assistant", "content": "끝났습니다"}]
+    before = _wire(turn)
+    first = _wire(turn + [{"role": "user", "content": "다음 일"}])
+    second = _wire(turn + [{"role": "user", "content": "다음 일"}] + _step(2))
+    assert first[:len(before)] == before
+    assert second[:len(first) - 1] == first[:-1]
+    # The earlier turn keeps its signed thinking, as the model wrote it.
+    assert any('"sig-0"' in m for m in second) and any('"sig-1"' in m for m in second)

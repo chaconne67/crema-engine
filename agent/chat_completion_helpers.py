@@ -10,6 +10,7 @@ forwarders. Symbols tests patch on ``run_agent`` (``cleanup_vm`` /
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import contextvars
 import json
 import logging
@@ -1488,6 +1489,21 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
     )
 
 
+def _assistant_cache_key_override(agent, request_overrides: Optional[dict], tools_for_api) -> Optional[dict]:
+    """``agent.prompt_mode: assistant`` (FC-CRM ADR 0026): one ``prompt_cache_key`` from the stable prompt tier
+    and the tools, so every profile and conversation built on the same assistant scaffold lands in one cache
+    bucket. The default key is scoped per conversation to keep unrelated sessions apart (#78941); assistant
+    profiles are the same scaffold on purpose, and only their volatile tail (memory, date) differs.
+    An explicit override wins."""
+    if getattr(agent, "_prompt_mode", "crema") != "assistant" or "prompt_cache_key" in (request_overrides or {}):
+        return request_overrides
+    stable = getattr(agent, "_cached_system_prompt_static", None) or ""
+    tools_part = json.dumps(sorted((t for t in tools_for_api or [] if isinstance(t, dict)),
+                                   key=lambda t: json.dumps(t, sort_keys=True)), sort_keys=True, ensure_ascii=False)
+    digest = hashlib.sha256(f"assistant\x00{stable}\x00{tools_part}".encode("utf-8", errors="replace")).hexdigest()
+    return {**(request_overrides or {}), "prompt_cache_key": "pck_" + digest[:24]}
+
+
 def _build_api_kwargs_for_mode(agent, api_messages: list, tools_for_api: list | None = None) -> dict:
     # One-shot continuation override — consumed exactly once, on the FIRST
     # request this call builds (only one api_mode branch runs per invocation).
@@ -1504,6 +1520,7 @@ def _build_api_kwargs_for_mode(agent, api_messages: list, tools_for_api: list | 
     # Rotation-stable logical cache scope shared by every OpenAI-wire branch
     # (memoized on the agent); anthropic/bedrock above don't use it.
     cache_scope_id = _prompt_cache_scope_for_agent(agent)
+    request_overrides = _assistant_cache_key_override(agent, request_overrides, tools_for_api)
     builder = _build_codex_kwargs if agent.api_mode == "codex_responses" else _build_chat_completions_kwargs
     return builder(agent, api_messages, tools_for_api, reasoning_config, request_overrides, cache_scope_id)
 

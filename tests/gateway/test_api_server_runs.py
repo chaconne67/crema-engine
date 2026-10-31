@@ -396,7 +396,7 @@ class TestStartRun:
 
     @pytest.mark.asyncio
     async def test_events_stream_forwards_thinking_and_compaction(self, adapter):
-        """The model's thinking reaches /v1/runs clients as it streams (``reasoning.delta``), and automatic
+        """The model's thinking reaches /v1/runs clients whole once its step ends (``reasoning.step``), and automatic
         compaction's start and end as ``status.update`` {kind}; other statuses stay in the engine."""
         import json
         from agent.conversation_compression import COMPACTION_DONE_STATUS, COMPACTION_STATUS
@@ -426,15 +426,14 @@ class TestStartRun:
                 body = await (await cli.get(f"/v1/runs/{run_id}/events")).text()
 
         events = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
-        assert [(e["delta"], e["step"]) for e in events if e["event"] == "reasoning.delta"] == [
-            ("로그를 먼저 ", 1), ("봅니다.", 1)]
+        assert [(e["step"], e["text"]) for e in events if e["event"] == "reasoning.step"] == [(1, "로그를 먼저 봅니다.")]
         assert [e["kind"] for e in events if e["event"] == "status.update"] == ["compacting", "compacted"]
         assert next(e for e in events if e["event"] == "run.completed")["output"] == "Done."
 
     @pytest.mark.asyncio
     async def test_a_step_thinking_mostly_in_english_is_translated_once_it_ends(self, adapter):
-        """Each step's thinking carries its number; once a step ends (a tool starts, text comes), one mostly in
-        English comes again in Korean as ``reasoning.translated`` {step, text}, before the run's end."""
+        """Once a step ends (a tool starts, text comes) its thinking goes out with its number; one mostly in English
+        first goes out empty in its place and then in Korean, before the run's end, and its English never does."""
         import json
 
         app = _create_runs_app(adapter)
@@ -471,12 +470,15 @@ class TestStartRun:
                 body = await (await cli.get(f"/v1/runs/{run_id}/events")).text()
 
         events = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
-        assert [e["step"] for e in events if e["event"] == "reasoning.delta"] == [1, 2, 3]
         assert translated == ["I'll check the log first.", "The process is alive."]
+        thoughts = [(e["step"], e["text"]) for e in events if e["event"] == "reasoning.step"]
+        assert sorted(thoughts) == [(1, ""), (1, "번역: I'll check the log first."), (2, "로그가 멈춘 이유를 찾습니다."),
+                                    (3, ""), (3, "번역: The process is alive.")]
         names = [e["event"] for e in events]
-        assert sorted((e["step"], e["text"]) for e in events if e["event"] == "reasoning.translated") == [
-            (1, "번역: I'll check the log first."), (3, "번역: The process is alive.")]
-        assert max(i for i, n in enumerate(names) if n == "reasoning.translated") < names.index("run.completed")
+        # Step 1 holds its place before the tool that followed it.
+        assert thoughts[0] == (1, "")
+        assert names.index("reasoning.step") < names.index("tool.started")
+        assert max(i for i, n in enumerate(names) if n == "reasoning.step") < names.index("run.completed")
 
     @pytest.mark.asyncio
     async def test_start_passes_request_model_provider_options_to_create_agent(self, adapter):

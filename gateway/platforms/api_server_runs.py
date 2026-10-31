@@ -925,21 +925,27 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
     # The step's thinking so far, its number in this run, and the translations still being written.
     thought: Dict[str, Any] = {"step": 0, "text": "", "translating": []}
 
+    def _put_thought(step: int, text: str) -> None:
+        if run_id in self._run_streams:
+            with suppress(Exception):
+                loop.call_soon_threadsafe(run.put_event, _run_event(run_id, "reasoning.step", step=step, text=text))
+
     def _end_thought() -> None:
-        # A step's thinking ends when its model call writes, says something or uses a tool. One mostly in
-        # English is put into Korean beside the turn, so the work does not wait for it (주인님 2026-11-01).
+        # A step's thinking goes out whole when its model call writes, says something or uses a tool, so English
+        # is never shown (주인님 2026-11-01). One mostly in English goes out empty to hold its place, and again in
+        # Korean once translated beside the turn, so the work does not wait for it.
         from agent import crema_thinking
         text, step = thought["text"], thought["step"]
         thought["text"] = ""
-        if not text or not crema_thinking.needs_translation(text):
+        if not text:
+            return
+        english = crema_thinking.needs_translation(text)
+        _put_thought(step, "" if english else text)
+        if not english:
             return
 
         def _translate() -> None:
-            korean = crema_thinking.translate(text)
-            if korean and run_id in self._run_streams:
-                with suppress(Exception):
-                    loop.call_soon_threadsafe(run.put_event, _run_event(
-                        run_id, "reasoning.translated", step=step, text=korean))
+            _put_thought(step, crema_thinking.translate(text) or text)
 
         worker = threading.Thread(target=_translate, name=f"crema-thinking-{run_id}", daemon=True)
         worker.start()
@@ -974,15 +980,12 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
                 run_id, "message.interim", text=text, already_streamed=bool(already_streamed)))
 
     def _reasoning_cb(text: Optional[str]) -> None:
-        # The model's thinking as it streams (Anthropic's summarized thinking): Crema shows it in the work log.
+        # The model's thinking (Anthropic's summarized thinking), gathered until its step ends.
         if not text or run_id not in self._run_streams:
             return
         if not thought["text"]:
             thought["step"] += 1
         thought["text"] += text
-        with suppress(Exception):
-            loop.call_soon_threadsafe(run.put_event, _run_event(
-                run_id, "reasoning.delta", delta=text, step=thought["step"]))
 
     run_event_cb = self._make_run_event_callback(run_id, loop)
 

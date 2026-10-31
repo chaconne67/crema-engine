@@ -219,6 +219,7 @@ async def main() -> None:
     @settings.post("/api/crema/chats")
     async def chats_known(body: dict):
         await asyncio.to_thread(crema_file_turns.set_chats, list(body.get("chats") or []))
+        await asyncio.to_thread(crema_file_turns.set_models, list(body.get("models") or []))
         return {"ok": True}
 
     # The files a chat wrote during a reply (agent/crema_file_turns.py files_since): the line under it in the app.

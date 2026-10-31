@@ -463,6 +463,21 @@ def test_a_chat_starts_a_new_chat_under_it_with_its_first_message(api, sidebar, 
     assert "Only a chat in the sidebar" in turns.start("agent-client-gone", "조사", "일")["error"]
 
 
+def test_a_started_chat_gets_the_model_and_reasoning_its_starter_gives(api, sidebar, new_ids):
+    # 주인님 2026-10-31: the chat that starts another chooses its model; left out, the app gives it the starter's.
+    turns.set_models([{"model": "claude-opus-5-5", "provider": "anthropic"}, {"model": "gpt-6-luna", "provider": "openai-codex"}])
+    started = turns.start(A, "조사", "자료를 찾아 주세요", " gpt-6-luna ", "LOW")
+    assert (started["model"], started["reasoning"]) == ("gpt-6-luna", "low")
+    [message] = turns.state()["messages"]
+    assert message["items"][0]["start"] | {"id": ""} == {"id": "", "role": "조사", "parent": "a",
+                                                         "model": "gpt-6-luna", "reasoning": "low",
+                                                         "provider": "openai-codex"}
+    assert "No model 'gpt-7'" in turns.start(A, "조사", "일", "gpt-7")["error"]
+    assert "reasoning is low" in turns.start(A, "조사", "일", "", "max")["error"]
+    plain = turns.start(A, "정리", "정리해 주세요")
+    assert "model" not in plain and "reasoning" not in plain
+
+
 def test_chats_work_along_the_chain_of_command(api, sidebar, new_ids):
     # 주인님 2026-10-31: a chat another chat started reports to that chat alone, and once the work it sent on is
     # finished too; the top chat hears the result through the chat between, never from below it.

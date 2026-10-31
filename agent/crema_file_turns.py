@@ -577,6 +577,9 @@ def _take_notes(session_id: str, fits: Optional[int] = None) -> Optional[str]:
 # not the user's word. A message waits in the mailbox above until the app has handed it over.
 
 CHATS_FILE = "crema-chats.json"
+# The models the app's model menu offers now (주인님 2026-10-31): a chat ``start`` makes may be given one of them.
+MODELS_FILE = "crema-models.json"
+REASONING = ("low", "medium", "high", "xhigh")
 # The receiving chat folds a long message under 더 보기; longer details go in a file and the message names it.
 MESSAGE_MAX = 4000
 # Crema's own note with its head stays inside the part of an oversized tool result the context keeps (1,500
@@ -612,23 +615,41 @@ def set_chats(chats: list) -> None:
             for c in chats if c.get("id") and c.get("session")]
     # A chat just started here (``start``) that the app has not made yet stays: its starter waits for it.
     known = {row["id"] for row in rows}
-    _write_directory(rows + [row for row in _directory() if row.get("pending") and row["id"] not in known])
+    _write_json(CHATS_FILE, rows + [row for row in _directory() if row.get("pending") and row["id"] not in known])
 
 
-def _write_directory(rows: list) -> None:
+def set_models(rows: list) -> None:
+    """The models the app's model menu offers now, each with the Provider it answers through."""
+    known = {}
+    for row in rows:
+        if row.get("model") and row.get("provider"):
+            known.setdefault(str(row["model"]), str(row["provider"]))
+    _write_json(MODELS_FILE, [{"model": model, "provider": known[model]} for model in sorted(known)])
+
+
+def models() -> list[str]:
+    """The models a chat ``start`` makes may be given."""
+    return [row["model"] for row in _read_json(MODELS_FILE)]
+
+
+def _write_json(name: str, rows: list) -> None:
     from hermes_constants import get_hermes_home
 
-    path = Path(get_hermes_home()) / CHATS_FILE
+    path = Path(get_hermes_home()) / name
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
     os.replace(temporary, path)
 
 
 def _directory() -> list[dict]:
+    return _read_json(CHATS_FILE)
+
+
+def _read_json(name: str) -> list:
     from hermes_constants import get_hermes_home
 
     try:
-        rows = json.loads((Path(get_hermes_home()) / CHATS_FILE).read_text(encoding="utf-8"))
+        rows = json.loads((Path(get_hermes_home()) / name).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
     return rows if isinstance(rows, list) else []
@@ -721,9 +742,10 @@ def send(session_id: str, to: str, message: str) -> dict:
                         "else that chat starts with it"}
 
 
-def start(session_id: str, role: str, message: str) -> dict:
+def start(session_id: str, role: str, message: str, model: str = "", reasoning: str = "") -> dict:
     """A new chat under this one in the sidebar, named ``role``, which starts with ``message``: the app makes it when
-    it hands the message over (the message carries what to make)."""
+    it hands the message over (the message carries what to make). It answers with ``model`` and ``reasoning``, or
+    this chat's where they are not given (주인님 2026-10-31)."""
     import uuid
 
     role, message = " ".join(str(role or "").split()), str(message or "").strip()
@@ -734,6 +756,13 @@ def start(session_id: str, role: str, message: str) -> dict:
     if len(message) > MESSAGE_MAX:
         return {"error": f"The message is longer than {MESSAGE_MAX} characters. Put the details in a file and "
                          "start the chat with a short message naming it."}
+    model, reasoning = str(model or "").strip(), str(reasoning or "").strip().lower()
+    provider = next((row["provider"] for row in _read_json(MODELS_FILE) if row["model"] == model), "")
+    if model and not provider:
+        return {"error": f"No model '{model}' in the user's model menu ({', '.join(models()) or 'none'}). Leave "
+                         "model out for this chat's."}
+    if reasoning and reasoning not in REASONING:
+        return {"error": "reasoning is low, medium, high or xhigh. Leave it out for this chat's."}
     me = _chat(session_id)
     rows = _directory()
     mine = next((row for row in rows if row["session"] == me), None) if me else None
@@ -741,12 +770,14 @@ def start(session_id: str, role: str, message: str) -> dict:
         return {"error": "Only a chat in the sidebar (not archived) can start another chat."}
     chat = str(uuid.uuid4())
     # Known at once, so the message can be left for it before the app makes it.
-    _write_directory([*rows, {"id": chat, "session": CHAT_PREFIX + chat, "title": "", "project": mine["project"],
-                              "role": role, "parent": mine["id"], "pending": True}])
-    _, problem = _leave(session_id, chat, message, MESSAGE_HEAD, start={"id": chat, "role": role, "parent": mine["id"]})
+    _write_json(CHATS_FILE, [*rows, {"id": chat, "session": CHAT_PREFIX + chat, "title": "", "project": mine["project"],
+                                     "role": role, "parent": mine["id"], "pending": True}])
+    chosen = {key: value for key, value in (("model", model), ("reasoning", reasoning)) if value}
+    _, problem = _leave(session_id, chat, message, MESSAGE_HEAD, start={"id": chat, "role": role, "parent": mine["id"],
+                                                                       **chosen, **({"provider": provider} if model else {})})
     if problem:
         return {"error": problem}
-    return {"started": role, "number": chat[:8],
+    return {"started": role, "number": chat[:8], **chosen,
             "delivery": "The app makes the chat under this one and it starts with the message; Crema tells this "
                         "chat when it finishes."}
 

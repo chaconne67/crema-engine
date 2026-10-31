@@ -14,11 +14,13 @@ def crema_chats(args: Dict[str, Any], session_id: str = "", **_: Any) -> str:
 
     action = args.get("action")
     if action == "list":
-        return json.dumps({"chats": crema_file_turns.chats(session_id)}, ensure_ascii=False)
+        return json.dumps({"chats": crema_file_turns.chats(session_id), "models": crema_file_turns.models()},
+                          ensure_ascii=False)
     if action == "send":
         result = crema_file_turns.send(session_id, args.get("to", ""), args.get("message", ""))
     elif action == "start":
-        result = crema_file_turns.start(session_id, args.get("role", ""), args.get("message", ""))
+        result = crema_file_turns.start(session_id, args.get("role", ""), args.get("message", ""),
+                                        args.get("model", ""), args.get("reasoning", ""))
     elif action == "read":
         result = crema_file_turns.read(session_id, args.get("to", ""))
     else:
@@ -30,13 +32,16 @@ registry.register(
     name="crema_chats", toolset="crema_chats", emoji="💬",
     schema={"name": "crema_chats",
             "description": "The user's other Crema chats. list: the chats this chat works with (number, name, "
-                           "project, replying or idle, and the chat that started it). send: a message to the chat with that number; "
+                           "project, replying or idle, and the chat that started it) and the models the user connected. send: a message to the chat with that number; "
                            "that chat starts working on it at once (into its reply after its current step if it is "
                            "replying), and the user sees it there as a message from this chat; when that chat "
                            "finishes, and the work it sent on to other chats too, Crema tells this chat, which goes on then. start: a new chat under this one "
                            "in the sidebar, named by its role, that starts working on the message at once; the user "
                            "can open it, follow it and talk to it, and Crema tells this chat when it finishes, so do not wait for it "
-                           "or read it before then; do your own part and end your reply. "
+                           "or read it before then; do your own part and end your reply. The new chat answers with this "
+                           "chat's model and reasoning unless start gives it others: the model the user names, "
+                           "else one that fits its piece of work (a stronger one for hard judgment, a lighter, "
+                           "cheaper one for many simple pieces), since its usage is the user's. "
                            "read: the latest reply of the chat with that number. Send only when the user asked this "
                            "chat to tell, ask or hand something to another chat. Start a chat when the user asks for "
                            "one, or when their task splits into separate pieces of work that can run at the same "
@@ -51,6 +56,8 @@ registry.register(
                 "to": {"type": "string", "description": "send, read: the chat's number from list"},
                 "role": {"type": "string", "description": "start: the new chat's role, the part of the work it does, in the user's language, up to 20 characters (e.g. '자료 조사', 'c 담당')"},
                 "message": {"type": "string", "description": "send, start: what to say or the work to do, complete on its own (the other chat has not seen this chat)"},
+                "model": {"type": "string", "description": "start: the new chat's model, one of the models list gives; leave out for this chat's model"},
+                "reasoning": {"type": "string", "enum": ["low", "medium", "high", "xhigh"], "description": "start: how hard the new chat's model thinks; leave out for this chat's"},
             }, "required": ["action"]}},
     handler=crema_chats,
 )

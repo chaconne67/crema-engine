@@ -342,6 +342,7 @@ CREMA_METHOD_GUIDANCE = (
     "what you are about to do and why. They watch the chat while you work; without these lines a long task "
     "looks stalled, and they cannot steer it early. Skip it for routine next steps of the same stage (another "
     "read in the same search), and do not replay these steps in the final report.\n"
+    "- Think in the user's language too: a summary of your thinking is shown to them as you work.\n"
     "\n"
     "Large work: ask before you start\n"
     "- When working out a request shows it is large (several separate pieces of work, or one long one: many "

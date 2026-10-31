@@ -395,6 +395,42 @@ class TestStartRun:
         assert completed["output"] == "Done."
 
     @pytest.mark.asyncio
+    async def test_events_stream_forwards_thinking_and_compaction(self, adapter):
+        """The model's thinking reaches /v1/runs clients as it streams (``reasoning.delta``), and automatic
+        compaction's start and end as ``status.update`` {kind}; other statuses stay in the engine."""
+        import json
+        from agent.conversation_compression import COMPACTION_DONE_STATUS, COMPACTION_STATUS
+
+        app = _create_runs_app(adapter)
+
+        def create_agent(**kwargs):
+            reasoning, status = kwargs["reasoning_callback"], kwargs["status_callback"]
+            agent = MagicMock()
+
+            def run_conversation(**_kw):
+                status("lifecycle", COMPACTION_STATUS)
+                status("compacted", COMPACTION_DONE_STATUS)
+                status("warn", "Something degraded.")
+                reasoning("Checking the log ")
+                reasoning("first.")
+                return {"final_response": "Done."}
+
+            agent.run_conversation.side_effect = run_conversation
+            agent.session_prompt_tokens = agent.session_completion_tokens = agent.session_total_tokens = 0
+            return agent
+
+        async with TestClient(TestServer(app)) as cli:
+            with patch.object(adapter, "_create_agent", side_effect=create_agent):
+                resp = await cli.post("/v1/runs", json={"input": "hello"})
+                run_id = (await resp.json())["run_id"]
+                body = await (await cli.get(f"/v1/runs/{run_id}/events")).text()
+
+        events = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
+        assert [e["delta"] for e in events if e["event"] == "reasoning.delta"] == ["Checking the log ", "first."]
+        assert [e["kind"] for e in events if e["event"] == "status.update"] == ["compacting", "compacted"]
+        assert next(e for e in events if e["event"] == "run.completed")["output"] == "Done."
+
+    @pytest.mark.asyncio
     async def test_start_passes_request_model_provider_options_to_create_agent(self, adapter):
         app = _create_runs_app(adapter)
         model_options = {"reasoning_effort": "medium", "service_tier": "priority"}

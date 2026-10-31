@@ -938,6 +938,24 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
             loop.call_soon_threadsafe(run.put_event, _run_event(
                 run_id, "message.interim", text=text, already_streamed=bool(already_streamed)))
 
+    def _reasoning_cb(text: Optional[str]) -> None:
+        # The model's thinking as it streams (Anthropic's summarized thinking): Crema shows it in the work log.
+        if not text or run_id not in self._run_streams:
+            return
+        with suppress(Exception):
+            loop.call_soon_threadsafe(run.put_event, _run_event(run_id, "reasoning.delta", delta=text))
+
+    def _status_cb(kind: str, text: Any = None) -> None:
+        # Only automatic compaction's start and end go out, tagged as the TUI gateway does: a long summary
+        # otherwise looks like a stalled turn (주인님 2026-11-01).
+        from agent.conversation_compression import is_compaction_progress_status
+        if kind == "lifecycle" and is_compaction_progress_status(str(text or "")):
+            kind = "compacting"
+        if kind not in ("compacting", "compacted") or run_id not in self._run_streams:
+            return
+        with suppress(Exception):
+            loop.call_soon_threadsafe(run.put_event, _run_event(run_id, "status.update", kind=kind))
+
     def _finish(status: str, extra: Optional[dict] = None, **fields: Any) -> None:
         """Terminal status, then best-effort ``run.<status>`` event; key order is wire shape."""
         extra = extra or {}
@@ -962,7 +980,8 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
         with self._profile_scope(run.request_profile):
             agent = self._create_agent(
                 stream_delta_callback=_text_cb, tool_progress_callback=self._make_run_event_callback(run_id, loop),
-                interim_assistant_callback=_interim_cb, **run.agent_kwargs)
+                interim_assistant_callback=_interim_cb, reasoning_callback=_reasoning_cb,
+                status_callback=_status_cb, **run.agent_kwargs)
         self._active_run_agents[run_id] = agent
         approval_notify = _make_approval_notify(self, run, _api_server=_api_server)
         result, usage, served_runtime = await _submit_api_worker(

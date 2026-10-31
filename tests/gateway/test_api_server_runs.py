@@ -411,8 +411,8 @@ class TestStartRun:
                 status("lifecycle", COMPACTION_STATUS)
                 status("compacted", COMPACTION_DONE_STATUS)
                 status("warn", "Something degraded.")
-                reasoning("Checking the log ")
-                reasoning("first.")
+                reasoning("로그를 먼저 ")
+                reasoning("봅니다.")
                 return {"final_response": "Done."}
 
             agent.run_conversation.side_effect = run_conversation
@@ -426,9 +426,57 @@ class TestStartRun:
                 body = await (await cli.get(f"/v1/runs/{run_id}/events")).text()
 
         events = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
-        assert [e["delta"] for e in events if e["event"] == "reasoning.delta"] == ["Checking the log ", "first."]
+        assert [(e["delta"], e["step"]) for e in events if e["event"] == "reasoning.delta"] == [
+            ("로그를 먼저 ", 1), ("봅니다.", 1)]
         assert [e["kind"] for e in events if e["event"] == "status.update"] == ["compacting", "compacted"]
         assert next(e for e in events if e["event"] == "run.completed")["output"] == "Done."
+
+    @pytest.mark.asyncio
+    async def test_a_step_thinking_mostly_in_english_is_translated_once_it_ends(self, adapter):
+        """Each step's thinking carries its number; once a step ends (a tool starts, text comes), one mostly in
+        English comes again in Korean as ``reasoning.translated`` {step, text}, before the run's end."""
+        import json
+
+        app = _create_runs_app(adapter)
+
+        def create_agent(**kwargs):
+            reasoning, progress, text = (
+                kwargs["reasoning_callback"], kwargs["tool_progress_callback"], kwargs["stream_delta_callback"])
+            agent = MagicMock()
+
+            def run_conversation(**_kw):
+                reasoning("I'll check the log first.")
+                progress("tool.started", "terminal", "tail log", {})
+                reasoning("로그가 멈춘 이유를 찾습니다.")
+                progress("tool.started", "terminal", "ps", {})
+                reasoning("The process is alive.")
+                text("Done.")
+                return {"final_response": "Done."}
+
+            agent.run_conversation.side_effect = run_conversation
+            agent.session_prompt_tokens = agent.session_completion_tokens = agent.session_total_tokens = 0
+            return agent
+
+        translated = []
+
+        def translate(text):
+            translated.append(text)
+            return f"번역: {text}"
+
+        async with TestClient(TestServer(app)) as cli:
+            with patch.object(adapter, "_create_agent", side_effect=create_agent), \
+                    patch("agent.crema_thinking.translate", side_effect=translate):
+                resp = await cli.post("/v1/runs", json={"input": "hello"})
+                run_id = (await resp.json())["run_id"]
+                body = await (await cli.get(f"/v1/runs/{run_id}/events")).text()
+
+        events = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
+        assert [e["step"] for e in events if e["event"] == "reasoning.delta"] == [1, 2, 3]
+        assert translated == ["I'll check the log first.", "The process is alive."]
+        names = [e["event"] for e in events]
+        assert sorted((e["step"], e["text"]) for e in events if e["event"] == "reasoning.translated") == [
+            (1, "번역: I'll check the log first."), (3, "번역: The process is alive.")]
+        assert max(i for i, n in enumerate(names) if n == "reasoning.translated") < names.index("run.completed")
 
     @pytest.mark.asyncio
     async def test_start_passes_request_model_provider_options_to_create_agent(self, adapter):

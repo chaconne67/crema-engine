@@ -922,9 +922,43 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
     _redact_api_error_text = _api_server._redact_api_error_text
     run_id, loop = run.run_id, asyncio.get_running_loop()
 
+    # The step's thinking so far, its number in this run, and the translations still being written.
+    thought: Dict[str, Any] = {"step": 0, "text": "", "translating": []}
+
+    def _end_thought() -> None:
+        # A step's thinking ends when its model call writes, says something or uses a tool. One mostly in
+        # English is put into Korean beside the turn, so the work does not wait for it (주인님 2026-11-01).
+        from agent import crema_thinking
+        text, step = thought["text"], thought["step"]
+        thought["text"] = ""
+        if not text or not crema_thinking.needs_translation(text):
+            return
+
+        def _translate() -> None:
+            korean = crema_thinking.translate(text)
+            if korean and run_id in self._run_streams:
+                with suppress(Exception):
+                    loop.call_soon_threadsafe(run.put_event, _run_event(
+                        run_id, "reasoning.translated", step=step, text=korean))
+
+        worker = threading.Thread(target=_translate, name=f"crema-thinking-{run_id}", daemon=True)
+        worker.start()
+        thought["translating"].append(worker)
+
+    def _run_and_settle():
+        # The run's last translations land before its terminal event closes the stream (60s at most).
+        out = _run_agent_sync(self, run, agent, approval_notify, _api_server=_api_server)
+        _end_thought()
+        deadline = time.monotonic() + 60
+        for worker in thought["translating"]:
+            worker.join(max(0.0, deadline - time.monotonic()))
+        return out
+
     def _text_cb(delta: Optional[str]) -> None:
         if delta is None or run_id not in self._run_streams:
             return
+        if delta:
+            _end_thought()
         with suppress(Exception):
             loop.call_soon_threadsafe(run.put_event, _run_event(run_id, "message.delta", delta=delta))
 
@@ -934,6 +968,7 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
         # callback and the final answer still arrives via ``run.completed`` (#67580).
         if not isinstance(text, str) or not text.strip() or run_id not in self._run_streams:
             return
+        _end_thought()
         with suppress(Exception):
             loop.call_soon_threadsafe(run.put_event, _run_event(
                 run_id, "message.interim", text=text, already_streamed=bool(already_streamed)))
@@ -942,8 +977,19 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
         # The model's thinking as it streams (Anthropic's summarized thinking): Crema shows it in the work log.
         if not text or run_id not in self._run_streams:
             return
+        if not thought["text"]:
+            thought["step"] += 1
+        thought["text"] += text
         with suppress(Exception):
-            loop.call_soon_threadsafe(run.put_event, _run_event(run_id, "reasoning.delta", delta=text))
+            loop.call_soon_threadsafe(run.put_event, _run_event(
+                run_id, "reasoning.delta", delta=text, step=thought["step"]))
+
+    run_event_cb = self._make_run_event_callback(run_id, loop)
+
+    def _progress_cb(event_type: str, *args: Any, **kwargs: Any) -> Any:
+        if event_type == "tool.started":
+            _end_thought()
+        return run_event_cb(event_type, *args, **kwargs)
 
     def _status_cb(kind: str, text: Any = None) -> None:
         # Only automatic compaction's start and end go out, tagged as the TUI gateway does: a long summary
@@ -979,13 +1025,12 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
             return
         with self._profile_scope(run.request_profile):
             agent = self._create_agent(
-                stream_delta_callback=_text_cb, tool_progress_callback=self._make_run_event_callback(run_id, loop),
+                stream_delta_callback=_text_cb, tool_progress_callback=_progress_cb,
                 interim_assistant_callback=_interim_cb, reasoning_callback=_reasoning_cb,
                 status_callback=_status_cb, **run.agent_kwargs)
         self._active_run_agents[run_id] = agent
         approval_notify = _make_approval_notify(self, run, _api_server=_api_server)
-        result, usage, served_runtime = await _submit_api_worker(
-            loop, lambda: _run_agent_sync(self, run, agent, approval_notify, _api_server=_api_server))
+        result, usage, served_runtime = await _submit_api_worker(loop, _run_and_settle)
         if not isinstance(result, dict):
             result = {}
         status, fields = terminal_run_status(result)

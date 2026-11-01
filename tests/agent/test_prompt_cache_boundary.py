@@ -43,6 +43,19 @@ def _isolated_registry():
         prompt_cache_boundary._prefixes.clear()
 
 
+def _without_markers(messages):
+    """The request as the cache compares it: cache_control removed, and string content as the
+    one text block it is shorthand for."""
+    def parts(content):
+        if isinstance(content, str):
+            return [{"type": "text", "text": content}]
+        return [{k: v for k, v in part.items() if k != "cache_control"} for part in content]
+    return [
+        {k: (parts(v) if k == "content" else v) for k, v in message.items() if k != "cache_control"}
+        for message in messages
+    ]
+
+
 def _write_skill(skills_dir, name, body=SKILL_BODY):
     skill_dir = skills_dir / name
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -164,6 +177,24 @@ class TestRequestLocalSplit:
         assert "cache_control" not in first[1]
         assert first[1]["text"] == "ticket=one time=10:00"
         assert second[1]["text"] == "ticket=two time=10:01"
+
+    def test_scaffold_message_keeps_its_shape_after_its_breakpoint_moves_on(self):
+        """Crema 2026-11-01: the skill message went out as [scaffold, tail] only while it was a
+        marked endpoint and as one string afterwards, so a later turn changed at that row and
+        rewrote everything behind it."""
+        scaffold = "stable skill scaffold\n\n" + _SINGLE_SKILL_INSTRUCTION
+        register_stable_prefix(scaffold)
+        history = [{"role": "system", "content": "system"}]
+        requests = []
+        for index, text in enumerate([scaffold + "do X", "second", "third", "fourth"]):
+            history.append({"role": "user", "content": text})
+            plan = build_prompt_cache_plan(copy.deepcopy(history), [], native_anthropic=True)
+            requests.append(_without_markers(plan.messages))
+            history.append({"role": "assistant", "content": f"answer {index}"})
+
+        for before, after in zip(requests, requests[1:]):
+            assert after[: len(before)] == before
+        assert [part["text"] for part in requests[-1][1]["content"]] == [scaffold, "do X"]
 
     def test_unregistered_message_keeps_whole_block_layout(self):
         content = "stable-looking scaffold\n\n" + _SINGLE_SKILL_INSTRUCTION + "tail"

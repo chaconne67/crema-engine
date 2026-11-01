@@ -55,15 +55,36 @@ def _apply_cache_marker(msg: dict, cache_marker: dict, native_anthropic: bool = 
         if not (role in ("tool", "assistant") and not native_anthropic):
             msg["cache_control"] = cache_marker
     elif isinstance(content, str):
-        stable_prefix = find_stable_prefix(content) if role == "user" else None
-        if stable_prefix is not None and content[len(stable_prefix):].strip():
-            # Builder-declared boundary: the scaffold carries the breakpoint and the volatile
-            # tail rides unmarked. Request-local only — the stored message stays a string.
-            msg["content"] = [_text_part(stable_prefix, cache_marker), _text_part(content[len(stable_prefix):])]
-        else:
-            msg["content"] = [_text_part(content, cache_marker)]
+        msg["content"] = [_text_part(content, cache_marker)]
     elif isinstance(content, list) and content and isinstance(content[-1], dict):
-        content[-1]["cache_control"] = cache_marker
+        # Pre-split scaffold: the breakpoint stays on the scaffold, the tail rides unmarked.
+        content[0 if _is_stable_split(msg) else -1]["cache_control"] = cache_marker
+
+
+def _presplit_stable_user_prefixes(messages: List[Dict[str, Any]]) -> None:
+    """Split every user message with a builder-declared scaffold into [scaffold, tail] parts
+    whether or not it carries a breakpoint this call (copy-on-write, request-local).
+
+    The split used to happen only on the marked message, so the same row went out as two text
+    blocks while it was among the marked endpoints and as one string afterwards; the request
+    then changed at that row and every cache entry behind it was rewritten."""
+    for i, msg in enumerate(messages):
+        if not (isinstance(msg, dict) and msg.get("role") == "user" and isinstance(msg.get("content"), str)):
+            continue
+        content = msg["content"]
+        stable_prefix = find_stable_prefix(content)
+        if stable_prefix is not None and content[len(stable_prefix):].strip():
+            messages[i] = {**msg, "content": [_text_part(stable_prefix), _text_part(content[len(stable_prefix):])]}
+
+
+def _is_stable_split(msg: dict) -> bool:
+    content = msg.get("content")
+    if msg.get("role") != "user" or not (isinstance(content, list) and len(content) == 2):
+        return False
+    first, second = content
+    if not all(isinstance(p, dict) and p.get("type", "text") == "text" and isinstance(p.get("text"), str) for p in content):
+        return False
+    return find_stable_prefix(first["text"] + second["text"]) == first["text"]
 
 
 def _can_carry_marker(msg: dict, native_anthropic: bool, tool_part_markers: bool = True) -> bool:
@@ -271,6 +292,7 @@ def build_prompt_cache_plan(
         ):
             messages[i] = strip_anthropic_cache_control([dict(msg)])[0]
     planned_tools = strip_anthropic_tool_cache_control(tools)
+    _presplit_stable_user_prefixes(messages)
 
     if not direct_native_tool_cache or not planned_tools:
         planned_messages = apply_anthropic_cache_control(
@@ -320,6 +342,7 @@ def apply_anthropic_cache_control(
         if isinstance(msg, dict) and ("cache_control" in msg or _has_part_marker(msg.get("content"))):
             messages[i] = strip_anthropic_cache_control([dict(msg)])[0]
 
+    _presplit_stable_user_prefixes(messages)
     breakpoints_used = 0
     if messages[0].get("role") == "system":
         messages[0] = copy.deepcopy(messages[0])

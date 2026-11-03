@@ -89,8 +89,8 @@
 - 입력창 도구줄
   - **+**: 파일을 첨부한다.
   - **명령 메뉴**
-  - **원형 차트**: 이 대화의 컨텍스트가 찬 만큼 채워진다. 누르면 사용량 창. [models-and-connections.md](models-and-connections.md#사용량-보기)
   - **모델 칩**
+  - **원형 차트**: 이 대화의 컨텍스트가 찬 만큼 채워진다. 누르면 사용량 창. [models-and-connections.md](models-and-connections.md#사용량-보기)
   - **승인 칩**(방패): [engine.md](engine.md#명령-승인)
   - **마이크**: [models-and-connections.md](models-and-connections.md#음성-입력)
   - **보내기/멈추기**

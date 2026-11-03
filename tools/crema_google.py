@@ -44,9 +44,9 @@ CALLBACK = "/api/crema/google/callback"
 # sign-in. Kept in main /srv/consolidation/secrets/crema-google-app.env, changed there and here together.
 CLIENT_ID = "380565197593-qfug92np3s0ai5r3jeffom522houf6hr.apps.googleusercontent.com"
 CLIENT_SECRET = "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"
-# The narrowest permissions each feature works with (Gmail reads, sorts and sends mail but cannot delete it for good;
+# The narrowest permissions each feature works with (Gmail reads and sends mail, nothing else: 주인님 2026-11-03;
 # Calendar changes events and lists the calendars; Drive reads the files there and adds new ones), and who allowed it.
-FEATURES = {"mail": "https://www.googleapis.com/auth/gmail.modify",
+FEATURES = {"mail": "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send",
             "calendar": "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly",
             "drive": "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file"}
 IDENTITY = "openid email"

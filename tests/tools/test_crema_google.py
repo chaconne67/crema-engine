@@ -117,7 +117,7 @@ def test_each_feature_asks_only_its_permission_and_the_account_keeps_what_it_has
 
     started, query, how = sign_in()
     assert query["redirect_uri"] == "http://127.0.0.1:5555" + google.CALLBACK
-    assert query["scope"] == "https://www.googleapis.com/auth/gmail.modify openid email" and query["include_granted_scopes"] == "true"
+    assert query["scope"] == "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send openid email" and query["include_granted_scopes"] == "true"
     assert query["access_type"] == "offline" and query["login_hint"] == "me@gmail.com" and query["code_challenge_method"] == "S256"
     assert query["client_id"] == google.CLIENT_ID
     assert how == "done" and google.status(started["flow"]) == {"status": "done", "address": "me@gmail.com", "feature": "mail"}
@@ -195,12 +195,10 @@ def test_gmail_is_the_mail_tool_over_gmails_api(fake):
     assert found_mail["mails"][0] == {"uid": "m1", "date": "", "from": "김철수 <kim@example.com>", "to": "",
                                       "subject": "견적서", "unread": True, "attachments": True}
     assert call(action="read", uid="m1")["body"] == "견적서를 보내드립니다."
-    # Sorting: into a label (out of the inbox), to the trash (never deleted for good), marked read.
-    assert call(action="move", uid="m2", to_folder="정리") == {"moved": "m2", "from": "INBOX", "to": "정리"}
-    assert posted("/messages/m2/modify") == [{"addLabelIds": ["Label_1"], "removeLabelIds": ["INBOX"]}]
-    assert call(action="move", uid="m1", to_folder="trash")["to"] == "TRASH" and posted("/messages/m1/trash") == [{}]
-    call(action="mark", uid="m1", mark="read")
-    assert posted("/messages/m1/modify") == [{"removeLabelIds": ["UNREAD"]}]
+    # Read and send only (주인님 2026-11-03): no sorting, so nothing is changed in Gmail.
+    assert "reads and sends Gmail only" in call(action="move", uid="m2", to_folder="정리")["error"]
+    assert "reads and sends Gmail only" in call(action="mark", uid="m1", mark="read")["error"]
+    assert posted("/messages/m2/modify") == [] and posted("/messages/m1/trash") == [] and posted("/messages/m1/modify") == []
     # A reply goes after the approval card, through Gmail, which keeps its own sent copy.
     result = call(action="send", reply_to_uid="m1", bcc=["boss@example.com"], body="잘 받았습니다.")
     assert result["sent"] is True and "kept_in" not in result and asked[-1][0] == "메일 보내기"

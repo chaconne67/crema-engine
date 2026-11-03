@@ -1,7 +1,7 @@
 """Crema: the user's mail (Crema plan 메일 연결 4-1, 2026-10-16). Every mail company with an app password: IMAP to
 read, SMTP to send, with the Python standard library. Gmail (plan 4-3, 2026-10-17) with the user's own Google sign-in
-(tools/crema_google.py) instead, and Gmail's API: its narrower permission (gmail.modify, no deleting for good) does
-not let IMAP or SMTP in. Both are a mailbox (_mailbox) the tool works in the same way. An account is its address and
+(tools/crema_google.py) instead, and Gmail's API: its narrower permissions (gmail.readonly and gmail.send, reading
+and sending only, 주인님 2026-11-03) do not let IMAP or SMTP in, nor sort a Gmail mail. Both are a mailbox (_mailbox) the tool works in the same way. An account is its address and
 its company (the servers come from PROVIDERS, the user never types them); its secret stays in this engine's .env and
 never reaches the terminal's commands (tools/environments/local_env_policy.py). Settings → 메일 연결 adds and
 removes accounts (connect / remove, after a real sign-in); the `mail` tool works in them. Sending always asks the
@@ -49,10 +49,10 @@ ROLE_NAMES = {"보낸메일함": "sent", "보낸편지함": "sent", "sent": "sen
 IMAP_MARKS = {"read": ("+", "\\Seen"), "unread": ("-", "\\Seen"), "flagged": ("+", "\\Flagged"),
               "unflagged": ("-", "\\Flagged")}
 GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me"
-# Gmail's labels that are a folder's role (its own labels are folders too), and the label a mark adds or takes away.
+# Gmail's labels that are a folder's role (its own labels are folders too).
 GMAIL_ROLES = {"INBOX": "inbox", "SENT": "sent", "TRASH": "trash", "DRAFT": "drafts", "SPAM": "junk"}
-GMAIL_MARKS = {"read": ("removeLabelIds", "UNREAD"), "unread": ("addLabelIds", "UNREAD"),
-               "flagged": ("addLabelIds", "STARRED"), "unflagged": ("removeLabelIds", "STARRED")}
+GMAIL_READ_AND_SEND = ("Crema reads and sends Gmail only; it cannot move, trash or mark a Gmail mail. Tell the user "
+                       "to do that in Gmail.")
 
 
 def provider_of(address: str) -> Optional[str]:
@@ -545,17 +545,10 @@ class _Gmail:
         return message_from_bytes(raw, policy=policy.default), "UNREAD" in (item.get("labelIds") or [])
 
     def move(self, folder: str, uid: str, to_folder: str) -> None:
-        path, source, target = f"/messages/{urllib.parse.quote(uid, safe='')}", self._id(folder), self._id(to_folder)
-        if source == "TRASH":
-            self._call("POST", path + "/untrash", {})
-        if target == "TRASH":
-            self._call("POST", path + "/trash", {})
-            return
-        self._call("POST", path + "/modify", {"addLabelIds": [target], "removeLabelIds": [] if source == "TRASH" else [source]})
+        raise ValueError(GMAIL_READ_AND_SEND)
 
     def mark(self, folder: str, uid: str, mark: str) -> None:
-        change, label = GMAIL_MARKS[mark]
-        self._call("POST", f"/messages/{urllib.parse.quote(uid, safe='')}/modify", {change: [label]})
+        raise ValueError(GMAIL_READ_AND_SEND)
 
     def send(self, message: EmailMessage, recipients: List[str]) -> str:
         self._call("POST", "/messages/send", {"raw": base64.urlsafe_b64encode(message.as_bytes()).decode()})
@@ -720,6 +713,7 @@ registry.register(
                            "- search lists the newest first with headers only; read one to see its body and "
                            "attachments. Reading does not mark it read.\n"
                            "- Nothing is deleted for good: to delete, move it to the folder whose role is trash.\n"
+                           "- A Gmail account (company 구글) is read and sent only: move and mark do not work there.\n"
                            "- send shows the user an approval card (recipients, subject, number of attachments) and "
                            "sends only once they allow it, so before calling send, write the whole draft — "
                            "recipients, subject and body — in your reply for the user to read. When the user asks "

@@ -538,6 +538,30 @@ def test_a_chat_closes_the_chats_it_started_into_the_archive(api, sidebar, new_i
     assert [chat_id[:1] for chat_id in item["close"]] == [lead["number"][:1], worker["number"][:1]]
 
 
+def test_a_chat_sends_work_again_to_a_chat_it_closed(api, sidebar, new_ids):
+    # 주인님 2026-11-03: the next message about the same work goes to the chat that did it, archived or not.
+    lead = turns.start(A, "조사", "1번부터 조사해 주세요")
+    [message] = turns.state()["messages"]
+    session, chat_id = message["session_id"], message["items"][0]["start"]["id"]
+    turns.handed(session, message["upto"])
+    turns.close(A, lead["number"])
+    turns.handed(session, turns.state()["messages"][0]["upto"])
+    # The app reports the closed chat as archived.
+    turns.set_chats([{"id": "a", "session": A, "title": "보고서", "project": "회사"},
+                     {"id": "b", "session": B, "title": "메일", "project": ""},
+                     {"id": chat_id, "session": session, "title": "조사 결과", "project": "회사",
+                      "role": "조사", "parent": "a", "archived": True}])
+    assert turns.chats(A)[-1] == {"number": lead["number"], "title": "조사 · 조사 결과", "project": "회사",
+                                  "state": "archived", "started_by": "this chat"}
+    assert [chat["number"] for chat in turns.chats(B)] == ["a"]
+    assert "No chat numbered" in turns.send(B, lead["number"], "이것도 봐 주세요")["error"]
+    assert turns.send(A, lead["number"], "2번도 조사해 주세요")["sent_to"] == "조사 결과"
+    [message] = turns.state()["messages"]
+    assert message["session_id"] == session and message["items"][0]["text"] == "2번도 조사해 주세요"
+    # Chat a ends its reply before the app has brought the chat out: the work is still being done for it.
+    assert [row["id"] for row in turns._still_doing(turns._board(), A, set())] == [chat_id]
+
+
 def test_a_chat_that_closed_the_chat_it_started_still_tells_its_own_starter(api, sidebar, new_ids):
     # The middle chat closes the worker and ends its reply before the app has filed the worker away: the top chat is
     # told all the same, for the worker has no work left to do.

@@ -609,11 +609,13 @@ FAILED_TEXT = "맡긴 일을 끝내지 못했어요."
 
 
 def set_chats(chats: list) -> None:
-    """The app's sidebar chats that can get messages (not archived): id, engine session, title, project, and the
-    chat's role and the chat that started it when it has them."""
+    """The app's sidebar chats that can get messages: id, engine session, title, project, and the chat's role and the
+    chat that started it when it has them; and the archived chats another chat started, which only that chat can
+    send work to again (주인님 2026-11-03)."""
     rows = [{"id": str(c["id"]), "session": str(c["session"]), "title": str(c.get("title") or ""),
              "project": str(c.get("project") or ""),
-             **{key: str(c[key]) for key in ("role", "parent") if c.get(key)}}
+             **{key: str(c[key]) for key in ("role", "parent") if c.get(key)},
+             **({"archived": True} if c.get("archived") else {})}
             for c in chats if c.get("id") and c.get("session")]
     # A chat just started here (``start``) that the app has not made yet stays: its starter waits for it.
     known = {row["id"] for row in rows}
@@ -643,8 +645,9 @@ def _write_json(name: str, rows: list) -> None:
     os.replace(temporary, path)
 
 
-def _directory() -> list[dict]:
-    return _read_json(CHATS_FILE)
+def _directory(archived: bool = False) -> list[dict]:
+    """The sidebar's chats, or with ``archived`` the archived chats other chats started."""
+    return [row for row in _read_json(CHATS_FILE) if bool(row.get("archived")) == archived]
 
 
 def _read_json(name: str) -> list:
@@ -687,7 +690,14 @@ def chats(session_id: str) -> list[dict]:
              "state": "replying" if _replying(row["session"]) else "idle",
              **{"started_by": "this chat" if parent is mine else _number(parent)
                 for parent in rows if parent["id"] == row.get("parent")}}
-            for row in rows if row["session"] != me and _works_with(mine, row)]
+            for row in rows if row["session"] != me and _works_with(mine, row)] + [
+        {"number": _number(row), "title": _name(row), "project": row["project"], "state": "archived",
+         "started_by": "this chat"} for row in _closed(mine)]
+
+
+def _closed(mine: dict) -> list[dict]:
+    """The archived chats chat ``mine`` started: it may send them work again, which brings them out of the archive."""
+    return [row for row in _directory(archived=True) if mine["id"] and row.get("parent") == mine["id"]]
 
 
 def _addressed(session_id: str, to: str) -> tuple[Optional[str], Optional[dict], Optional[str]]:
@@ -698,6 +708,7 @@ def _addressed(session_id: str, to: str) -> tuple[Optional[str], Optional[dict],
     to = str(to or "").strip()
     rows = _directory()
     found = [row for row in rows if to and row["id"].startswith(to)]
+    found = found or [row for row in _closed(_mine(rows, me)) if to and row["id"].startswith(to)]
     if len(found) != 1:
         return me, None, (f"No chat numbered '{to}'" + (" (more than one starts so)" if found else "")
                           + ". Call crema_chats with action list for the numbers.")
@@ -773,7 +784,7 @@ def start(session_id: str, role: str, message: str, model: str = "", reasoning: 
         return {"error": "Only a chat in the sidebar (not archived) can start another chat."}
     chat = str(uuid.uuid4())
     # Known at once, so the message can be left for it before the app makes it.
-    _write_json(CHATS_FILE, [*rows, {"id": chat, "session": CHAT_PREFIX + chat, "title": "", "project": mine["project"],
+    _write_json(CHATS_FILE, [*_read_json(CHATS_FILE), {"id": chat, "session": CHAT_PREFIX + chat, "title": "", "project": mine["project"],
                                      "role": role, "parent": mine["id"], "pending": True}])
     chosen = {key: value for key, value in (("model", model), ("reasoning", reasoning)) if value}
     _, problem = _leave(session_id, chat, message, MESSAGE_HEAD, start={"id": chat, "role": role, "parent": mine["id"],
@@ -868,7 +879,8 @@ def _still_doing(conn, sender: str, skip: set) -> list[dict]:
         if event.kind == "crema_note" and (event.payload or {}).get("finished"):
             told[event.payload.get("sender")] = event.id
     rows = []
-    for row in _directory():
+    # Archived chats too: work sent to a closed chat brings it out only when the app hands it over.
+    for row in _read_json(CHATS_FILE):
         chat = _chat(row["session"]) or row["session"]
         if chat == sender or chat in skip:
             continue

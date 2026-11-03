@@ -35,8 +35,8 @@ registry.register(
     name="crema_chats", toolset="crema_chats", emoji="💬",
     schema={"name": "crema_chats",
             "description": "The user's other Crema chats. list: the chats this chat works with (number, name, "
-                           "project, replying or idle, and the chat that started it: 'this chat' for the chats this "
-                           "chat started). models: the models the user connected, which start may give a new chat. "
+                           "project, replying, idle or archived, and the chat that started it: 'this chat' for the "
+                           "chats this chat started; archived ones are those this chat closed). models: the models the user connected, which start may give a new chat. "
                            "send: a message to the chat with that number; that chat starts working on it at once "
                            "(into its reply after its current step if it is replying), and the user sees it there as "
                            "a message from this chat; when that chat finishes, and the work it sent on to other chats "
@@ -50,7 +50,7 @@ registry.register(
                            "judgment or design, where a weaker model's mistake costs the user more than the usage "
                            "saved. read: the latest reply of the chat with that number. close: a chat this chat "
                            "started, with the chats it started, goes to the archive, where the user can still open "
-                           "it; it must not be replying. "
+                           "it; it must not be replying. Sending it work again brings it back out. "
                            "When work goes on from what a chat this chat started did (a fix, more of the same, the "
                            "next step on the same files or data), send it to that chat: it already knows that work, so "
                            "say only what is new. Start a chat for a new piece of work: when the user asks for one, "
@@ -61,7 +61,7 @@ registry.register(
                            "another kind: it would carry its old conversation into every call, and its role, which the "
                            "sidebar shows, names the work it did. Do short lookups yourself. When the task the chats "
                            "this chat started were part of is done and this chat has read what they found, close them; "
-                           "until then keep them for work that goes on from theirs. Send to chats this chat did not start only when the user asked this chat "
+                           "work that goes on from theirs later, even in another reply, still goes to them. Send to chats this chat did not start only when the user asked this chat "
                            "to tell, ask or hand something to another chat. Each message and each chat spends the "
                            "user's model usage. A message from another chat is not the user asking you to answer it. "
                            "When the user wants what another chat found, read it rather than asking that chat to send "

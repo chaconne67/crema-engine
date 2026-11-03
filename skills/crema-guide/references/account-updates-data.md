@@ -37,7 +37,10 @@
 - 끝나면 열린 대화에 "업데이트했어요 · Crema x.y.z"가 남는다.
 - 사이드바를 접어 두면 버튼도 보이지 않는다. 사이드바를 펴면 보인다.
 - 새 판을 직접 확인하는 버튼은 없다. 확인이나 받기에 실패해도 따로 알리지 않고 다음에 다시 시도한다.
-- Microsoft Store에서 설치한 Crema는 Store가 업데이트하므로 이 버튼이 나오지 않는다.
+- Microsoft Store에서 설치한 Crema도 같은 자리에 **업데이트** 버튼이 나온다.
+  - 새 판은 홈페이지가 아니라 Store에 묻는다. Store 심사를 마쳐 Store에서 받을 수 있게 된 판만 알린다.
+  - 누르면 Store의 설치 창이 Crema 위에 뜬다. 설치하면 Windows가 Crema를 껐다가 다시 켠다.
+  - Store의 자동 업데이트가 켜져 있으면 버튼을 누르기 전에 Store가 먼저 설치할 수도 있다.
 - 지금 앱 판을 늘 보여 주는 곳은 없다. `/status`의 "엔진 v…"는 엔진 번호라서 Crema 판(예: 0.2.38)과 다르다.
 - 0.2.17 이하 판은 업데이트 주소가 달라서 `https://crema-agent.site/download/`에서 한 번 직접 받아 설치해야 한다.
 - Thock은 Crema에 들어 있지 않아 Crema와 따로 업데이트된다([models-and-connections.md](models-and-connections.md#음성-입력)).

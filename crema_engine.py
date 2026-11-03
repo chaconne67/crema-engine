@@ -344,6 +344,11 @@ async def main() -> None:
             raise HTTPException(status_code=404, detail="no such service")
         return {"ok": True}
 
+    # The context ring before a chat's first reply (or for one from before the ring): estimate_context below.
+    @settings.get("/api/crema/context")
+    async def context(session_id: str, model: str = "", provider: str = ""):
+        return await asyncio.to_thread(estimate_context, api, session_id, model, provider)
+
     # Crema takes the failures kept since it last looked and sends them, or drops them when the user turned that off.
     @settings.get("/api/crema/failures")
     async def failures():
@@ -513,6 +518,27 @@ def undo_review_change(slug: str) -> dict:
 def _remembering(config: dict) -> bool:
     memory = config.get("memory") or {}
     return memory.get("memory_enabled", True) is not False or memory.get("user_profile_enabled", True) is not False
+
+
+def estimate_context(api, session_id: str, model: str = "", provider: str = "") -> dict:
+    """``{used, max}`` tokens a call on this chat would carry now — instructions, tools and the chat so far — estimated
+    without asking the model, against the model's window. A reply's own count (run usage) replaces it in the app."""
+    from agent.model_metadata import estimate_request_tokens_rough
+    from agent.system_prompt import build_system_prompt_parts
+
+    db = api._ensure_session_db()
+    messages = db.get_messages_as_conversation(session_id, include_ancestors=True, repair_alternation=True)
+    agent = api._create_agent(session_id=session_id, requested_model=model or None, requested_provider=provider or None)
+    try:
+        # A continuing chat sends the prompt it started with; a new one the prompt built now (as conversation_loop).
+        prompt = (db.get_session(session_id) or {}).get("system_prompt") if messages else None
+        if not prompt:
+            parts = build_system_prompt_parts(agent)
+            prompt = "\n\n".join(part for part in (parts["stable"], parts["context"], parts["volatile"]) if part)
+        used = estimate_request_tokens_rough(messages, system_prompt=prompt, tools=agent.tools or None)
+        return {"used": used, "max": agent.context_compressor.context_length}
+    finally:
+        api._memory_sessions.checkin(agent)
 
 
 def distill(api, session_id: str, model: str = "", provider: str = "") -> dict:

@@ -153,6 +153,41 @@ async def get_usage_analytics(
         return await asyncio.to_thread(_get_usage_analytics, days, profile)
 
 
+def _is_subscription(provider: str) -> bool:
+    """ChatGPT and Claude sign-ins are plans with the provider's own usage windows; API keys bill per token."""
+    if provider == "openai-codex":
+        return True
+    if provider == "anthropic":
+        from agent.anthropic_credentials import _is_oauth_token, resolve_anthropic_token
+        return _is_oauth_token((resolve_anthropic_token() or "").strip())
+    return False
+
+
+@router.get("/api/analytics/account-usage")
+async def get_account_usage(provider: str = Query(..., min_length=1)):
+    """A subscription's own usage windows, as Codex (5h/weekly) and Claude Code (session/week) show them.
+
+    ``subscription`` false = a per-token route: its tokens and cost come from the session rows instead.
+    Empty ``windows`` on a subscription = the provider's usage API did not answer."""
+    from agent.account_usage import _is_num, fetch_account_usage
+
+    provider = provider.strip().lower()
+    if not await asyncio.to_thread(_is_subscription, provider):
+        return {"provider": provider, "subscription": False}
+    snapshot = await asyncio.to_thread(fetch_account_usage, provider)
+    windows = [
+        {"label": w.label, "used_percent": w.used_percent, "reset_at": w.reset_at.isoformat() if w.reset_at else None}
+        for w in (snapshot.windows if snapshot else ())
+    ]
+    extra = ((snapshot.raw if snapshot else None) or {}).get("extra_usage") or {}
+    # As the engine's own /usage line: only when on and both amounts are known.
+    extra_on = extra.get("is_enabled") and all(_is_num(extra.get(key)) for key in ("used_credits", "monthly_limit"))
+    return {
+        "provider": provider, "subscription": True, "plan": snapshot.plan if snapshot else None,
+        "windows": windows, "extra_usage": extra if extra_on else None,
+    }
+
+
 _USAGE_KEYS = (
     "input_tokens", "output_tokens", "cache_read_tokens", "reasoning_tokens",
     "estimated_cost", "actual_cost", "api_calls", "tool_calls",

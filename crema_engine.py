@@ -106,7 +106,7 @@ async def main() -> None:
     import uvicorn
     from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import HTMLResponse, JSONResponse
-    from hermes_cli.web_routers import audio, config_env, mcp, models, oauth, sessions, status, tools
+    from hermes_cli.web_routers import analytics, audio, config_env, mcp, models, oauth, sessions, status, tools
 
     from crema_free import create_router as free_connection_router
 
@@ -117,10 +117,11 @@ async def main() -> None:
     # Of these routers only what Crema shows: what the agent remembers (memory cards and learned
     # skills, to read, edit and delete), the past-chat search, and the image and video model lists.
     # And a service's sign-in, which tools/crema_services.py starts, follows and cancels here, and the address the
-    # service's sign-in page comes back to.
+    # service's sign-in page comes back to. And a subscription's own usage windows, beside the model chip.
     wanted = {"/api/learning/graph", "/api/learning/node", "/api/sessions/search", "/api/tools/toolsets/{name}/models",
-              "/api/mcp/servers/{name}/auth", "/api/mcp/oauth/flows/{flow_id}", SIGN_IN_RETURN}
-    for router in (status.router, sessions.search_router, tools.router, mcp.router):
+              "/api/mcp/servers/{name}/auth", "/api/mcp/oauth/flows/{flow_id}", SIGN_IN_RETURN,
+              "/api/analytics/account-usage"}
+    for router in (status.router, sessions.search_router, tools.router, mcp.router, analytics.router):
         settings.router.routes.extend(route for route in router.routes if route.path in wanted)
 
     @settings.post("/api/crema/backup")

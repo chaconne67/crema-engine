@@ -597,6 +597,8 @@ FINISHED_HEAD = ("[Crema] The chat '{title}' (number {number}) finished the work
                  "can go on, end this reply: Crema tells this chat as each one finishes, so there is no need to check on "
                  "them.")
 FINISHED_TEXT = "맡긴 일을 마쳤어요."
+# What the app is left for a chat its starter closed: it files the chat in the archive and does not start it.
+CLOSED_TEXT = "보관합니다."
 # A reply that ended before its work was done (an error, or the user stopped it), with why as the app saw it
 # (주인님 2026-10-31): the sending chat knows its work is not done and why, and decides what to do.
 FAILED_HEAD = ("[Crema] The chat '{title}' (number {number}) ended without finishing the work this chat sent it; the "
@@ -683,7 +685,8 @@ def chats(session_id: str) -> list[dict]:
     mine = _mine(rows, me)
     return [{"number": _number(row), "title": _name(row), "project": row["project"],
              "state": "replying" if _replying(row["session"]) else "idle",
-             **{"started_by": _number(parent) for parent in rows if parent["id"] == row.get("parent")}}
+             **{"started_by": "this chat" if parent is mine else _number(parent)
+                for parent in rows if parent["id"] == row.get("parent")}}
             for row in rows if row["session"] != me and _works_with(mine, row)]
 
 
@@ -782,6 +785,27 @@ def start(session_id: str, role: str, message: str, model: str = "", reasoning: 
                         "chat when it finishes."}
 
 
+def close(session_id: str, to: str) -> dict:
+    """Chat ``to``, which this chat started, and the chats under it go to the archive (주인님 2026-11-03: the sidebar
+    no longer fills with chats whose work is done); the app files them there, where the user can still open them."""
+    me, target, problem = _addressed(session_id, to)
+    if problem:
+        return {"error": problem}
+    rows = _directory()
+    if not me or target.get("parent") != _mine(rows, me)["id"]:
+        return {"error": "Close only a chat this chat started."}
+    closing = [target]
+    for row in closing:
+        closing += [other for other in rows if other.get("parent") == row["id"]]
+    busy = next((row for row in closing if _replying(row["session"])), None)
+    if busy:
+        return {"error": f"'{_name(busy)}' is still replying. Close it after Crema tells this chat it finished."}
+    _, problem = _leave(session_id, to, CLOSED_TEXT, MESSAGE_HEAD, close=[row["id"] for row in closing])
+    if problem:
+        return {"error": problem}
+    return {"closed": [_name(row) for row in closing], "delivery": "The app moves them to the archive."}
+
+
 def finished(session_id: str, to: str = "", problem: str = "") -> Optional[str]:
     """This chat finished a reply chat ``to``'s message started (the app knows when). Chat ``to`` is told once the
     work this chat sent on to other chats is finished too (the chain of command, 주인님 2026-10-31): till then the word
@@ -849,8 +873,9 @@ def _still_doing(conn, sender: str, skip: set) -> list[dict]:
         if chat == sender or chat in skip:
             continue
         events = _session_events(conn, row["session"])
+        # A closed chat has no work left: its word to the archive is no work it does.
         sent = [e.id for e in events if e.kind == "crema_note" and (e.payload or {}).get("sender") == sender
-                and not (e.payload or {}).get("finished")]
+                and not (e.payload or {}).get("finished") and not (e.payload or {}).get("close")]
         if not sent or max(sent) < told.get(chat, 0):
             continue
         wait = _last(events, ("crema_waiting", "crema_woken", "crema_released"))
@@ -956,7 +981,8 @@ def state() -> dict:
                     {"from_chat": e.payload.get("sender_chat", ""), "from_title": e.payload.get("sender_title", ""),
                      "from_project": e.payload.get("sender_project", ""), "text": e.payload["message"],
                      "prompt": e.payload["text"], **({"finished": True} if e.payload.get("finished") else {}),
-                     **({"start": e.payload["start"]} if e.payload.get("start") else {})}
+                     **({"start": e.payload["start"]} if e.payload.get("start") else {}),
+                     **({"close": e.payload["close"]} if e.payload.get("close") else {})}
                     for e in pending]})
         # ``messages`` only when there is something, so the shape stays what it was without them.
         return {"waiting": waiting, "ask": ask, "wake": wake, **({"messages": messages} if messages else {})}

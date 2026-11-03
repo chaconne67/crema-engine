@@ -446,7 +446,7 @@ def test_a_chat_starts_a_new_chat_under_it_with_its_first_message(api, sidebar, 
     assert item["start"]["id"].startswith(number) and item["text"] == "1번부터 30번까지 판정해 주세요"
     assert (item["from_chat"], item["from_title"]) == ("a", "보고서")
     listed = next(chat for chat in turns.chats(A) if chat["number"] == number)
-    assert (listed["title"], listed["project"], listed["started_by"]) == ("c 담당", "회사", "a")
+    assert (listed["title"], listed["project"], listed["started_by"]) == ("c 담당", "회사", "this chat")
     # The app's report from before it made the chat does not lose it.
     turns.set_chats([{"id": "a", "session": A, "title": "보고서", "project": "회사"}])
     assert [chat["number"] for chat in turns.chats(A)] == [number]
@@ -512,6 +512,50 @@ def test_chats_work_along_the_chain_of_command(api, sidebar, new_ids):
     turns.handed(A, message["upto"])
     assert turns.finished(middle) is None
     assert "messages" not in turns.state()
+
+
+def test_a_chat_closes_the_chats_it_started_into_the_archive(api, sidebar, new_ids):
+    # 주인님 2026-11-03: the voucher lead left nine finished chats in the sidebar and started new ones beside them.
+    lead = turns.start(A, "조사", "1번부터 조사해 주세요")
+    [message] = turns.state()["messages"]
+    middle = message["session_id"]
+    turns.handed(middle, message["upto"])
+    worker = turns.start(middle, "1번 담당", "1번을 조사해 주세요")
+    [message] = turns.state()["messages"]
+    bottom = message["session_id"]
+    turns.handed(bottom, message["upto"])
+    assert turns.close(A, "b") == {"error": "Close only a chat this chat started."}
+    assert "does not work with that chat" in turns.close(A, worker["number"])["error"]
+    api.replying(bottom)
+    assert "'1번 담당' is still replying" in turns.close(A, lead["number"])["error"]
+    assert "messages" not in turns.state()
+    api.replying(bottom, False)
+    assert turns.close(A, lead["number"]) == {"closed": ["조사", "1번 담당"], "delivery": "The app moves them to the archive."}
+    # The app is left one item on the closed chat: the chats to file in the archive, not words to start it with.
+    [message] = turns.state()["messages"]
+    [item] = message["items"]
+    assert message["session_id"] == middle and item["text"] == turns.CLOSED_TEXT
+    assert [chat_id[:1] for chat_id in item["close"]] == [lead["number"][:1], worker["number"][:1]]
+
+
+def test_a_chat_that_closed_the_chat_it_started_still_tells_its_own_starter(api, sidebar, new_ids):
+    # The middle chat closes the worker and ends its reply before the app has filed the worker away: the top chat is
+    # told all the same, for the worker has no work left to do.
+    lead = turns.start(A, "조사", "1번부터 조사해 주세요")
+    [message] = turns.state()["messages"]
+    middle = message["session_id"]
+    turns.handed(middle, message["upto"])
+    worker = turns.start(middle, "1번 담당", "1번을 조사해 주세요")
+    assert turns.finished(middle, "a") is None
+    [message] = turns.state()["messages"]
+    bottom = message["session_id"]
+    turns.handed(bottom, message["upto"])
+    assert turns.finished(bottom, lead["number"]) is None
+    [message] = turns.state()["messages"]
+    turns.handed(middle, message["upto"])
+    assert "closed" in turns.close(middle, worker["number"])
+    assert turns.finished(middle) is None
+    assert [m["session_id"] for m in turns.state()["messages"]] == [bottom, A]
 
 
 def test_a_reply_that_ended_unfinished_is_told_at_once_with_why(api, sidebar, new_ids):

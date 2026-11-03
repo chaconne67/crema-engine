@@ -643,6 +643,8 @@ class TestRunStatus:
                 mock_agent.session_total_tokens = 105
                 mock_agent.session_cache_read_tokens = 84
                 mock_agent.session_cache_write_tokens = 11
+                mock_agent.context_compressor.last_prompt_tokens = 95
+                mock_agent.context_compressor.context_length = 200_000
                 mock_create.return_value = mock_agent
 
                 resp = await cli.post("/v1/runs", json={"input": "hello", "model": "deepseek-v4-pro"})
@@ -665,6 +667,7 @@ class TestRunStatus:
                 assert status["usage"] == {
                     "input_tokens": 100, "output_tokens": 5, "total_tokens": 105,
                     "cache_read_tokens": 84, "cache_write_tokens": 11,
+                    "context_tokens": 95, "context_length": 200_000,
                 }
 
 

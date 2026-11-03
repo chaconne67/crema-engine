@@ -742,13 +742,18 @@ def _skill_invocation(text: Any) -> Any:
     return (build_skill_invocation_message(key, user_instruction=match[2].strip()) if key else None) or text
 
 
+def _counter(owner, attr: str) -> int:
+    value = getattr(owner, attr, 0)
+    return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+
+
 def _run_usage(agent) -> Dict[str, int]:
     """Terminal ``usage`` payload from the agent's session counters; a missing or non-numeric
-    counter (test doubles, agents without cache accounting) reads as ``0``."""
-    usage = {}
-    for key, attr in _USAGE_FIELDS:
-        value = getattr(agent, attr, 0)
-        usage[key] = int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+    counter (test doubles, agents without cache accounting) reads as ``0``. ``context_tokens`` /
+    ``context_length``: the last model call against the model's window (Crema's context ring)."""
+    usage = {key: _counter(agent, attr) for key, attr in _USAGE_FIELDS}
+    engine = getattr(agent, "context_compressor", None)
+    usage.update(context_tokens=_counter(engine, "last_prompt_tokens"), context_length=_counter(engine, "context_length"))
     return usage
 
 

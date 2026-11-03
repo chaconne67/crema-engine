@@ -89,7 +89,8 @@
 - 입력창 도구줄
   - **+**: 파일을 첨부한다.
   - **명령 메뉴**
-  - **모델 칩**: 옆에 사용량이 짧게 보인다(구독은 한도 %, API 키는 이 대화의 비용). [models-and-connections.md](models-and-connections.md#사용량-보기)
+  - **원형 차트**: 이 대화의 컨텍스트가 찬 만큼 채워진다. 누르면 사용량 창. [models-and-connections.md](models-and-connections.md#사용량-보기)
+  - **모델 칩**
   - **승인 칩**(방패): [engine.md](engine.md#명령-승인)
   - **마이크**: [models-and-connections.md](models-and-connections.md#음성-입력)
   - **보내기/멈추기**
@@ -153,7 +154,7 @@
 | `/reasoning [낮음·보통·높음·매우높음·기본]` (`/추론`) | 이 대화의 추론 강도를 바꾼다 | 됨 |
 | `/fast [켜기·끄기]` (`/빠르게`) | 빠른 속도를 켜고 끈다. 지원 모델만 되고, 구독 사용량이 더 들 수 있다 | 됨 |
 | `/status` (`/상태`) | 연결, 엔진 버전, 모델, 추론 강도, 프로젝트, 이번 세션의 메시지·토큰 수 | 됨 |
-| `/usage` (`/사용량`) | 구독이면 그 AI 회사 방식의 한도(ChatGPT는 남은 %, Claude는 쓴 %)와 다시 차는 시각, API 키면 이 대화의 토큰과 비용: [models-and-connections.md](models-and-connections.md#사용량-보기) | 됨 |
+| `/usage` (`/사용량`) | 사용량 창을 연다: 컨텍스트, 구독이면 5시간·주간 한도와 초기화 시각, API 키면 이 대화의 토큰과 비용. [models-and-connections.md](models-and-connections.md#사용량-보기) | 됨 |
 | `/help` (`/도움말`) | 명령 목록 | 됨 |
 
 - 이 표의 명령과 아래 스킬 말고는 없다. 다른 에이전트 프로그램에서 쓰는 `/compress`, `/restart`, `/skills` 같은 명령은 Crema에 없다. 표에도 스킬에도 없는 `/명령`을 보내면 명령이 아니라 보통 글로 에이전트에게 간다.

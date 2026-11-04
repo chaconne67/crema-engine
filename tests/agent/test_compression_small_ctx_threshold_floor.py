@@ -7,7 +7,7 @@ Covers the July 2026 compression tuning pass:
    blocks) must never reach the summarizer prompt, and traces emitted BY the
    summarizer model must never be stored in the summary.
 2. Head/tail protection budgets stay proportionate (tail = 20% of threshold).
-3. Summary token budget is bounded to the 1K-10K envelope.
+3. The summary call carries no wire-level max_tokens (the prompt names no length either).
 4. Models with context windows below 512K get their compression threshold
    floored at 75% (raise-only — a higher configured value always wins).
 """
@@ -86,7 +86,7 @@ class TestReasoningExcludedFromSummarizer:
 
 class TestSummaryBudgetEnvelope:
     def test_no_max_tokens_wire_cap_on_summary_call(self):
-        """The summary budget is PROMPT GUIDANCE only ("Target ~N tokens").
+        """The summary call carries no max_tokens: its length is left to the model.
 
         A wire-level max_tokens cap truncates summaries mid-section on the
         Anthropic Messages / NVIDIA NIM paths (which forward the param), and

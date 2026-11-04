@@ -390,4 +390,14 @@ def compress_after_tool_results(
                 # read_file bodies survive only as one-line markers, so the repeat-read dedup must
                 # stop answering "unchanged" for them or the reload the marker asks for is refused.
                 _reset_read_dedup_caches(effective_task_id, session_id=agent.session_id or "")
+        # Early compaction (주인님 2026-11-04): from 85% of the threshold the summary is written in the
+        # background, so the compaction at the threshold (any path) does not make the user wait for it.
+        _should_start_early = getattr(_compressor, "should_start_early_compaction", None)
+        if callable(_should_start_early) and _should_start_early(_real_tokens):
+            from agent.conversation_compression import _pre_compress_memory_context
+
+            _compressor.start_early_compaction(
+                messages, _real_tokens, memory_context=_pre_compress_memory_context(agent, messages, False),
+                cancel_event=getattr(agent, "_hard_interrupt_requested", None),
+            )
     return _verdict(False)

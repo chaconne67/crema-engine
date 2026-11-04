@@ -11,7 +11,7 @@ import sqlite3
 import re
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from agent.image_eviction_policy import outbound_image_retire_count
@@ -810,12 +810,19 @@ class _CompressionAssembly:
 @dataclass
 class _EarlyCompaction:
     """One background summary: the anchors of the messages it covers, its thread, and on success the
-    assembly plus the compressor state the summary step wrote."""
+    assembly plus the compressor state the summary step wrote. It is also the summary call's stop
+    source: set when any reply that uses it is stopped, or once it is dropped (replaced, or its
+    waiting compaction was cancelled)."""
     anchors: List[Any]
     progress: int = 0
     thread: Any = None
     assembly: Optional[_CompressionAssembly] = None
     state: Optional[Dict[str, Any]] = None
+    stops: List[Any] = field(default_factory=list)
+    dropped: bool = False
+
+    def is_set(self) -> bool:
+        return self.dropped or any(stop.is_set() for stop in self.stops)
 
 
 def _early_message_anchor(msg: Any) -> Any:
@@ -832,6 +839,18 @@ def _early_message_anchor(msg: Any) -> Any:
         return role, msg.get("tool_call_id")
     calls = tuple(c.get("id") for c in msg.get("tool_calls") or () if isinstance(c, dict))
     return role, msg.get("content"), calls
+
+
+def _early_summary_still_fits(job: _EarlyCompaction, messages: List[Dict[str, Any]]) -> bool:
+    """True while ``messages`` still begin with the messages ``job`` summarized."""
+    n = len(job.anchors)
+    return len(messages) >= n and all(_early_message_anchor(messages[i]) == job.anchors[i] for i in range(n))
+
+
+# The early summary of each conversation, by session id. The gateway builds a new agent (and
+# compressor) for every reply, so a summary written during one reply is kept here for the reply that
+# reaches the threshold. Consumed by that compaction; a rewrite replaces it.
+_EARLY_COMPACTIONS: Dict[Any, _EarlyCompaction] = {}
 
 
 def _early_state_key_is_attempt_owned(key: str) -> bool:
@@ -5412,15 +5431,25 @@ Write only the summary body. Do not include any preamble or prefix."""
     # threshold — compress(), on every path — takes that result when the transcript still begins
     # with the same messages, waiting for it if it is still being written, and appends the turns
     # added since as tail. Finalize, the session commit and all notices stay on the normal path.
+    # The job is kept per conversation (_EARLY_COMPACTIONS), so it outlives the reply that started it.
+
+    @property
+    def _early_compaction(self) -> Optional[_EarlyCompaction]:
+        return _EARLY_COMPACTIONS.get(getattr(self, "_session_id", "") or id(self))
+
+    @_early_compaction.setter
+    def _early_compaction(self, job: Optional[_EarlyCompaction]) -> None:
+        key = getattr(self, "_session_id", "") or id(self)
+        if job is None:
+            _EARLY_COMPACTIONS.pop(key, None)
+        else:
+            _EARLY_COMPACTIONS[key] = job
 
     def should_start_early_compaction(self, prompt_tokens: int) -> bool:
         """True from the early-start share of the threshold up to the threshold itself (at the
-        threshold the normal compaction runs), when no early summary is already on its way."""
+        threshold the normal compaction runs)."""
         threshold = int(getattr(self, "threshold_tokens", 0) or 0)
-        return (
-            threshold > 0 and getattr(self, "_early_compaction", None) is None
-            and threshold * _EARLY_COMPACTION_START_RATIO <= prompt_tokens < threshold
-        )
+        return threshold > 0 and threshold * _EARLY_COMPACTION_START_RATIO <= prompt_tokens < threshold
 
     def start_early_compaction(
         self, messages: List[Dict[str, Any]], current_tokens: Optional[int] = None, memory_context: str = "",
@@ -5428,23 +5457,32 @@ Write only the summary body. Do not include any preamble or prefix."""
     ) -> None:
         """Write the summary for ``messages`` in the background; compress() adopts it later.
         ``cancel_event`` is the agent's explicit-stop Event: a stop ends the summary call as it ends a
-        normal one (the provider stream then finishes in its own daemon)."""
+        normal one (the provider stream then finishes in its own daemon). When this conversation already
+        has a summary for the messages it begins with (written or on its way, in this reply or an
+        earlier one), none is written: this reply's stop is added to that summary's instead."""
         import threading
 
         from agent.auxiliary_client import aux_progress_hook
 
+        job = self._early_compaction
+        if job is not None and _early_summary_still_fits(job, messages):
+            if cancel_event is not None and all(stop is not cancel_event for stop in job.stops):
+                job.stops.append(cancel_event)
+            return
+        if job is not None:
+            job.dropped = True  # the transcript was rewritten: that summary is never used
         try:
             snapshot = copy.deepcopy(messages)
         except Exception as exc:
             logger.warning("Early compaction not started: transcript could not be copied (%s)", exc)
             return
         worker = copy.copy(self)
-        worker._early_compaction = None
         # A candidate summary that may never be used records nothing in the session row (a failure
         # here must not arm the durable cooldown that gates the threshold compaction).
         worker._session_db, worker._session_id = None, ""
         before = dict(worker.__dict__)
-        job = _EarlyCompaction(anchors=[_early_message_anchor(m) for m in messages])
+        job = _EarlyCompaction(anchors=[_early_message_anchor(m) for m in messages],
+                               stops=[cancel_event] if cancel_event is not None else [])
 
         def _tick() -> None:
             job.progress += 1
@@ -5452,7 +5490,7 @@ Write only the summary body. Do not include any preamble or prefix."""
         def _run() -> None:
             try:
                 telemetry = worker._begin_compress_attempt(current_tokens, False)
-                with aux_interrupt_protection(cancel_event=cancel_event), aux_progress_hook(_tick):
+                with aux_interrupt_protection(cancel_event=job), aux_progress_hook(_tick):
                     outcome = worker._compress_to_assembly(
                         snapshot, telemetry, current_tokens, None, False, memory_context, False,
                     )
@@ -5488,9 +5526,11 @@ Write only the summary body. Do not include any preamble or prefix."""
             return None
         self._early_compaction = None
         if not usable:
+            job.dropped = True
             return None
         n = len(job.anchors)
-        if len(messages) < n or any(_early_message_anchor(messages[i]) != job.anchors[i] for i in range(n)):
+        if not _early_summary_still_fits(job, messages):
+            job.dropped = True
             logger.info("Early compaction discarded: the transcript was rewritten since it started")
             return None
         if job.thread.is_alive():
@@ -5500,17 +5540,21 @@ Write only the summary body. Do not include any preamble or prefix."""
 
             # The wait stands where the summary call would: the summary's stream progress reaches this
             # attempt's watchdog, and the wait ends the same way when the host cancels (timeout) or a
-            # newer attempt takes over; an explicit stop ends the summary itself (cancel_event). The
-            # job is already consumed, so a summary that finishes later is dropped.
+            # newer attempt takes over. The job is already consumed, so a wait that ends early also
+            # ends the summary call (its result would be dropped).
             seen = job.progress
-            while job.thread.is_alive():
-                if self._compression_cancelled():
-                    raise AuxiliaryExplicitCancellation()
-                _raise_if_stale_attempt(self)
-                job.thread.join(0.2)
-                if job.progress != seen:
-                    seen = job.progress
-                    _notify_aux_progress()
+            try:
+                while job.thread.is_alive():
+                    if self._compression_cancelled():
+                        raise AuxiliaryExplicitCancellation()
+                    _raise_if_stale_attempt(self)
+                    job.thread.join(0.2)
+                    if job.progress != seen:
+                        seen = job.progress
+                        _notify_aux_progress()
+            except BaseException:
+                job.dropped = True
+                raise
         if job.assembly is None:
             return None
         # Carry the summary-step state (previous summary, regions, result flags) — never the attempt

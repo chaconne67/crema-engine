@@ -52,6 +52,21 @@ def _wait_done(c: ContextCompressor) -> None:
     assert not job.thread.is_alive()
 
 
+@pytest.fixture(autouse=True)
+def _no_early_summary_left_between_tests():
+    from agent.context_compressor import _EARLY_COMPACTIONS
+
+    yield
+    _EARLY_COMPACTIONS.clear()
+
+
+def _reply_compressor(session_id: str) -> ContextCompressor:
+    """The compressor of one reply: the gateway builds a new agent, so a new compressor, per reply."""
+    c = _compressor()
+    c.bind_session_state(None, session_id)
+    return c
+
+
 class TestEarlyCompaction:
     def test_start_returns_while_the_summary_is_still_being_written(self):
         c = _compressor()
@@ -191,6 +206,49 @@ class TestEarlyCompaction:
         assert "EARLY_SUMMARY_TEXT" in _contents(out)
 
 
+class TestEarlySummaryOutlivesTheReply:
+    def test_the_next_reply_uses_the_summary_an_earlier_reply_wrote(self):
+        calls = []
+
+        def fake(**_kw):
+            calls.append(1)
+            return _resp(SUMMARY)
+
+        msgs = _msgs(30)
+        live = msgs + [{"role": "user", "content": "LATE_USER"}, {"role": "assistant", "content": "LATE_REPLY"}]
+        with patch("agent.context_compressor.call_llm", side_effect=fake):
+            first = _reply_compressor("S")
+            first.start_early_compaction(msgs, current_tokens=80_000)
+            _wait_done(first)
+            second = _reply_compressor("S")
+            second.start_early_compaction(live, current_tokens=82_000)
+            out = second.compress(live, current_tokens=90_000)
+        assert len(calls) == 1
+        assert "EARLY_SUMMARY_TEXT" in _contents(out)
+        assert [m["content"] for m in out[-2:]] == ["LATE_USER", "LATE_REPLY"]
+
+    def test_the_next_reply_writes_a_new_summary_after_a_rewrite(self):
+        msgs = _msgs(30)
+        rewritten = copy.deepcopy(msgs)
+        rewritten[5]["content"] = "edited after the summary started"
+        with patch("agent.context_compressor.call_llm", return_value=_resp(SUMMARY)) as call:
+            first = _reply_compressor("S")
+            first.start_early_compaction(msgs, current_tokens=80_000)
+            _wait_done(first)
+            second = _reply_compressor("S")
+            second.start_early_compaction(rewritten, current_tokens=80_000)
+            _wait_done(second)
+        assert call.call_count == 2
+
+    def test_another_conversation_does_not_get_the_summary(self):
+        msgs = _msgs(30)
+        with patch("agent.context_compressor.call_llm", return_value=_resp(SUMMARY)):
+            first = _reply_compressor("S")
+            first.start_early_compaction(msgs, current_tokens=80_000)
+            _wait_done(first)
+        assert _reply_compressor("OTHER")._early_compaction is None
+
+
 class TestSummaryLengthIsLeftToTheConversation:
     def test_prompt_names_no_token_target(self):
         c = _compressor()
@@ -257,12 +315,26 @@ def _after_tools(agent, messages):
     )
 
 
+def _db_agent(db):
+    """A real AIAgent on the "EARLY" session with a real compressor, as the gateway builds per reply."""
+    from run_agent import AIAgent
+
+    a = AIAgent(
+        api_key="test-key-1234567890", base_url="https://openrouter.ai/api/v1", model="test/model",
+        quiet_mode=True, session_db=db, session_id="EARLY", skip_context_files=True, skip_memory=True,
+    )
+    a._compression_feasibility_checked = True
+    c = _compressor()
+    c.bind_session_state(db, "EARLY")
+    a.context_compressor = c
+    return a
+
+
 @pytest.fixture()
 def agent_with_db(tmp_path):
     """A real AIAgent on a real SessionDB with a real compressor: the path every compaction takes
     (AIAgent._compress_context → progress-timeout worker → compress_context → compress)."""
     from hermes_state import SessionDB
-    from run_agent import AIAgent
 
     db = SessionDB(db_path=tmp_path / "state.db")
     db.create_session("EARLY", source="desktop")
@@ -274,15 +346,7 @@ def agent_with_db(tmp_path):
     for p in patches:
         p.start()
     try:
-        a = AIAgent(
-            api_key="test-key-1234567890", base_url="https://openrouter.ai/api/v1", model="test/model",
-            quiet_mode=True, session_db=db, session_id="EARLY", skip_context_files=True, skip_memory=True,
-        )
-        a._compression_feasibility_checked = True
-        c = _compressor()
-        c.bind_session_state(db, "EARLY")
-        a.context_compressor = c
-        yield a, db
+        yield _db_agent(db), db
     finally:
         for p in patches:
             p.stop()
@@ -321,6 +385,44 @@ class TestEarlyCompactionStops:
         assert c._early_compaction.assembly is None
         release.set()
 
+    def test_stopping_the_next_reply_before_the_threshold_ends_the_shared_summary(self):
+        started, release = threading.Event(), threading.Event()
+        first_stop, second_stop = threading.Event(), threading.Event()
+        msgs = _msgs(30)
+        with patch("agent.context_compressor.call_llm", side_effect=_stoppable_call(started, release)) as call:
+            first = _reply_compressor("S")
+            first.start_early_compaction(msgs, current_tokens=80_000, cancel_event=first_stop)
+            assert started.wait(10)
+            job = first._early_compaction
+            second = _reply_compressor("S")
+            second.start_early_compaction(msgs + [{"role": "user", "content": "LATE_USER"}], current_tokens=82_000,
+                                          cancel_event=second_stop)
+            second.start_early_compaction(msgs + [{"role": "user", "content": "LATE_USER"}], current_tokens=83_000,
+                                          cancel_event=second_stop)
+            assert second._early_compaction is job
+            second_stop.set()
+            job.thread.join(5)
+            alive = job.thread.is_alive()
+            release.set()
+        assert not alive
+        assert call.call_count == 1
+
+    def test_a_rewrite_ends_the_summary_it_replaces(self):
+        started, release = threading.Event(), threading.Event()
+        msgs = _msgs(30)
+        rewritten = copy.deepcopy(msgs)
+        rewritten[5]["content"] = "edited after the summary started"
+        with patch("agent.context_compressor.call_llm", side_effect=_stoppable_call(started, release)):
+            first = _reply_compressor("S")
+            first.start_early_compaction(msgs, current_tokens=80_000)
+            assert started.wait(10)
+            old = first._early_compaction
+            _reply_compressor("S").start_early_compaction(rewritten, current_tokens=80_000)
+            old.thread.join(5)
+            alive = old.thread.is_alive()
+            release.set()
+        assert not alive
+
     def test_the_wait_passes_the_summary_progress_to_the_waiting_attempt(self):
         from agent.auxiliary_client import aux_progress_hook
 
@@ -357,6 +459,25 @@ class TestEarlyCompactionOnTheRealPath:
         assert "EARLY_SUMMARY_TEXT" in _contents(out)
         assert out[-1]["content"] == "LATE_USER"
 
+    def test_the_next_replys_agent_takes_the_early_summary(self, agent_with_db):
+        first, db = agent_with_db
+        calls = []
+
+        def fake(**_kw):
+            calls.append(1)
+            return _resp(SUMMARY)
+
+        msgs = _msgs(30, 2000)
+        with patch("agent.context_compressor.call_llm", side_effect=fake):
+            first.context_compressor.start_early_compaction(msgs, current_tokens=80_000)
+            _wait_done(first.context_compressor)
+            second = _db_agent(db)
+            out, _prompt = second._compress_context(msgs + [{"role": "user", "content": "LATE_USER"}], "sys",
+                                                    approx_tokens=90_000)
+        assert len(calls) == 1
+        assert "EARLY_SUMMARY_TEXT" in _contents(out)
+        assert out[-1]["content"] == "LATE_USER"
+
     def test_stop_while_the_compaction_waits_returns_promptly(self, agent_with_db):
         agent, _db = agent_with_db
         started, release = threading.Event(), threading.Event()
@@ -372,6 +493,28 @@ class TestEarlyCompactionOnTheRealPath:
             agent.hard_interrupt()
             owner.join(5)
             alive = owner.is_alive()
+            release.set()
+            owner.join(10)
+        assert not alive
+
+    def test_stopping_the_next_reply_while_it_waits_ends_the_shared_summary(self, agent_with_db):
+        first, db = agent_with_db
+        started, release = threading.Event(), threading.Event()
+        msgs = _msgs(30, 2000)
+        with patch("agent.context_compressor.call_llm", side_effect=_stoppable_call(started, release)):
+            first.context_compressor.start_early_compaction(
+                msgs, current_tokens=80_000, cancel_event=first._hard_interrupt_requested,
+            )
+            assert started.wait(10)
+            job = first.context_compressor._early_compaction
+            second = _db_agent(db)
+            owner = threading.Thread(target=lambda: second._compress_context(msgs, "sys", approx_tokens=90_000))
+            owner.start()
+            time.sleep(0.5)
+            second.hard_interrupt()
+            owner.join(5)
+            job.thread.join(5)
+            alive = job.thread.is_alive()
             release.set()
             owner.join(10)
         assert not alive

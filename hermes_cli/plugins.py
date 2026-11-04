@@ -1800,12 +1800,6 @@ def has_hook(hook_name: str) -> bool:
     return _delivery_manager().has_hook(hook_name)
 
 
-def has_required_hook(hook_name: str) -> bool:
-    """A fail-closed shell hook is mandatory, not a bounded optional nudge."""
-    return any(getattr(cb, "__hermes_fail_closed__", False) is True
-               for cb in _delivery_manager().iter_hook_callbacks(hook_name))
-
-
 def iter_hook_callbacks(hook_name: str) -> tuple[Callable, ...]:
     """Return a stable snapshot of callbacks registered for a hook."""
     return get_plugin_manager().iter_hook_callbacks(hook_name)

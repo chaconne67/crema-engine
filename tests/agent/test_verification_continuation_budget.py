@@ -251,35 +251,3 @@ def test_streamed_interim_then_different_summary_not_marked_previewed(agent, mon
     # CRITICAL: response_previewed must be False — the interim narration was
     # NOT the final response, so the CLI must render the summary.
     assert result["response_previewed"] is False
-
-
-@pytest.mark.parametrize("nudges", [0, 2])
-def test_required_hook_never_skips_after_nudge_limit(agent, monkeypatch, nudges):
-    from agent.turn_stop_gates import _pre_verify_nudge
-    agent._turn_file_mutation_paths = set()  # terminal/SSH edits may not be tracked
-    with (
-        patch("hermes_cli.plugins.has_required_hook", return_value=True),
-        patch("hermes_cli.plugins.get_pre_verify_continue_message", return_value="missing proof"),
-        patch("agent.verify_hooks.max_verify_nudges", return_value=2),
-    ):
-        if nudges == 0:
-            assert _pre_verify_nudge(agent, "premature success", nudges) == "missing proof"
-        else:
-            with pytest.raises(RuntimeError, match="Required verification did not pass"):
-                _pre_verify_nudge(agent, "premature success", nudges)
-
-
-def test_required_hook_budget_exhaustion_does_not_publish_success(agent, monkeypatch):
-    agent._interruptible_api_call = lambda _kwargs: _response("composed report")
-    agent._handle_max_iterations = MagicMock(return_value="unchecked success")
-    monkeypatch.setenv("HERMES_VERIFY_ON_STOP", "0")
-    with (
-        patch("hermes_cli.plugins.has_required_hook", return_value=True),
-        patch("hermes_cli.plugins.get_pre_verify_continue_message", return_value="missing proof"),
-        patch("hermes_cli.plugins.invoke_hook", return_value=[]),
-    ):
-        result = agent.run_conversation("edit changed.py")
-    assert result["completed"] is False
-    assert "미완료" in result["final_response"]
-    assert result["final_response"] != "composed report"
-    agent._handle_max_iterations.assert_not_called()

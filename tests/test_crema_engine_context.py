@@ -50,3 +50,19 @@ def test_continuing_chat_counts_its_stored_prompt_and_history(monkeypatch):
     api, _ = _api(FakeDb(history, prompt="처음 지시"), checked_in)
     assert crema_engine.estimate_context(api, "agent-client-x")["used"] == 17_002
     assert seen[0][:2] == (history, "처음 지시")
+
+
+def test_crema_compresses_a_1m_chat_at_half_its_window():
+    """주인님 2026-11-04: no absolute cap — a 1M-window chat stays whole to 500K, not upstream's 256K."""
+    from unittest.mock import patch
+
+    from agent.context_compressor import ContextCompressor
+    from hermes_cli.config import DEFAULT_CONFIG
+
+    compression = DEFAULT_CONFIG["compression"]
+    assert compression["threshold_tokens"] is None
+    with patch("agent.context_compressor.get_model_context_length", return_value=1_000_000):
+        comp = ContextCompressor("model-a", threshold_percent=compression["threshold"],
+                                 threshold_tokens_cap=compression["threshold_tokens"], quiet_mode=True)
+        _ = comp.context_length
+    assert comp.threshold_tokens == 500_000

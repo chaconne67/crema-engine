@@ -159,9 +159,11 @@ class TestExtractCacheBustingConfig:
         for section, key in GatewayRunner._CACHE_BUSTING_CONFIG_KEYS:
             assert out[f"{section}.{key}"] == cfg_get(DEFAULT_CONFIG, section, key)
 
-    def test_explicit_null_differs_from_absent_when_default_is_set(self):
+    def test_explicit_null_differs_from_absent_when_default_is_set(self, monkeypatch):
         """`threshold_tokens: null` opts out of the shipped cap; the signature must keep it distinct from
         'absent' (= the default) so the opt-out rebuilds the cached agent instead of waiting for a restart."""
+        from hermes_cli.config import DEFAULT_CONFIG as _DEFAULTS
+        monkeypatch.setitem(_DEFAULTS['compression'], 'threshold_tokens', 256_000)  # upstream's cap; Crema ships none
         from gateway.run import GatewayRunner
 
         default_cap = DEFAULT_CONFIG["compression"]["threshold_tokens"]

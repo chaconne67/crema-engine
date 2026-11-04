@@ -2076,9 +2076,11 @@ class TestThresholdTokensCap:
         assert comp.threshold_tokens_cap is None
 
     @pytest.mark.parametrize("context_length", [128_000, 1_000_000])
-    def test_default_config_uses_lower_effective_trigger(self, context_length):
+    def test_default_config_uses_lower_effective_trigger(self, context_length, monkeypatch):
         """Shipped defaults: the trigger is the LOWER of the ratio trigger and the absolute cap, so a
         1M window compacts at the cap while windows whose ratio trigger sits below it are untouched."""
+        from hermes_cli.config import DEFAULT_CONFIG as _DEFAULTS
+        monkeypatch.setitem(_DEFAULTS['compression'], 'threshold_tokens', 256_000)  # upstream's cap; Crema ships none
         from hermes_cli.config import DEFAULT_CONFIG
 
         default_pct = DEFAULT_CONFIG["compression"]["threshold"]
@@ -2137,9 +2139,10 @@ class TestThresholdTokensCap:
         assert comp.should_compress(200_000) is True    # at cap (below 500K pct)
         assert comp.should_compress(250_000) is True    # above cap
 
-    def test_default_config_cap_survives_model_switch(self):
+    def test_default_config_cap_survives_model_switch(self, monkeypatch):
         """The shipped cap remains effective when the active model changes."""
         from hermes_cli.config import DEFAULT_CONFIG
+        monkeypatch.setitem(DEFAULT_CONFIG['compression'], 'threshold_tokens', 256_000)  # upstream's cap; Crema ships none
 
         with patch("agent.context_compressor.get_model_context_length", return_value=1_000_000):
             comp = ContextCompressor(

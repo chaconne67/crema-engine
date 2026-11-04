@@ -115,6 +115,8 @@ def test_unchanged_compression_config_is_noop(monkeypatch):
 
 
 def test_clearing_threshold_tokens_restores_default_cap(monkeypatch):
+    from hermes_cli.config_defaults import DEFAULT_CONFIG as _DEFAULTS
+    monkeypatch.setitem(_DEFAULTS['compression'], 'threshold_tokens', 256_000)  # upstream's cap; Crema ships none
     session, compressor = _session_with_compressor(threshold_tokens_cap=100_000)
     assert compressor.threshold_tokens == 100_000
 
@@ -139,6 +141,8 @@ def test_absent_threshold_tokens_keeps_default_cap_on_1m_window(monkeypatch):
     compression.threshold_tokens used to wipe the ctor-installed 256K cap at the first
     turn's sync — the trigger re-derived to the uncapped ratio value (500K on a 1M window)
     and compaction stopped firing at 256K while telemetry still reported the capped figure."""
+    from hermes_cli.config_defaults import DEFAULT_CONFIG as _DEFAULTS
+    monkeypatch.setitem(_DEFAULTS['compression'], 'threshold_tokens', 256_000)  # upstream's cap; Crema ships none
     compressor = ContextCompressor(
         model="unset-test-model",
         threshold_percent=0.85,
@@ -240,6 +244,8 @@ def test_removing_compressor_keys_restores_fresh_build_values(monkeypatch):
 
 
 def test_removing_threshold_restores_derived_default(monkeypatch):
+    from hermes_cli.config_defaults import DEFAULT_CONFIG as _DEFAULTS
+    monkeypatch.setitem(_DEFAULTS['compression'], 'threshold_tokens', 256_000)  # upstream's cap; Crema ships none
     session, compressor = _neutral_session(threshold_percent=0.85)
     assert compressor.threshold_percent == 0.85
     _sync_with_cfg(
@@ -254,6 +260,8 @@ def test_removing_threshold_restores_derived_default(monkeypatch):
 
 
 def test_removing_context_length_reinfers_from_model_metadata(monkeypatch):
+    from hermes_cli.config_defaults import DEFAULT_CONFIG as _DEFAULTS
+    monkeypatch.setitem(_DEFAULTS['compression'], 'threshold_tokens', 256_000)  # upstream's cap; Crema ships none
     import agent.context_compressor as cc_mod
 
     session, compressor = _neutral_session()

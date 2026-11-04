@@ -102,6 +102,12 @@ async def main() -> None:
 
     get_plugin_manager()._hooks.setdefault("transform_llm_output", []).append(drop_next_input)
     crema_failures.observe(get_plugin_manager())
+    # The shell hooks in config.yaml (`hooks:`, only the allowlisted ones), as the Hermes gateway registers them at
+    # its start (gateway/run_startup.py); without this a configured hook never runs in Crema.
+    from agent.shell_hooks import register_from_config
+    from hermes_cli.config import load_config
+
+    register_from_config(load_config(), accept_hooks=False)
 
     import uvicorn
     from fastapi import FastAPI, HTTPException, Request

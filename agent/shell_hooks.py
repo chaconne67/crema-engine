@@ -41,7 +41,7 @@ _DEFAULT_BLOCK_MESSAGE = "Blocked by shell hook."
 # Exit code that signals "block this action" independent of stdout (Claude Code / Cursor).
 BLOCK_EXIT_CODE = 2
 # Events whose block directive is honored downstream; exit-2 blocking and fail_closed only apply here.
-_BLOCKING_EVENTS = frozenset({"pre_tool_call"})
+_BLOCKING_EVENTS = frozenset({"pre_tool_call", "pre_verify"})
 _TOOL_EVENTS = frozenset({"pre_tool_call", "post_tool_call"})
 _STDERR_MESSAGE_LIMIT = 400
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -374,6 +374,8 @@ def _make_callback(spec: ShellHookSpec) -> Callable[..., Optional[Dict[str, Any]
         return _evaluate_result(spec, _spawn(spec, _serialize_payload(spec.event, kwargs)))
 
     _callback.__name__ = _callback.__qualname__ = f"shell_hook[{spec.event}:{spec.command}]"
+    _callback.__hermes_fail_closed__ = spec.fail_closed
+    _callback.__hermes_timeout__ = spec.timeout + 5
     return _callback
 
 
@@ -407,8 +409,13 @@ def _evaluate_result(spec: ShellHookSpec, r: Dict[str, Any]) -> Optional[Dict[st
     if r["returncode"] != 0:
         logger.warning("shell hook exited %d (event=%s command=%s); stderr=%s",
                        r["returncode"], spec.event, spec.command, stderr[:_STDERR_MESSAGE_LIMIT])
+    if fail_closed and r["returncode"] != 0:
+        return _fail_closed_block(spec, stderr or f"exit {r['returncode']}")
     stdout = (r["stdout"] or "").strip()
     parsed = _parse_response(spec.event, stdout)
+    if fail_closed and spec.event == "pre_verify" and parsed is None:
+        if not _is_json_object(stdout) or json.loads(stdout).get("action") != "allow":
+            return _fail_closed_block(spec, "required verification returned no explicit decision")
     if parsed is None and fail_closed and stdout and not _is_json_object(stdout):
         # A fail-closed gate must not silently allow on garbage stdout (e.g. a stack trace).
         return _fail_closed_block(spec, "unparseable stdout (expected a JSON object)")

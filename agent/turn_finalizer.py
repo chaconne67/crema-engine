@@ -134,7 +134,10 @@ def _resolve_budget_fallback(
         and str(_turn_exit_reason) in {"unknown", "budget_exhausted"}
     ):
         _turn_exit_reason = f"max_iterations_reached({api_call_count}/{agent.max_iterations})"
-        if _pending_verification_response:
+        from hermes_cli.plugins import has_required_hook
+        if has_required_hook("pre_verify"):
+            final_response = "필수 검사가 끝나지 않아 작업이 미완료 상태입니다. 남은 확인이나 검사 오류를 해결한 뒤 이어서 진행해야 합니다."
+        elif _pending_verification_response:
             # A verification gate withheld a composed answer, then the budget ran out:
             # preserve it rather than make another fallible call. The explicit pending
             # value is the provenance guard; unrelated error exits never enter here.

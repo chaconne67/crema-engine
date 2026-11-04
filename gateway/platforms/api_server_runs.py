@@ -750,10 +750,10 @@ def _counter(owner, attr: str) -> int:
 def _run_usage(agent) -> Dict[str, int]:
     """Terminal ``usage`` payload from the agent's session counters; a missing or non-numeric
     counter (test doubles, agents without cache accounting) reads as ``0``. ``context_tokens`` /
-    ``context_length``: the last model call against the model's window (Crema's context ring)."""
+    ``context_threshold``: the last model call against where this chat is compressed (Crema's context ring)."""
     usage = {key: _counter(agent, attr) for key, attr in _USAGE_FIELDS}
     engine = getattr(agent, "context_compressor", None)
-    usage.update(context_tokens=_counter(engine, "last_prompt_tokens"), context_length=_counter(engine, "context_length"))
+    usage.update(context_tokens=_counter(engine, "last_prompt_tokens"), context_threshold=_counter(engine, "threshold_tokens"))
     return usage
 
 

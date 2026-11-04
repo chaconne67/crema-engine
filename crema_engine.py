@@ -522,7 +522,7 @@ def _remembering(config: dict) -> bool:
 
 def estimate_context(api, session_id: str, model: str = "", provider: str = "") -> dict:
     """``{used, max}`` tokens a call on this chat would carry now — instructions, tools and the chat so far — estimated
-    without asking the model, against the model's window. A reply's own count (run usage) replaces it in the app."""
+    without asking the model, against where the chat is compressed. A reply's own count (run usage) replaces it in the app."""
     from agent.model_metadata import estimate_request_tokens_rough
     from agent.system_prompt import build_system_prompt_parts
 
@@ -536,7 +536,7 @@ def estimate_context(api, session_id: str, model: str = "", provider: str = "") 
             parts = build_system_prompt_parts(agent)
             prompt = "\n\n".join(part for part in (parts["stable"], parts["context"], parts["volatile"]) if part)
         used = estimate_request_tokens_rough(messages, system_prompt=prompt, tools=agent.tools or None)
-        return {"used": used, "max": agent.context_compressor.context_length}
+        return {"used": used, "max": agent.context_compressor.threshold_tokens}
     finally:
         api._memory_sessions.checkin(agent)
 

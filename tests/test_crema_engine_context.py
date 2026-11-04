@@ -17,7 +17,7 @@ class FakeDb:
 
 
 def _api(db, checked_in):
-    agent = SimpleNamespace(tools=[{"name": "terminal"}], context_compressor=SimpleNamespace(context_length=500_000))
+    agent = SimpleNamespace(tools=[{"name": "terminal"}], context_compressor=SimpleNamespace(threshold_tokens=256_000))
     return SimpleNamespace(
         _ensure_session_db=lambda: db, _create_agent=lambda **_: agent,
         _memory_sessions=SimpleNamespace(checkin=checked_in.append)), agent
@@ -38,7 +38,7 @@ def test_new_chat_counts_the_prompt_built_now_and_tools(monkeypatch):
     monkeypatch.setattr(system_prompt, "build_system_prompt_parts",
                         lambda agent: {"stable": "기본 지시", "context": "", "volatile": "기억"})
     api, agent = _api(FakeDb([]), checked_in)
-    assert crema_engine.estimate_context(api, "agent-client-x") == {"used": 17_000, "max": 500_000}
+    assert crema_engine.estimate_context(api, "agent-client-x") == {"used": 17_000, "max": 256_000}
     assert seen == [([], "기본 지시\n\n기억", agent.tools)]
     assert checked_in == [agent]
 

@@ -428,9 +428,14 @@ async def main() -> None:
 NEXT_INPUT_LINE = re.compile(r"(?:(?:\A|\n)[ \t>*_`]*(?:CHAT_TITLE|NEXT_INPUT):[^\n]*){1,2}\s*\Z")
 
 
-def drop_next_input(response_text: str = "", **_) -> str | None:
+def drop_next_input(response_text: str = "", session_id: str = "", **_) -> str | None:
     """The `transform_llm_output` hook: the reply without its end lines (CHAT_TITLE, NEXT_INPUT), or None to keep it."""
     text = NEXT_INPUT_LINE.sub("", response_text or "").rstrip()
+    # The stored chat loses the line, so the log says what it was: a chat without the grey suggestion then shows
+    # whether the model left the line out or wrote "-" (주인님 2026-11-05).
+    end = re.search(r"NEXT_INPUT:([^\n]*)", (response_text or "")[len(text):])
+    kind = "missing" if not end else "none" if end.group(1).strip(" *_`") in ("", "-") else "given"
+    logging.getLogger(__name__).info("next input: session=%s %s", session_id, kind)
     return text if text and text != (response_text or "").rstrip() else None
 
 

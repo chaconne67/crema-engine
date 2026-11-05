@@ -22,3 +22,15 @@ def test_drops_the_chat_title_line_with_it():
     # Only the end lines: a third one up is the answer's own text.
     assert drop_next_input(response_text="CHAT_TITLE: 설명\n본문\nNEXT_INPUT: -") == "CHAT_TITLE: 설명\n본문"
     assert drop_next_input(response_text="CHAT_TITLE: 제목\nNEXT_INPUT: -") is None
+
+
+def test_logs_what_the_end_line_was(caplog):
+    caplog.set_level("INFO", logger="crema_engine")
+    drop_next_input(response_text="고쳤습니다.\nNEXT_INPUT: 커밋해 줘", session_id="agent-client-a")
+    drop_next_input(response_text="승인해 주세요.\n**NEXT_INPUT:** -", session_id="agent-client-b")
+    drop_next_input(response_text="그냥 답입니다.", session_id="agent-client-c")
+    assert [r.getMessage() for r in caplog.records] == [
+        "next input: session=agent-client-a given",
+        "next input: session=agent-client-b none",
+        "next input: session=agent-client-c missing",
+    ]

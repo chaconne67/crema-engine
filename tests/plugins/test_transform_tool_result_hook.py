@@ -164,3 +164,18 @@ def test_transform_tool_result_integration_with_real_plugin(monkeypatch, tmp_pat
         dispatch_result='{"payload": 42}',
     )
     assert out == 'CANON[some_tool]{"payload": 42}'
+
+
+def test_pre_tool_call_context_goes_before_the_result_once(monkeypatch):
+    """Claude-Code additionalContext from a hook lets the tool run and puts the text before the result of that call."""
+    import json
+    from agent import shell_hooks
+
+    stdout = json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "remember X"}})
+    with monkeypatch.context() as m:
+        m.setattr("hermes_cli.lifecycle.invoke_hook",
+                  lambda name, **kw: [shell_hooks._parse_response("pre_tool_call", stdout)])
+        details = plugins_mod._get_pre_tool_call_directive_details("dummy_tool", {}, tool_call_id="tc1")
+    assert details.action is None
+    assert _run_handle_function_call(monkeypatch) == "remember X\n\n" + '{"output": "original"}'
+    assert _run_handle_function_call(monkeypatch) == '{"output": "original"}'

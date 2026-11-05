@@ -1829,6 +1829,15 @@ def fire_pre_command_hook(
 
 
 _thread_tool_whitelist = threading.local()
+# tool_call_id -> text pre_tool_call hooks gave with ``{"action": "context", "message"}``; it goes before
+# that tool's result (model_tools._apply_transform_tool_result_hook).
+_pre_tool_context: Dict[str, str] = {}
+_pre_tool_context_lock = threading.Lock()
+
+
+def take_pre_tool_context(tool_call_id: Optional[str]) -> Optional[str]:
+    with _pre_tool_context_lock:
+        return _pre_tool_context.pop(tool_call_id, None) if tool_call_id else None
 
 
 @dataclass(frozen=True)
@@ -1861,7 +1870,8 @@ def _get_pre_tool_call_directive_details(
     human-approval gate; ``rule_key`` picks the ``[a]lways`` allowlist grain). Precedence is
     ``block`` > ``approve`` > none, not registration order: any plugin's valid veto wins over an
     earlier plugin's request for human confirmation (#87420); among approves the first valid one
-    wins. Irrelevant returns are ignored."""
+    wins. ``{"action": "context", "message"}`` lets the tool run with the message before its result.
+    Irrelevant returns are ignored."""
     allowed = getattr(_thread_tool_whitelist, "allowed", None)
     if allowed is not None and tool_name not in allowed:
         fmt = getattr(_thread_tool_whitelist, "fmt", "Tool '{tool_name}' denied")
@@ -1874,6 +1884,7 @@ def _get_pre_tool_call_directive_details(
     )
     modified_args: Optional[Dict[str, Any]] = None
     first_approve: Optional[Tuple[Optional[str], Optional[str]]] = None  # (message, rule_key)
+    contexts: List[str] = []
     for result in hook_results:
         if not isinstance(result, dict):
             continue
@@ -1886,6 +1897,10 @@ def _get_pre_tool_call_directive_details(
             if isinstance(partial, dict) and partial:
                 modified_args = {**(modified_args if modified_args is not None else
                                     (args if isinstance(args, dict) else {})), **partial}
+            continue
+        if action == "context":
+            if isinstance(result.get("message"), str) and result["message"]:
+                contexts.append(result["message"])
             continue
         if action not in ("block", "approve"):
             continue
@@ -1903,6 +1918,9 @@ def _get_pre_tool_call_directive_details(
     if first_approve is not None:
         return _PreToolCallDirective(action="approve", message=first_approve[0], rule_key=first_approve[1],
                                      modified_args=modified_args)
+    if contexts and tool_call_id:
+        with _pre_tool_context_lock:
+            _pre_tool_context[tool_call_id] = "\n\n".join(contexts)
     return _PreToolCallDirective(modified_args=modified_args)
 
 

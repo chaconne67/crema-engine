@@ -454,6 +454,11 @@ def _parse_pre_tool_call(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             if isinstance(value, str) and value.strip():
                 directive[key] = value.strip()
         return directive
+    # Claude-Code ``hookSpecificOutput.additionalContext``: the tool runs, the text goes before its result.
+    extra = data.get("hookSpecificOutput")
+    context = extra.get("additionalContext") if isinstance(extra, dict) else None
+    if isinstance(context, str) and context.strip():
+        return {"action": "context", "message": context.strip()}
     return None
 
 

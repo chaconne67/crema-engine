@@ -850,9 +850,14 @@ def _apply_transform_tool_result_hook(function_name: str, function_args: Dict[st
     """transform_tool_result: plugins may replace the final result string.
 
     Runs after post_tool_call and before the result enters context. Fail-open;
-    first string return wins. Gated on has_hook so the no-listener path is cheap.
+    first string return wins. Gated on has_hook so the no-listener path is cheap. Text a
+    pre_tool_call hook gave for this call goes first.
     """
     try:
+        from hermes_cli.plugins import take_pre_tool_context
+        context = take_pre_tool_context(ids.tool_call_id)
+        if context and isinstance(result, str):
+            result = f"{context}\n\n{result}"
         from hermes_cli.lifecycle import has_hook, invoke_hook
         if has_hook("transform_tool_result"):
             status, error_type, error_message = _tool_result_observer_fields(function_name, result)

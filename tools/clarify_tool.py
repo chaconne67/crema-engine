@@ -136,7 +136,8 @@ def _normalize_questions(questions) -> tuple:
     return normalized, None
 
 
-def _batch_result(normalized: List[dict], answers: dict, timed_out: bool, notice: Optional[str] = None) -> str:
+def _batch_result(normalized: List[dict], answers: dict, timed_out: bool, notice: Optional[str] = None,
+                  written: Optional[str] = None) -> str:
     """Batch result JSON; unanswered -> "". The top-level ``timed_out`` flag (present only when
     true) tells the agent whether blanks are deliberate skips or the user walking away; ``notice``
     (surface-supplied, only beside ``timed_out``) says WHY the wait ended, so an undeliverable
@@ -149,6 +150,9 @@ def _batch_result(normalized: List[dict], answers: dict, timed_out: bool, notice
             "question": entry["question"], "choices_offered": entry["choices_offered"],
             "user_response": _clean_answer(raw, entry["multi_select"]) if raw else ""})
     result: Dict[str, object] = {"responses": responses}
+    # Words the user wrote instead of picking (a surface that offers it): one message for the whole batch.
+    if written:
+        result["user_wrote_instead_of_picking"] = str(written)
     if timed_out:
         result["timed_out"] = True
         if notice:
@@ -166,6 +170,7 @@ def _run_batch(normalized: List[dict], callback, question: str) -> str:
     answers: dict = {}
     timed_out = False
     notice = None
+    written = None
     if _accepts_kwarg(callback, "questions"):
         raw = callback(question, None, questions=normalized)
         timed_out = _is_timeout(raw)
@@ -175,7 +180,8 @@ def _run_batch(normalized: List[dict], callback, question: str) -> str:
             answers = dict(raw.get("answers") or {})
             timed_out = bool(raw.get("timed_out"))
             notice = raw.get("notice")
-        return _batch_result(normalized, answers, timed_out, notice)
+            written = raw.get("text")
+        return _batch_result(normalized, answers, timed_out, notice, written)
     for entry in normalized:
         raw = _invoke_callback(callback, entry["question"], entry["choices"], entry["multi_select"])
         if _is_timeout(raw):

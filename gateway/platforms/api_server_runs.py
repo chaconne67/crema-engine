@@ -903,9 +903,11 @@ def _make_clarify_callback(self, run: _RunLaunch, *, _api_server) -> Callable[..
         if not raw:
             return TIMEOUT_RESPONSE
         reply = json.loads(raw)
-        # Words written instead of picking answer every question.
-        answers = reply.get("answers") or {entry["qid"]: reply["text"] for entry in asked}
-        return {"answers": answers} if questions else answers.get("q0", "")
+        # Words written instead of picking are one message for all the questions (it may answer them, or ask
+        # for something else, as "일단 중지"), so they go as they are, not as each question's answer.
+        if questions:
+            return {"answers": reply.get("answers") or {}, "text": reply.get("text")}
+        return (reply.get("answers") or {}).get("q0") or reply.get("text", "")
 
     return _clarify
 

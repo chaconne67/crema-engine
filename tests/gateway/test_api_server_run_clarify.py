@@ -46,11 +46,11 @@ async def _ask(cli):
     raise AssertionError("no clarify.request")
 
 
-async def _output(cli, run_id):
+async def _result(cli, run_id):
     for _ in range(60):
         status = await (await cli.get(f"/v1/runs/{run_id}")).json()
         if status["status"] == "completed":
-            return [r["user_response"] for r in json.loads(status["output"])["responses"]]
+            return json.loads(status["output"])
         await asyncio.sleep(0.05)
     raise AssertionError("run did not complete")
 
@@ -67,17 +67,20 @@ async def test_picked_answers_reach_the_tool():
             reply = await cli.post(f"/v1/runs/{run_id}/clarify", json={
                 "clarify_id": event["clarify_id"], "answers": {"q0": "One build", "q1": "The installer"}})
             assert reply.status == 200
-            assert await _output(cli, run_id) == ["One build", "The installer"]
+            assert [r["user_response"] for r in (await _result(cli, run_id))["responses"]] == ["One build", "The installer"]
 
 
 @pytest.mark.asyncio
-async def test_written_words_answer_every_question_and_a_stale_id_is_refused():
+async def test_written_words_go_as_one_message_and_a_stale_id_is_refused():
     adapter = APIServerAdapter(PlatformConfig(enabled=True))
     with patch.object(adapter, "_create_agent", return_value=_asking_agent()):
         async with TestClient(TestServer(_app(adapter))) as cli:
             run_id, event = await _ask(cli)
             stale = await cli.post(f"/v1/runs/{run_id}/clarify", json={"clarify_id": "old", "text": "all A"})
             assert (stale.status, (await stale.json())["error"]["code"]) == (409, "clarify_not_pending")
-            words = "all recommended, the second one B"
+            # Not every question's answer (주인님 2026-11-05: "일단 중지" came out as "일단" five times).
+            words = "stop for now"
             await cli.post(f"/v1/runs/{run_id}/clarify", json={"clarify_id": event["clarify_id"], "text": words})
-            assert await _output(cli, run_id) == [words, words]
+            result = await _result(cli, run_id)
+            assert [r["user_response"] for r in result["responses"]] == ["", ""]
+            assert result["user_wrote_instead_of_picking"] == words

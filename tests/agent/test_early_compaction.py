@@ -7,6 +7,7 @@ The summary prompt carries no fixed length target: the conversation decides how 
 from __future__ import annotations
 
 import copy
+import logging
 import threading
 import time
 from unittest.mock import MagicMock, patch
@@ -239,6 +240,25 @@ class TestEarlySummaryOutlivesTheReply:
             second.start_early_compaction(rewritten, current_tokens=80_000)
             _wait_done(second)
         assert call.call_count == 2
+
+    def test_the_log_says_where_the_transcript_differs_without_its_text(self, caplog):
+        msgs = _msgs(30)
+        rewritten = copy.deepcopy(msgs)
+        rewritten[5]["content"] = msgs[5]["content"] + " EDITED_TAIL"
+        with patch("agent.context_compressor.call_llm", return_value=_resp(SUMMARY)):
+            first = _reply_compressor("S")
+            first.start_early_compaction(msgs, current_tokens=80_000)
+            _wait_done(first)
+            with caplog.at_level(logging.INFO, logger="agent.context_compressor"):
+                second = _reply_compressor("S")
+                second.start_early_compaction(rewritten, current_tokens=80_000)
+                _wait_done(second)
+        line = next(r.getMessage() for r in caplog.records if "differs" in r.getMessage())
+        assert "message 5 of 30" in line
+        assert f"then assistant, {len(msgs[5]['content'])} chars" in line
+        assert f"now assistant, {len(rewritten[5]['content'])} chars" in line
+        assert "grew" in line
+        assert "EDITED_TAIL" not in line and "msg 5" not in line
 
     def test_another_conversation_does_not_get_the_summary(self):
         msgs = _msgs(30)

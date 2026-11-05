@@ -841,10 +841,41 @@ def _early_message_anchor(msg: Any) -> Any:
     return role, msg.get("content"), calls
 
 
-def _early_summary_still_fits(job: _EarlyCompaction, messages: List[Dict[str, Any]]) -> bool:
-    """True while ``messages`` still begin with the messages ``job`` summarized."""
+def _early_summary_difference(job: _EarlyCompaction, messages: List[Dict[str, Any]]) -> Optional[str]:
+    """None while ``messages`` still begin with the messages ``job`` summarized; otherwise where they
+    differ, for the engine log. Only shapes are named (role, text length, call count), never the text."""
+
+    def shape(anchor: Any) -> str:
+        if not isinstance(anchor, tuple):
+            return type(anchor).__name__
+        if anchor[0] == "tool":
+            return "tool result"
+        role, content, calls = anchor
+        text = f"{len(content)} chars" if isinstance(content, str) else (
+            f"{len(content)} parts" if isinstance(content, list) else "no text")
+        return f"{role}, {text}, {len(calls)} calls"
+
     n = len(job.anchors)
-    return len(messages) >= n and all(_early_message_anchor(messages[i]) == job.anchors[i] for i in range(n))
+    if len(messages) < n:
+        return f"the transcript has {len(messages)} messages, fewer than the {n} summarized"
+    for i in range(n):
+        now, then = _early_message_anchor(messages[i]), job.anchors[i]
+        if now == then:
+            continue
+        change = ""
+        if isinstance(now, tuple) and isinstance(then, tuple) and len(now) == len(then) == 3:
+            old, new = then[1], now[1]
+            if then[2] != now[2]:
+                change = "; call ids changed"
+            elif isinstance(old, str) and isinstance(new, str):
+                change = ("; text grew around the old text" if old in new else
+                          "; text shrank to part of the old text" if new in old else "; text replaced")
+            else:
+                change = "; content type changed"
+        elif isinstance(now, tuple) and isinstance(then, tuple) and now[0] == then[0] == "tool":
+            change = "; tool call id changed"
+        return f"message {i} of {n} differs (then {shape(then)}; now {shape(now)}{change})"
+    return None
 
 
 # The early summary of each conversation, by session id. The gateway builds a new agent (and
@@ -5465,12 +5496,14 @@ Write only the summary body. Do not include any preamble or prefix."""
         from agent.auxiliary_client import aux_progress_hook
 
         job = self._early_compaction
-        if job is not None and _early_summary_still_fits(job, messages):
-            if cancel_event is not None and all(stop is not cancel_event for stop in job.stops):
-                job.stops.append(cancel_event)
-            return
         if job is not None:
+            difference = _early_summary_difference(job, messages)
+            if difference is None:
+                if cancel_event is not None and all(stop is not cancel_event for stop in job.stops):
+                    job.stops.append(cancel_event)
+                return
             job.dropped = True  # the transcript was rewritten: that summary is never used
+            logger.info("Early compaction: %s; writing a new summary", difference)
         try:
             snapshot = copy.deepcopy(messages)
         except Exception as exc:
@@ -5529,9 +5562,10 @@ Write only the summary body. Do not include any preamble or prefix."""
             job.dropped = True
             return None
         n = len(job.anchors)
-        if not _early_summary_still_fits(job, messages):
+        difference = _early_summary_difference(job, messages)
+        if difference is not None:
             job.dropped = True
-            logger.info("Early compaction discarded: the transcript was rewritten since it started")
+            logger.info("Early compaction discarded: %s", difference)
             return None
         if job.thread.is_alive():
             logger.info("Early compaction: waiting for the summary already being written")

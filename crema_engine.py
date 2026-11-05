@@ -434,7 +434,9 @@ async def main() -> None:
 # Crema asks a reply to end with lines of its own (the app's desktop.js): the chat's title (CHAT_TITLE, when
 # asked) and the user's likely next input (NEXT_INPUT). The app takes them from the stream; the stored chat
 # leaves them out so later turns do not read old guesses or titles.
-NEXT_INPUT_LINE = re.compile(r"(?:(?:\A|\n)[ \t>*_`]*(?:CHAT_TITLE|NEXT_INPUT):[^\n]*){1,2}\s*\Z")
+# The app (app.js splitNextInput) takes up to three end lines with blank lines between them; the stored chat drops
+# the same, so a CHAT_TITLE or CHAT_ROLE line above a blank line does not stay in later turns' history.
+NEXT_INPUT_LINE = re.compile(r"(?:\s*(?:\A|\n)[ \t>*_`]*(?:CHAT_ROLE|CHAT_TITLE|NEXT_INPUT):[^\n]*){1,3}\s*\Z")
 
 
 def drop_next_input(response_text: str = "", session_id: str = "", **_) -> str | None:

@@ -591,6 +591,9 @@ MESSAGE_HEAD = ("[Message from another chat] The chat '{title}' (number {number}
                 "nothing back to that chat unless the user asks you to: Crema tells it when you finish, and it reads "
                 "your reply itself.")
 # The app's word when a reply a message started is finished (주인님 2026-10-29): the sending chat goes on with it.
+SCHEDULED_HEAD = ("[Scheduled task] The user set this chat to do the task below at this time (task '{name}', {when}); "
+                  "they did not type it now. Do it as they asked when they set it, and end with what you did.")
+SCHEDULED_LATE = " It was due at {due}, while Crema was closed, so it runs now."
 FINISHED_HEAD = ("[Crema] The chat '{title}' (number {number}) finished the work this chat sent it; the user did not "
                  "type this. {still} Go on with the user's task in this chat, reading that chat's reply with crema_chats "
                  "(action read) when this chat needs what it found. If this chat needs the work still going on before it "
@@ -738,6 +741,36 @@ def _leave(session_id: str, to: str, message: str, head: str, **more: Any) -> tu
     finally:
         conn.close()
     return target, None
+
+
+def scheduled(job: dict) -> tuple[bool, str, str, Optional[str]]:
+    """A scheduled task's run (cron/scheduler.py run_job, tools/crema_schedule_tool.py): its prompt for the chat that
+    made it, from '예약 작업'; the app starts that chat with it, or puts it into its running reply. The run_job result:
+    (success, the output document, the final response, the error)."""
+    from datetime import datetime
+
+    from hermes_time import now
+
+    chat = (job.get("origin") or {}).get("chat_id") or ""
+    name = str(job.get("name") or job["id"])
+    if not any(row["session"] == chat for row in _directory() + _directory(archived=True)):
+        problem = "The chat that made this scheduled task is no longer in Crema."
+        return False, f"# {name}\n\n{problem}\n", "", problem
+    # When this run was due: the occurrence the scan stamped (a repeat), else the one-shot's own time.
+    due = ((job.get("last_dispatch") or {}).get("scheduled_at") if job.get("schedule", {}).get("kind") != "once"
+           else None) or job.get("next_run_at") or ""
+    late = bool(due) and (now() - datetime.fromisoformat(due)).total_seconds() > 120
+    head = SCHEDULED_HEAD.format(name=name, when=job.get("schedule_display") or "") + (
+        SCHEDULED_LATE.format(due=due) if late else "")
+    message = str(job.get("prompt") or "")
+    conn = _board()
+    try:
+        _note(conn, _task_for(conn, chat).id, f"{head}\n{message}", message=message, sender="", handed=True,
+              sender_chat="", sender_title="예약 작업", sender_project="",
+              scheduled={"name": name, **({"due": due} if late else {})})
+    finally:
+        conn.close()
+    return True, f"# {name}\n\nHanded to {chat} at {now().isoformat()}.\n", f"Handed to {chat}.", None
 
 
 def send(session_id: str, to: str, message: str) -> dict:
@@ -994,6 +1027,7 @@ def state() -> dict:
                      "from_project": e.payload.get("sender_project", ""), "text": e.payload["message"],
                      "prompt": e.payload["text"], **({"finished": True} if e.payload.get("finished") else {}),
                      **({"start": e.payload["start"]} if e.payload.get("start") else {}),
+                     **({"scheduled": e.payload["scheduled"]} if e.payload.get("scheduled") else {}),
                      **({"close": e.payload["close"]} if e.payload.get("close") else {})}
                     for e in pending]})
         # ``messages`` only when there is something, so the shape stays what it was without them.

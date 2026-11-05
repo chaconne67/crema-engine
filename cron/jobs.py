@@ -3050,6 +3050,8 @@ def _retire_expired_oneshot(d: _DueJob) -> bool:
     still in flight elsewhere — skip but keep the record so its mark_job_run can land."""
     if _elapsed_seconds(d.scan.now, d.next_run_dt) <= ONESHOT_GRACE_SECONDS:
         return False
+    if (d.job.get("origin") or {}).get("platform") == "crema":
+        return False
     if not (d.job.get("run_claim") or d.job.get("fire_claim")):
         _write_missed_oneshot_diagnostic(d.job, d.next_run)
         d.scan.retire(d.job["id"])

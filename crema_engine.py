@@ -108,11 +108,19 @@ async def main() -> None:
     from hermes_cli.config import load_config
 
     register_from_config(load_config(), accept_hooks=False)
+    # Scheduled tasks (tools/crema_schedule_tool.py): the engine's in-process cron ticker, as the Hermes gateway and
+    # desktop backend run it; it runs while Crema is open.
+    import threading
+
+    from cron.scheduler_provider import resolve_cron_scheduler
+
+    threading.Thread(target=resolve_cron_scheduler().start, args=(threading.Event(),), daemon=True,
+                     name="crema-cron-ticker").start()
 
     import uvicorn
     from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import HTMLResponse, JSONResponse
-    from hermes_cli.web_routers import analytics, audio, config_env, mcp, models, oauth, sessions, status, tools
+    from hermes_cli.web_routers import analytics, audio, config_env, cron, mcp, models, oauth, sessions, status, tools
 
     from crema_free import create_router as free_connection_router
 
@@ -126,8 +134,9 @@ async def main() -> None:
     # service's sign-in page comes back to. And a subscription's own usage windows, beside the model chip.
     wanted = {"/api/learning/graph", "/api/learning/node", "/api/sessions/search", "/api/tools/toolsets/{name}/models",
               "/api/mcp/servers/{name}/auth", "/api/mcp/oauth/flows/{flow_id}", SIGN_IN_RETURN,
-              "/api/analytics/account-usage"}
-    for router in (status.router, sessions.search_router, tools.router, mcp.router, analytics.router):
+              "/api/analytics/account-usage", "/api/cron/jobs", "/api/cron/jobs/{job_id}/pause",
+              "/api/cron/jobs/{job_id}/resume", "/api/cron/jobs/{job_id}"}
+    for router in (status.router, sessions.search_router, tools.router, mcp.router, analytics.router, cron.router):
         settings.router.routes.extend(route for route in router.routes if route.path in wanted)
 
     @settings.post("/api/crema/backup")

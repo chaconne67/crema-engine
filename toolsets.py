@@ -137,6 +137,8 @@ TOOLSETS = {
     "backup": _ts("Back up chats, memory and settings into one file without keys", ["crema_backup"]),
     # Crema: messages between the user's chats (tools/crema_chats_tool.py).
     "crema_chats": _ts("List the user's other chats and send one a message", ["crema_chats"]),
+    # Crema: scheduled tasks handed to the chat that made them (tools/crema_schedule_tool.py).
+    "crema_schedule": _ts("Schedule work for this chat at a time or on a repeat", ["crema_schedule"]),
     # Crema: a request the agent could not do because of Crema, for 오류 정보 보내기 (tools/crema_failures.py).
     "crema_unmet": _ts("Record a request Crema fell short of, kinds only", ["crema_unmet"]),
     # Crema: connect an MCP server the user gives the address of (tools/crema_services.py).
@@ -230,7 +232,7 @@ TOOLSETS = {
         ["read_file", "write_file", "patch", "search_files", "terminal", "process_manage",
          "todo_list", "web_search", "web_extract", "vision_analyze",
          "memory", "session_search", "skills_list", "skill_view", "skill_manage",
-         "knowledge_search", "knowledge_get", "knowledge_write", "knowledge_think", "crema_backup", "crema_chats",
+         "knowledge_search", "knowledge_get", "knowledge_write", "knowledge_think", "crema_backup", "crema_chats", "crema_schedule",
          "thock_heard", "mail", "calendar", "drive", "crema_services", "crema_ego", "crema_unmet"],
     ),
     "hermes-cli": _bundle("Full interactive CLI toolset - all default tools plus cronjob management"),

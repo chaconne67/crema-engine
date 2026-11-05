@@ -632,6 +632,10 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
     if cwd is not None and not (isinstance(cwd, str) and os.path.isabs(cwd) and os.path.isdir(cwd)):
         return _json_error(
             _openai_error, "'cwd' must be an existing absolute folder", code="invalid_cwd", status=400)
+    # Crema: the app's throwaway turns (the first title, 자세히 물어보기) answer in text alone: no tool is offered.
+    no_tools = body.get("no_tools", False)
+    if not isinstance(no_tools, bool):
+        return _json_error(_openai_error, "'no_tools' must be true or false", code="invalid_no_tools", status=400)
     try:
         turn_author = _api_server._request_turn_author(body)
     except ValueError as exc:
@@ -710,6 +714,7 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
         agent_kwargs=dict(
             ephemeral_system_prompt=instructions, session_id=session_id, gateway_session_key=gateway_session_key,
             route=route, room_dispatch=room_dispatch, room_execution_policy=room_execution_policy,
+            no_tools=no_tools,
             **{k: agent_overrides.get(k) for k in ("requested_model", "requested_provider", "model_options")}),
         request_profile=_api_server._api_request_profile.get(),
         browser_control_principal=_api_server._api_request_browser_control_principal.get(),

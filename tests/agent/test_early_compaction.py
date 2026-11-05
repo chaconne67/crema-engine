@@ -260,6 +260,41 @@ class TestEarlySummaryOutlivesTheReply:
         assert "grew" in line
         assert "EDITED_TAIL" not in line and "msg 5" not in line
 
+    def test_a_ready_summary_survives_an_engine_restart(self):
+        from agent.context_compressor import _EARLY_COMPACTIONS
+
+        calls = []
+
+        def fake(**_kw):
+            calls.append(1)
+            return _resp(SUMMARY)
+
+        msgs = _msgs(30)
+        live = msgs + [{"role": "user", "content": "LATE_USER"}, {"role": "assistant", "content": "LATE_REPLY"}]
+        with patch("agent.context_compressor.call_llm", side_effect=fake):
+            first = _reply_compressor("S")
+            first.start_early_compaction(msgs, current_tokens=80_000)
+            _wait_done(first)
+            _EARLY_COMPACTIONS.clear()  # Crema restarted: nothing is left in memory
+            second = _reply_compressor("S")
+            second.start_early_compaction(live, current_tokens=82_000)
+            out = second.compress(live, current_tokens=90_000)
+        assert len(calls) == 1
+        assert "EARLY_SUMMARY_TEXT" in _contents(out)
+        assert [m["content"] for m in out[-2:]] == ["LATE_USER", "LATE_REPLY"]
+
+    def test_a_used_summary_is_not_found_after_a_restart(self):
+        from agent.context_compressor import _EARLY_COMPACTIONS
+
+        msgs = _msgs(30)
+        with patch("agent.context_compressor.call_llm", return_value=_resp(SUMMARY)):
+            first = _reply_compressor("S")
+            first.start_early_compaction(msgs, current_tokens=80_000)
+            _wait_done(first)
+            first.compress(msgs, current_tokens=90_000)
+        _EARLY_COMPACTIONS.clear()
+        assert _reply_compressor("S")._early_compaction is None
+
     def test_another_conversation_does_not_get_the_summary(self):
         msgs = _msgs(30)
         with patch("agent.context_compressor.call_llm", return_value=_resp(SUMMARY)):

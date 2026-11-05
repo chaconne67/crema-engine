@@ -7,6 +7,8 @@ import copy
 import hashlib
 import json
 import logging
+import os
+import pickle
 import sqlite3
 import re
 import time
@@ -812,8 +814,9 @@ class _EarlyCompaction:
     """One background summary: the anchors of the messages it covers, its thread, and on success the
     assembly plus the compressor state the summary step wrote. It is also the summary call's stop
     source: set when any reply that uses it is stopped, or once it is dropped (replaced, or its
-    waiting compaction was cancelled)."""
+    waiting compaction was cancelled). A summary loaded from disk after a restart has no thread."""
     anchors: List[Any]
+    session_id: str = ""
     progress: int = 0
     thread: Any = None
     assembly: Optional[_CompressionAssembly] = None
@@ -880,8 +883,50 @@ def _early_summary_difference(job: _EarlyCompaction, messages: List[Dict[str, An
 
 # The early summary of each conversation, by session id. The gateway builds a new agent (and
 # compressor) for every reply, so a summary written during one reply is kept here for the reply that
-# reaches the threshold. Consumed by that compaction; a rewrite replaces it.
+# reaches the threshold. Consumed by that compaction; a rewrite replaces it. A ready summary is also
+# saved to disk (one file per conversation) so a Crema restart, which clears this dict, keeps it.
 _EARLY_COMPACTIONS: Dict[Any, _EarlyCompaction] = {}
+
+
+def _early_compaction_file(session_id: str):
+    from hermes_constants import get_hermes_home
+
+    name = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:32]
+    return get_hermes_home() / "early-compaction" / f"{name}.pkl"
+
+
+def _save_early_compaction(job: _EarlyCompaction) -> None:
+    """Save a ready summary that is still this conversation's current one; on failure it stays in memory only."""
+    if not job.session_id or _EARLY_COMPACTIONS.get(job.session_id) is not job:
+        return
+    path = _early_compaction_file(job.session_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(pickle.dumps({"anchors": job.anchors, "assembly": job.assembly, "state": job.state}))
+        os.replace(tmp, path)
+    except Exception as exc:
+        logger.warning("Early compaction: summary kept in memory only (could not be saved: %s)", exc)
+
+
+def _load_early_compaction(session_id: str) -> Optional[_EarlyCompaction]:
+    path = _early_compaction_file(session_id)
+    try:
+        saved = pickle.loads(path.read_bytes())
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        logger.warning("Early compaction: saved summary could not be read (%s); removed", exc)
+        _remove_saved_early_compaction(session_id)
+        return None
+    logger.info("Early compaction: summary loaded from disk (%d messages)", len(saved["anchors"]))
+    return _EarlyCompaction(anchors=saved["anchors"], session_id=session_id, assembly=saved["assembly"],
+                            state=saved["state"])
+
+
+def _remove_saved_early_compaction(session_id: str) -> None:
+    with contextlib.suppress(OSError):
+        _early_compaction_file(session_id).unlink()
 
 
 def _early_state_key_is_attempt_owned(key: str) -> bool:
@@ -5462,15 +5507,24 @@ Write only the summary body. Do not include any preamble or prefix."""
     # threshold — compress(), on every path — takes that result when the transcript still begins
     # with the same messages, waiting for it if it is still being written, and appends the turns
     # added since as tail. Finalize, the session commit and all notices stay on the normal path.
-    # The job is kept per conversation (_EARLY_COMPACTIONS), so it outlives the reply that started it.
+    # The job is kept per conversation (_EARLY_COMPACTIONS), so it outlives the reply that started it;
+    # once ready it is also on disk, so it outlives a restart.
 
     @property
     def _early_compaction(self) -> Optional[_EarlyCompaction]:
-        return _EARLY_COMPACTIONS.get(getattr(self, "_session_id", "") or id(self))
+        key = getattr(self, "_session_id", "") or id(self)
+        job = _EARLY_COMPACTIONS.get(key)
+        if job is None and isinstance(key, str):
+            job = _load_early_compaction(key)
+            if job is not None:
+                _EARLY_COMPACTIONS[key] = job
+        return job
 
     @_early_compaction.setter
     def _early_compaction(self, job: Optional[_EarlyCompaction]) -> None:
         key = getattr(self, "_session_id", "") or id(self)
+        if isinstance(key, str):
+            _remove_saved_early_compaction(key)  # a new job is saved again once its summary is ready
         if job is None:
             _EARLY_COMPACTIONS.pop(key, None)
         else:
@@ -5515,6 +5569,7 @@ Write only the summary body. Do not include any preamble or prefix."""
         worker._session_db, worker._session_id = None, ""
         before = dict(worker.__dict__)
         job = _EarlyCompaction(anchors=[_early_message_anchor(m) for m in messages],
+                               session_id=getattr(self, "_session_id", "") or "",
                                stops=[cancel_event] if cancel_event is not None else [])
 
         def _tick() -> None:
@@ -5535,6 +5590,7 @@ Write only the summary body. Do not include any preamble or prefix."""
                     job.assembly = outcome
                     job.state = {k: v for k, v in worker.__dict__.items() if before.get(k, _MISSING) is not v}
                     logger.info("Early compaction: summary ready (%d messages)", len(snapshot))
+                    _save_early_compaction(job)
                 else:
                     logger.info("Early compaction: no usable summary; the threshold compaction will write one")
             except AuxiliaryExplicitCancellation:
@@ -5567,7 +5623,7 @@ Write only the summary body. Do not include any preamble or prefix."""
             job.dropped = True
             logger.info("Early compaction discarded: %s", difference)
             return None
-        if job.thread.is_alive():
+        if job.thread is not None and job.thread.is_alive():
             logger.info("Early compaction: waiting for the summary already being written")
             from agent.auxiliary_client import _notify_aux_progress
             from agent.conversation_compression import _raise_if_stale_attempt

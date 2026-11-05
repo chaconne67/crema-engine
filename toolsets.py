@@ -227,10 +227,10 @@ TOOLSETS = {
     # Crema: the tools the Crema app offers (see ENGINE.md); add a tool here when Crema adopts it.
     "hermes-api-server": _ts(
         "Crema — files, terminal, todo, web, image understanding, memory, past chats, skills, the knowledge notebook, "
-        "messages to other chats, words Thock misheard, the user's mail, their Google Calendar and Drive, and "
-        "connecting services by address",
+        "messages to other chats, words Thock misheard, the user's mail, their Google Calendar and Drive, "
+        "connecting services by address, and questions the user answers by picking",
         ["read_file", "write_file", "patch", "search_files", "terminal", "process_manage",
-         "todo_list", "web_search", "web_extract", "vision_analyze",
+         "todo_list", "clarify", "web_search", "web_extract", "vision_analyze",
          "memory", "session_search", "skills_list", "skill_view", "skill_manage",
          "knowledge_search", "knowledge_get", "knowledge_write", "knowledge_think", "crema_backup", "crema_chats", "crema_schedule",
          "thock_heard", "mail", "calendar", "drive", "crema_services", "crema_ego", "crema_unmet"],

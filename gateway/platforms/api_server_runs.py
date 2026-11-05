@@ -204,6 +204,7 @@ def _http_routes(self) -> list[tuple[str, str, Any]]:
         ("POST", "/v1/runs", self._handle_runs), ("GET", "/v1/runs/{run_id}", self._handle_get_run),
         ("GET", "/v1/runs/{run_id}/events", self._handle_run_events),
         ("POST", "/v1/runs/{run_id}/approval", self._handle_run_approval),
+        ("POST", "/v1/runs/{run_id}/clarify", self._handle_run_clarify),
         ("POST", "/v1/runs/{run_id}/steer", self._handle_steer_run),
         ("POST", "/v1/runs/{run_id}/stop", self._handle_stop_run)]
 
@@ -876,6 +877,39 @@ def _make_approval_notify(self, run: _RunLaunch, *, _api_server) -> Callable[[Di
     return _approval_notify
 
 
+def _make_clarify_callback(self, run: _RunLaunch, *, _api_server) -> Callable[..., Any]:
+    """The run's clarify bridge (tools/clarify_tool.py's callback): one ``clarify.request`` event carries every
+    question; the run then waits, as on an approval, until the client posts the answers
+    (POST /v1/runs/{id}/clarify) or the clarify timeout passes."""
+    run_id, q, loop = run.run_id, run.queue, asyncio.get_running_loop()
+
+    def _clarify(question, choices, multi_select=False, questions=None):
+        import uuid
+        from tools import clarify_gateway
+        from tools.clarify_tool import TIMEOUT_RESPONSE, strip_recommended
+        asked = [{"qid": entry["qid"], "question": entry["question"], "choices": entry["choices_offered"],
+                  "multi_select": entry["multi_select"]} for entry in questions] if questions else [
+            {"qid": "q0", "question": question,
+             "choices": [strip_recommended(c) for c in choices] if choices else None,
+             "multi_select": bool(multi_select) and bool(choices)}]
+        clarify_id = uuid.uuid4().hex[:10]
+        clarify_gateway.register(clarify_id, run.approval_session_key, asked[0]["question"], None)
+        event = _run_event(run_id, "clarify.request", clarify_id=clarify_id,
+                           title=str(question or "").strip() if questions else "", questions=asked)
+        self._set_run_status(run_id, "waiting_for_clarify", last_event="clarify.request")
+        with suppress(Exception):
+            loop.call_soon_threadsafe(q.put_nowait, event)
+        raw = clarify_gateway.wait_for_response(clarify_id, clarify_gateway.get_clarify_timeout())
+        if not raw:
+            return TIMEOUT_RESPONSE
+        reply = json.loads(raw)
+        # Words written instead of picking answer every question.
+        answers = reply.get("answers") or {entry["qid"]: reply["text"] for entry in asked}
+        return {"answers": answers} if questions else answers.get("q0", "")
+
+    return _clarify
+
+
 async def _execute_run_via_live_owner(self, run: _RunLaunch, home, record: Dict[str, Any], *, _api_server) -> None:
     """Drive a run whose turn a live Bot Chat owner is executing, from that owner's mailbox receipt.
 
@@ -1049,6 +1083,7 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
                 status_callback=_status_cb, **run.agent_kwargs)
         self._active_run_agents[run_id] = agent
         approval_notify = _make_approval_notify(self, run, _api_server=_api_server)
+        agent.clarify_callback = _make_clarify_callback(self, run, _api_server=_api_server)
         result, usage, served_runtime = await _submit_api_worker(loop, _run_and_settle)
         if not isinstance(result, dict):
             result = {}
@@ -1078,20 +1113,24 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
         logger.exception("[api_server] run %s failed", run_id)
         _finish("failed", error=_redact_api_error_text(exc))
     finally:
-        # On cancellation (/stop) the executor thread may still block on an approval
-        # Event; unregistering releases it. Idempotent on normal completion.
-        _unregister_approval_notify(run.approval_session_key)
+        # On cancellation (/stop) the executor thread may still block on an approval or a
+        # question; releasing them unblocks it. Idempotent on normal completion.
+        _release_run_waiters(run.approval_session_key)
         with suppress(Exception):
             run.put_event(None)  # sentinel: close the SSE stream
         _retire_live_run(self, run_id)
 
 
-def _unregister_approval_notify(approval_session_key: Optional[str]) -> None:
-    """Best-effort release of a run's approval waiter (no-op without a key)."""
+def _release_run_waiters(approval_session_key: Optional[str]) -> None:
+    """Best-effort release of what a run waits on, its approval and its clarify question (no-op without a key)."""
+    if not approval_session_key:
+        return
     with suppress(Exception):
         from tools.approval import unregister_gateway_notify
-        if approval_session_key:
-            unregister_gateway_notify(approval_session_key)
+        unregister_gateway_notify(approval_session_key)
+    with suppress(Exception):
+        from tools import clarify_gateway
+        clarify_gateway.clear_session(approval_session_key)
 
 
 def _release_run_owner_if_forgotten(self, run_id: str) -> None:
@@ -1251,6 +1290,33 @@ async def _handle_run_approval(self, request: "web.Request", *, _api_server) -> 
         "resolved": resolved})
 
 
+async def _handle_run_clarify(self, request: "web.Request", *, _api_server) -> "web.Response":
+    """POST /v1/runs/{run_id}/clarify — the user's reply to the question the run waits on: ``{clarify_id,
+    answers: {qid: choice | [choices]}}``, or ``{clarify_id, text}`` (words written instead of picking)."""
+    _openai_error = _api_server._openai_error
+    run_id, _, _, _, err = _load_owned_run(self, request, _api_server=_api_server, permission=None, active_fallback=False)
+    if err is not None:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        return _json_error(_openai_error, "Invalid JSON", status=400)
+    answers, text = body.get("answers"), body.get("text")
+    if not (isinstance(answers, dict) or (isinstance(text, str) and text.strip())):
+        return _json_error(_openai_error, "Clarify needs answers or text.", code="invalid_clarify_reply", status=400)
+    from tools import clarify_gateway
+    session_key = self._run_approval_sessions.get(run_id)
+    pending = session_key and clarify_gateway.get_pending_for_session(session_key, include_choice_prompts=True)
+    clarify_id = str(body.get("clarify_id") or "")
+    reply = {"answers": answers} if isinstance(answers, dict) else {"text": text.strip()}
+    if not pending or pending.clarify_id != clarify_id or not clarify_gateway.resolve_gateway_clarify(
+            clarify_id, json.dumps(reply, ensure_ascii=False)):
+        return _json_error(
+            _openai_error, f"Run has no pending question: {run_id}", code="clarify_not_pending", status=409)
+    _mark_run_event(self, run_id, "clarify.responded", clarify_id=clarify_id)
+    return web.json_response({"object": "hermes.run.clarify_response", "run_id": run_id, "clarify_id": clarify_id})
+
+
 async def _handle_steer_run(self, request: "web.Request", *, _api_server) -> "web.Response":
     """POST /v1/runs/{run_id}/steer — inject guidance into a running agent."""
     _openai_error = _api_server._openai_error
@@ -1328,7 +1394,7 @@ def _sweep_orphaned_runs_once(self, now: Optional[float] = None) -> None:
         # Transport TTL bounds buffering; live control state survives until the task returns.
         _drop_run_transport(self, run_id)
         if task is None or task.done():
-            _unregister_approval_notify(self._run_approval_sessions.get(run_id))
+            _release_run_waiters(self._run_approval_sessions.get(run_id))
             _retire_live_run(self, run_id)
     for run_id, status in list(self._run_statuses.items()):
         if (status.get("status") in {"completed", "failed", "cancelled"}

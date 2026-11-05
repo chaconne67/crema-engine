@@ -50,7 +50,7 @@ metadata:
 | AI 연결(Provider), API 키, 구독 로그인, 대화별 모델, 추론 강도, 빠른 속도, 이미지·동영상·웹 검색 연결, 메일 연결, 웹 브라우저 조작(에고 라이트), 업무 서비스(Notion·Jira 등) 연결, 기타 서비스(주소로 연결하는 MCP 서버), 음성 입력(Thock) | [models-and-connections.md](references/models-and-connections.md) |
 | 기억, 지식 노트, 일하는 방법(스킬), 조용해진 대화 정리, 하루 정리, 되돌리기 | [memory-and-notebook.md](references/memory-and-notebook.md) |
 | 대화 여러 개를 함께 돌릴 때, 같은 파일 차례, 대화끼리 메시지, 예약 작업(정해진 시각·반복 실행) | [chats-together.md](references/chats-together.md) |
-| 에이전트가 쓸 수 있는 도구와 없는 도구, 명령 승인, 대화 압축, 지난 대화 검색, 제목, 작업 방식과 지침(SOUL.md·CREMA.md) | [engine.md](references/engine.md) |
+| 에이전트가 쓸 수 있는 도구와 없는 도구, 명령 승인, 선택지로 묻기, 대화 압축, 지난 대화 검색, 제목, 작업 방식과 지침(SOUL.md·CREMA.md) | [engine.md](references/engine.md) |
 | 계정·요금, 무료 기간, 업데이트, 판별 변화, 설치·제거, 데이터 저장 위치, 백업 | [account-updates-data.md](references/account-updates-data.md) |
 | 오류 문구, 안 될 때 확인할 것 | [troubleshooting.md](references/troubleshooting.md) |
 

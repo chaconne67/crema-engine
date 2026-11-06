@@ -249,13 +249,68 @@ def _requests(chat: str) -> list[str]:
     return [text[:500] for text in reversed(asked[-3:])]
 
 
-def _git(cwd: str, *args: str) -> Optional[str]:
+def _git(cwd: str, *args: str, timeout: int = 10) -> Optional[str]:
     try:
         run = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, encoding="utf-8",
-                             errors="replace", timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                             errors="replace", timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError):
         return None
     return run.stdout if run.returncode == 0 else None
+
+
+# Left out of a folder's first record: what tools rebuild, temporary and system files.
+GITIGNORE = "\n".join(["node_modules/", "dist/", "build/", ".venv/", "venv/", "__pycache__/", "*.tmp", "~$*",
+                       "Thumbs.db", "desktop.ini", ".DS_Store"]) + "\n"
+# FOLDERID_Documents, Desktop, Downloads, Pictures, Videos, Music: where Windows puts them, also when moved.
+USER_FOLDER_IDS = ["FDD39AD0-238F-46AF-ADB4-6C85480369C7", "B4BFCC3A-DB2C-424C-B029-7FE99A87C641",
+                   "374DE290-123F-4565-9164-39C4925E467B", "33E28130-4E1E-4676-835A-98395C3BC3BB",
+                   "18989B1D-99B5-455B-841C-AB7C74E4DDFC", "4BD8D571-6D19-48D3-BE97-422220080E43"]
+
+
+def _user_folders() -> set[str]:
+    """The home folder and the user's Windows folders themselves (Documents, Desktop, ...)."""
+    folders = [Path.home()]
+    if os.name == "nt":
+        import ctypes
+        import uuid
+
+        for folder_id in USER_FOLDER_IDS:
+            found = ctypes.c_wchar_p()
+            if ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.c_char_p(uuid.UUID(folder_id).bytes_le), 0, None,
+                                                          ctypes.byref(found)) == 0:
+                folders.append(Path(found.value))
+                ctypes.windll.ole32.CoTaskMemFree(found)
+    return {os.path.normcase(str(folder.resolve())) for folder in folders}
+
+
+def ensure_repo(folder: str) -> None:
+    """The folder a chat works in is a Git work tree (주인님 2026-11-06), so turns see a file's uncommitted changes,
+    the terminal's writes and the files a reply made. One outside Git gets one: `git init`, a .gitignore where it has
+    none, a committer only where none is set, and its files as the first commit (without it every file would count
+    as uncommitted and no turn would be handed over). Left as it is: a folder inside a work tree already (a
+    repository inside another hides the folder from the outer one), and a drive root, the home folder or a Windows
+    user folder itself, whose whole tree would go in. A step that fails is recorded; the reply goes on."""
+    from tools import crema_failures
+
+    if (_git(folder, "rev-parse", "--is-inside-work-tree") or "").strip() == "true":
+        return
+    path = Path(folder).resolve()
+    if path == Path(path.anchor) or os.path.normcase(str(path)) in _user_folders():
+        return
+    try:
+        if _git(folder, "init", "-q", "-b", "main") is None:
+            return crema_failures.record("git_init", "init")
+        if not (path / ".gitignore").exists():
+            (path / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
+        if not (_git(folder, "config", "user.email") or "").strip():
+            _git(folder, "config", "user.name", "Crema")
+            _git(folder, "config", "user.email", "crema@localhost")
+        if _git(folder, "add", "-A", timeout=300) is None:
+            return crema_failures.record("git_init", "add")
+        if _git(folder, "commit", "-q", "-m", "Crema: 처음 기록", timeout=300) is None:
+            crema_failures.record("git_init", "commit")
+    except OSError as exc:
+        crema_failures.failed("git_init", exc)
 
 
 def _folder(path: str) -> str:

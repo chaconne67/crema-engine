@@ -713,3 +713,32 @@ def test_files_since_lists_a_terminal_commands_files_without_saying_made(api, ju
     (repo.path / "notes.md").write_text("x\n", encoding="utf-8")
     turns.after_tool("terminal", args, "ok", session_id=A, task_id=A, tool_call_id="t9")
     assert turns.files_since(A, 0) == [{"path": str((repo.path / "notes.md").resolve()), "made": None}]
+
+
+
+def test_a_folder_outside_git_becomes_a_work_tree_with_its_files_as_the_first_commit(tmp_path, monkeypatch):
+    # A new user's PC: no committer set anywhere.
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    (tmp_path / "notes.md").write_text("hello\n", encoding="utf-8")
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "big.js").write_text("x\n", encoding="utf-8")
+    turns.ensure_repo(str(tmp_path))
+    git = lambda *args: subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, text=True).stdout.strip()
+    assert git("ls-files").splitlines() == [".gitignore", "notes.md"]
+    assert git("status", "--porcelain") == ""
+    assert git("rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert git("config", "user.email") == "crema@localhost"
+
+
+def test_a_folder_inside_a_work_tree_and_a_user_folder_itself_are_left_as_they_are(repo, tmp_path, monkeypatch):
+    inner = repo.path / "docs"
+    inner.mkdir()
+    head = repo.run("rev-parse", "HEAD").stdout
+    turns.ensure_repo(str(inner))
+    assert not (inner / ".git").exists() and repo.run("rev-parse", "HEAD").stdout == head
+    documents = tmp_path.parent / (tmp_path.name + "-documents")
+    documents.mkdir()
+    monkeypatch.setattr(turns, "_user_folders", lambda: {os.path.normcase(str(documents.resolve()))})
+    turns.ensure_repo(str(documents))
+    assert not (documents / ".git").exists()

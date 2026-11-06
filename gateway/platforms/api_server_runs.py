@@ -816,6 +816,9 @@ def _run_agent_sync(self, run: _RunLaunch, agent, approval_notify, *, _api_serve
             if session_tokens:
                 resets.append((session_tokens, clear_session_vars))
             if run.cwd:
+                # Crema: the folder is a Git work tree before the turn starts (agent/crema_file_turns.py).
+                from agent.crema_file_turns import ensure_repo
+                ensure_repo(run.cwd)
                 # The terminal and the file tools' relative paths start in the run's folder (keyed by this
                 # session, so concurrent chats keep their own); bound above, the agent's own cwd follows it.
                 from tools.terminal_tool import register_task_env_overrides

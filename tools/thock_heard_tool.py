@@ -25,14 +25,17 @@ def thock_heard(args: Dict[str, Any], **_: Any) -> str:
 registry.register(
     name="thock_heard", toolset="thock", emoji="👂",
     schema={"name": "thock_heard",
-            "description": "Tell Thock, the voice typing that may have written the user's message, about a word it "
-                           "misheard, so it learns to write it right. Call it when context makes clear that a word "
-                           "in the user's message is a different, similar-sounding word from the one the user meant, "
-                           "once per pair, before you answer. Do not try to tell whether the message was dictated or "
-                           "typed: Thock keeps a pair only when the wrong word is in its dictations of the last 30 "
-                           "minutes and learns it only when it comes twice, so a pair you skip costs more than one "
-                           "you send. Send only mishearings: a typo, spacing or wording you read past is not one, "
-                           "since Thock learns how words sound. If Thock does not take it, carry on with the answer.",
+            "description": "Tell Thock, the voice typing that may have written the user's message, about a name or "
+                           "term it misheard, so it writes it right next time. Send only words whose spelling the "
+                           "sound alone cannot tell: names of people, companies, products, places and facilities, "
+                           "industry terms, nicknames. Call it when context makes clear such a word in the user's "
+                           "message was written as a different, similar-sounding word, once per pair, before you "
+                           "answer. Do not send an everyday word you read differently (a common noun, verb, modifier "
+                           "or ending), nor a typo, spacing or wording you read past: Thock keeps a pair at once and "
+                           "rewrites later dictation with it, so an everyday pair puts words the user did not say into "
+                           "their text. Do not try to tell whether the message was dictated or typed: Thock keeps a "
+                           "pair only when the wrong word is in its dictations of the last 30 minutes. If Thock does "
+                           "not take it, carry on with the answer.",
             "parameters": {"type": "object", "properties": {
                 "wrong": {"type": "string", "description": "the word exactly as written in the message, without a "
                                                            "Korean particle (수옥이 → 수옥)"},

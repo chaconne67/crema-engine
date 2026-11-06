@@ -17,7 +17,11 @@ class FakeDb:
 
 
 def _api(db, checked_in):
-    agent = SimpleNamespace(tools=[{"name": "terminal"}], context_compressor=SimpleNamespace(threshold_tokens=256_000))
+    from agent.context_compressor import ContextCompressor
+
+    compressor = SimpleNamespace(threshold_tokens=256_000, context_length=1_000_000,
+                                 _effective_threshold_percent=ContextCompressor._effective_threshold_percent)
+    agent = SimpleNamespace(tools=[{"name": "terminal"}], context_compressor=compressor)
     return SimpleNamespace(
         _ensure_session_db=lambda: db, _create_agent=lambda **_: agent,
         _memory_sessions=SimpleNamespace(checkin=checked_in.append)), agent
@@ -38,9 +42,18 @@ def test_new_chat_counts_the_prompt_built_now_and_tools(monkeypatch):
     monkeypatch.setattr(system_prompt, "build_system_prompt_parts",
                         lambda agent: {"stable": "기본 지시", "context": "", "volatile": "기억"})
     api, agent = _api(FakeDb([]), checked_in)
-    assert crema_engine.estimate_context(api, "agent-client-x") == {"used": 17_000, "max": 256_000}
+    assert crema_engine.estimate_context(api, "agent-client-x") == {"used": 17_000, "max": 256_000, "floor": 0}
     assert seen == [([], "기본 지시\n\n기억", agent.tools)]
     assert checked_in == [agent]
+
+
+def test_a_model_under_512k_says_it_is_compressed_at_75_at_least(monkeypatch):
+    """주인님 2026-11-07: such a model keeps the engine's 75%; Settings locks 앞 대화 요약 시점 on it."""
+    _count(monkeypatch)
+    monkeypatch.setattr(system_prompt, "build_system_prompt_parts", lambda agent: {"stable": "", "context": "", "volatile": ""})
+    api, agent = _api(FakeDb([]), [])
+    agent.context_compressor.context_length = 500_000
+    assert crema_engine.estimate_context(api, "agent-client-x")["floor"] == 75
 
 
 def test_continuing_chat_counts_its_stored_prompt_and_history(monkeypatch):

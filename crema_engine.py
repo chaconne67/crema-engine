@@ -100,7 +100,7 @@ async def main() -> None:
     asyncio.get_running_loop().run_in_executor(None, crema_services.sync_services)
     from hermes_cli.plugins import get_plugin_manager
 
-    get_plugin_manager()._hooks.setdefault("transform_llm_output", []).append(drop_next_input)
+    get_plugin_manager()._hooks.setdefault("transform_llm_output", []).append(drop_end_lines)
     crema_failures.observe(get_plugin_manager())
     # The shell hooks in config.yaml (`hooks:`, only the allowlisted ones), as the Hermes gateway registers them at
     # its start (gateway/run_startup.py); without this a configured hook never runs in Crema.
@@ -431,22 +431,15 @@ async def main() -> None:
     daily.cancel()
 
 
-# Crema asks a reply to end with lines of its own (the app's desktop.js): the chat's title (CHAT_TITLE, when
-# asked) and the user's likely next input (NEXT_INPUT). The app takes them from the stream; the stored chat
-# leaves them out so later turns do not read old guesses or titles.
-# The app (app.js splitNextInput) takes up to three end lines with blank lines between them; the stored chat drops
-# the same, so a CHAT_TITLE or CHAT_ROLE line above a blank line does not stay in later turns' history.
-NEXT_INPUT_LINE = re.compile(r"(?:\s*(?:\A|\n)[ \t>*_`]*(?:CHAT_ROLE|CHAT_TITLE|NEXT_INPUT):[^\n]*){1,3}\s*\Z")
+# Crema asks a reply to end with lines of its own (the app's desktop.js): the chat's title (CHAT_TITLE) and, while
+# the chat has none, its role (CHAT_ROLE). The app takes them from the stream (app.js splitEndLines, blank lines
+# between allowed); the stored chat drops the same, so later turns do not read old titles.
+END_LINES = re.compile(r"(?:\s*(?:\A|\n)[ \t>*_`]*(?:CHAT_ROLE|CHAT_TITLE):[^\n]*){1,2}\s*\Z")
 
 
-def drop_next_input(response_text: str = "", session_id: str = "", **_) -> str | None:
-    """The `transform_llm_output` hook: the reply without its end lines (CHAT_TITLE, NEXT_INPUT), or None to keep it."""
-    text = NEXT_INPUT_LINE.sub("", response_text or "").rstrip()
-    # The stored chat loses the line, so the log says what it was: a chat without the grey suggestion then shows
-    # whether the model left the line out or wrote "-" (주인님 2026-11-05).
-    end = re.search(r"NEXT_INPUT:([^\n]*)", (response_text or "")[len(text):])
-    kind = "missing" if not end else "none" if end.group(1).strip(" *_`") in ("", "-") else "given"
-    logging.getLogger(__name__).info("next input: session=%s %s", session_id, kind)
+def drop_end_lines(response_text: str = "", **_) -> str | None:
+    """The `transform_llm_output` hook: the reply without its end lines (CHAT_ROLE, CHAT_TITLE), or None to keep it."""
+    text = END_LINES.sub("", response_text or "").rstrip()
     return text if text and text != (response_text or "").rstrip() else None
 
 

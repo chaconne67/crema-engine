@@ -242,10 +242,16 @@ def _update_read_timestamp(filepath: str, task_id: str) -> None:
             _cap_read_tracker_data(task_data)
 
 
+# What says a file is unchanged. Not st_ctime_ns on Windows: there os.stat gives the
+# creation time and os.fstat the last change time, so the two never agreed on a file
+# changed after it was made and no read or own write could bless an overwrite.
+_VERSION_FIELDS = ("st_dev", "st_ino", "st_size", "st_mtime_ns") + (() if os.name == "nt" else ("st_ctime_ns",))
+
+
 def _file_metadata(resolved: str) -> tuple | None:
     try:
         st = os.stat(resolved)
-        return st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns
+        return tuple(getattr(st, name) for name in _VERSION_FIELDS)
     except OSError:
         return None
 
@@ -262,9 +268,8 @@ def _file_version(resolved: str) -> tuple | None:
                 return None
             digest = hashlib.file_digest(stream, "sha256").digest()
             after = os.stat(resolved)
-        fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
-        version = tuple(getattr(before, name) for name in fields)
-        if version == tuple(getattr(after, name) for name in fields):
+        version = tuple(getattr(before, name) for name in _VERSION_FIELDS)
+        if version == tuple(getattr(after, name) for name in _VERSION_FIELDS):
             return (*version, digest)
         return None
     except OSError:

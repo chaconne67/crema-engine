@@ -403,6 +403,29 @@ class TestClarifyBatchValidation:
         assert q0["choices"][0] == "a (Recommended)"
         assert q1["choices"] == ["Loose layout (Recommended)", "Tight"]
 
+    def test_batch_context_and_choice_descriptions_reach_the_surface(self):
+        """The user decides from the box alone: each question's context and each choice's description
+        go to the surface beside the labels; the answer and choices_offered stay the bare labels."""
+        seen = {}
+
+        def cb(question, choices, multi_select=False, questions=None):
+            seen["questions"] = questions
+            return {"answers": {"q0": "Keep (Recommended)", "q1": "x"}}
+
+        result = json.loads(clarify_tool("", questions=[
+            {"question": "Keep the packages?", "context": "Seven unused packages take 2 GB.",
+             "choices": [{"label": "Keep", "description": "Nothing changes."},
+                         {"label": "Remove", "description": "Frees 2 GB; a failed check puts them back."}]},
+            {"question": "Name?", "choices": ["x", "y"]},
+        ], callback=cb))
+        q0, q1 = seen["questions"]
+        assert q0["context"] == "Seven unused packages take 2 GB."
+        assert q0["choices_offered"] == ["Keep", "Remove"]
+        assert q0["descriptions"] == ["Nothing changes.", "Frees 2 GB; a failed check puts them back."]
+        assert q1["context"] is None and q1["descriptions"] is None
+        assert result["responses"][0]["user_response"] == "Keep"
+        assert result["responses"][0]["choices_offered"] == ["Keep", "Remove"]
+
     def test_batch_internal_ids_are_stable_and_model_id_echoed(self):
         """Wire ids are q0..qN. A model-supplied id only shows in results."""
         seen = {}

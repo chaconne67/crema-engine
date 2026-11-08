@@ -32,6 +32,14 @@ def _flatten_choice(c) -> str:
     return "" if c is None else str(c).strip()
 
 
+def _choice_note(c) -> str:
+    """A ``{label, description}`` choice's description: what picking it does, shown under its label. Empty
+    when the choice is bare text or the description already stands in as the label."""
+    note = c.get("description") if isinstance(c, dict) else None
+    note = note.strip() if isinstance(note, str) else ""
+    return note if note and note != _flatten_choice(c) else ""
+
+
 def mark_recommended(choices: List[str]) -> List[str]:
     """Suffix the first choice (schema says best-first) with RECOMMENDED_LABEL; idempotent,
     and a lone choice is left untouched (nothing to prefer it over)."""
@@ -107,7 +115,8 @@ def _normalize_questions(questions) -> tuple:
     """Validate the ``questions`` batch param -> ``(normalized, error)``; an empty list gives
     ``(None, None)`` (fall back to the single-question path). Entries carry ``qid`` (stable
     wire id ``q<index>`` surfaces key answers by; the model's ``id`` is unvalidated text, only
-    echoed), ``question``, decorated ``choices``, bare ``choices_offered``, ``multi_select``."""
+    echoed), ``question``, ``context``, decorated ``choices``, bare ``choices_offered``,
+    ``descriptions`` (one per choice, or None), ``multi_select``."""
     if not isinstance(questions, list):
         return None, "questions must be an array of question objects."
     if not questions:
@@ -124,14 +133,18 @@ def _normalize_questions(questions) -> tuple:
         if not text:
             return None, f"questions[{index}].question must be non-empty text."
         choices = item.get("choices")
+        notes = None
         if choices is not None:
             if not isinstance(choices, list):
                 return None, f"questions[{index}].choices must be a list."
-            choices = _clean_choices(choices)
+            pairs = [(label, _choice_note(c)) for c in choices if (label := _flatten_choice(c))][:MAX_CHOICES]
+            choices = [label for label, _ in pairs] or None
+            notes = [note for _, note in pairs] if any(note for _, note in pairs) else None
         normalized.append({
             "qid": f"q{index}", "id": str(item.get("id") or "").strip() or None, "question": text,
+            "context": str(item.get("context") or "").strip() or None,
             "choices": mark_recommended(list(choices)) if choices else None,
-            "choices_offered": list(choices) if choices else None,
+            "choices_offered": list(choices) if choices else None, "descriptions": notes,
             "multi_select": bool(item.get("multi_select")) and bool(choices)})
     return normalized, None
 
@@ -251,8 +264,14 @@ CLARIFY_SCHEMA = {
     "name": "clarify",
     "description": (
         "Ask the user one or more questions when you need a decision, "
-        "clarification, or feedback before proceeding. Pass every question "
-        f"in `questions` (1-{MAX_QUESTIONS} entries) — a single question is a "
+        "clarification, or feedback before proceeding. The user decides from "
+        "this box alone: they have not seen your reasoning, tool output or "
+        "the files you read, and may have been away from this task. So each "
+        "question carries a `context` and each choice a `description` that "
+        "let someone who knows nothing of the task understand the decision "
+        "and choose; a bare question only hands them a decision they cannot "
+        "judge. Pass every question in `questions` (1-"
+        f"{MAX_QUESTIONS} entries) — a single question is a "
         "one-entry array, and several INDEPENDENT questions belong in ONE "
         "call (one form beats a chain of clarify calls; if one answer would "
         "change another question, ask separately). Per question: "
@@ -260,13 +279,14 @@ CLARIFY_SCHEMA = {
         "option FIRST, the UI marks it '(Recommended)' and auto-appends an "
         "'Other' free-text row), multi-select (multi_select=true), or "
         "open-ended (omit choices). Options go ONLY in `choices`, never "
-        "enumerated inside the question text (choices render as pickable "
-        "rows; options written into the question are dead prose the user "
-        "can't click). Result: {responses: [...]} in question order (plus "
-        "timed_out=true, and a notice saying why, if the user stopped "
-        "part-way or the prompt could not be delivered). Prefer deciding "
-        "low-stakes questions yourself; don't use this for dangerous-command "
-        "confirmation (the terminal tool handles that)."
+        "enumerated inside the question or context text (choices render as "
+        "pickable rows; options written into the text are dead prose the "
+        "user can't click). Result: {responses: [...]} in question order "
+        "(user_response is the picked label; plus timed_out=true, and a "
+        "notice saying why, if the user stopped part-way or the prompt could "
+        "not be delivered). Prefer deciding low-stakes questions yourself; "
+        "don't use this for dangerous-command confirmation (the terminal tool "
+        "handles that)."
     ),
     "parameters": {
         "type": "object",
@@ -276,23 +296,52 @@ CLARIFY_SCHEMA = {
                 "minItems": 1,
                 "maxItems": MAX_QUESTIONS,
                 "description": (
-                    "The question(s). Each: question text (options excluded), "
-                    "optional choices (recommended first; omit for free-text), "
-                    "optional multi_select. Responses come back in question "
-                    "order with the question text echoed."
+                    "The question(s). Each: question, context, optional "
+                    "choices (recommended first; omit for free-text), optional "
+                    "multi_select. Responses come back in question order with "
+                    "the question text echoed."
                 ),
                 "items": {
                     "type": "object",
                     "properties": {
-                        "question": {"type": "string"},
+                        "question": {
+                            "type": "string",
+                            "description": "One short sentence: what the user decides (options excluded).",
+                        },
+                        "context": {
+                            "type": "string",
+                            "description": (
+                                "The background, in the user's language and plain words: what this "
+                                "is about, where it stands now, why it needs their decision, and "
+                                "what follows from the answer. Call things by what they do or "
+                                "what the user knows them as; an ID, hash, file, package or "
+                                "command name the user would not know is explained or left out."
+                            ),
+                        },
                         "choices": {
                             "type": "array",
-                            "items": {"type": "string"},
                             "maxItems": MAX_CHOICES,
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "label": {
+                                        "type": "string",
+                                        "description": "A few words naming the option.",
+                                    },
+                                    "description": {
+                                        "type": "string",
+                                        "description": (
+                                            "What happens if the user picks it, and what it "
+                                            "costs or risks next to the other options."
+                                        ),
+                                    },
+                                },
+                                "required": ["label", "description"],
+                            },
                         },
                         "multi_select": {"type": "boolean"},
                     },
-                    "required": ["question"],
+                    "required": ["question", "context"],
                 },
             },
             # NOTE: the handler also accepts (unadvertised): a per-question

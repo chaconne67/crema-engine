@@ -890,7 +890,8 @@ def _make_clarify_callback(self, run: _RunLaunch, *, _api_server) -> Callable[..
         import uuid
         from tools import clarify_gateway
         from tools.clarify_tool import TIMEOUT_RESPONSE, strip_recommended
-        asked = [{"qid": entry["qid"], "question": entry["question"], "choices": entry["choices_offered"],
+        asked = [{"qid": entry["qid"], "question": entry["question"], "context": entry["context"],
+                  "choices": entry["choices_offered"], "descriptions": entry["descriptions"],
                   "multi_select": entry["multi_select"]} for entry in questions] if questions else [
             {"qid": "q0", "question": question,
              "choices": [strip_recommended(c) for c in choices] if choices else None,

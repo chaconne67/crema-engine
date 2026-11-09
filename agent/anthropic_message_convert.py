@@ -311,9 +311,19 @@ def _replay_image(b: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return {"type": "image", "source": src} if isinstance(src, dict) else None
 
 
+def _replay_server_tool_use(b: Dict[str, Any]) -> Dict[str, Any]:
+    return {"type": "server_tool_use", "id": b.get("id", ""), "name": b.get("name", ""), "input": b.get("input", {})}
+
+
+def _replay_web_search_result(b: Dict[str, Any]) -> Dict[str, Any]:
+    return {"type": "web_search_tool_result", "tool_use_id": b.get("tool_use_id", ""), "content": b.get("content", [])}
+
+
 _REPLAY_SANITIZERS = {
     "text": _replay_text, "thinking": _replay_thinking, "redacted_thinking": _replay_redacted_thinking,
     "tool_use": _replay_tool_use, "image": _replay_image,
+    # Anthropic's own web search (Crema 2026-11-09), kept in order between the blocks signed around it.
+    "server_tool_use": _replay_server_tool_use, "web_search_tool_result": _replay_web_search_result,
 }
 
 

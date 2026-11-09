@@ -12,6 +12,7 @@ Debug: ``WEB_TOOLS_DEBUG=true`` writes ``logs/web_tools_debug_<UUID>.json``.
 import json
 import logging
 import os
+import time
 from typing import List, Any, Optional
 # Per-vendor client cache slots; plugins read/write these via tools.web_tools (tests reset them to None).
 _firecrawl_client = _firecrawl_client_config = _parallel_client = _async_parallel_client = _exa_client = None
@@ -111,27 +112,54 @@ def _get_backend() -> str:
         # Shared selection exists (use_gateway) but no shared name: firecrawl, no ladder.
         return "firecrawl"
 
-    # Never-configured install. Explicit user credentials beat the managed-gateway probe (a Nous OAuth
-    # token's tier may not grant web access; the gateway then fails at runtime with no fallback).
-    # Free tiers trail paid.
-    backend_candidates = (
+    # Never-configured install: a backend the user gave credentials for, then the free tiers.
+    for backend, available in _keyed_backend_candidates():
+        if available:
+            return backend
+    if _ddgs_package_importable():
+        return "ddgs"
+
+    # Plugin-contributed providers (built-ins are covered above); probe the held object directly. OpenAI's own
+    # search is not one to pick from a sign-in alone: it runs only inside the Codex transport, which decides it
+    # per request (model_search_wanted); as the client-side search every other model would call, it only fails.
+    for provider in _list_registered_web_providers():
+        if provider.name not in _LEGACY_WEB_BACKENDS and provider.name != "openai-native" and _probe(provider, "is_available"):
+            return provider.name
+
+    return _keyless_backend() or "firecrawl"  # default (backward compat)
+
+
+_rested_until: dict = {}  # backend -> time.time() before which its key is used up (rest_seconds of its 429)
+
+
+def _keyed_backend_candidates() -> tuple:
+    """``(backend, available)`` for every backend the user gave credentials for, in autodetect order.
+    Explicit user credentials beat the managed-gateway probe (a Nous OAuth token's tier may not grant web
+    access; the gateway then fails at runtime with no fallback). Free tiers trail paid. A key its provider
+    refused as used up is not available until the time the refusal named (주인님 2026-11-09)."""
+    now = time.time()
+    return tuple((backend, available and now >= _rested_until.get(backend, 0)) for backend, available in (
         ("tavily", _has_env("TAVILY_API_KEY")), ("perplexity", _has_env("PERPLEXITY_API_KEY")),
         ("exa", _has_env("EXA_API_KEY")),
         ("parallel", _has_env("PARALLEL_API_KEY")), ("keenable", _has_env("KEENABLE_API_KEY")),
         ("firecrawl", _has_env("FIRECRAWL_API_KEY") or _has_env("FIRECRAWL_API_URL")),
         ("firecrawl", _is_tool_gateway_ready()), ("searxng", _has_env("SEARXNG_URL")),
-        ("brave-free", _has_env("BRAVE_SEARCH_API_KEY")), ("ddgs", _ddgs_package_importable()),
-    )
-    for backend, available in backend_candidates:
-        if available:
-            return backend
+        ("brave-free", _has_env("BRAVE_SEARCH_API_KEY")),
+    ))
 
-    # Plugin-contributed providers (built-ins are covered above); probe the held object directly.
-    for provider in _list_registered_web_providers():
-        if provider.name not in _LEGACY_WEB_BACKENDS and _probe(provider, "is_available"):
-            return provider.name
 
-    return _keyless_backend() or "firecrawl"  # default (backward compat)
+def model_search_wanted() -> bool:
+    """True when the turn's model company's own web search replaces the ``web_search`` function (Crema,
+    주인님 2026-11-09): no search was chosen (no stored web selection) and no search credentials were given.
+    Each transport that hosts its company's search (Anthropic, Gemini, OpenAI Codex, xAI) swaps on this one
+    answer; any other transport keeps the function, which runs the free tiers."""
+    try:
+        if _configured_backend("search_backend") or _configured_backend() or read_selection("web") is not None:
+            return False
+        return not any(available for _, available in _keyed_backend_candidates())
+    except Exception as exc:  # noqa: BLE001 — a probe failure keeps the function (never a different request)
+        logger.debug("model_search_wanted probe failed: %s", exc)
+        return False
 
 
 def _keyless_backend() -> Optional[str]:
@@ -332,6 +360,8 @@ def _memoized_search(provider, query: str, limit: int) -> dict:
             if not _rescue_eligible(provider):
                 raise
             return _rescue_search(provider.name, str(exc), query, fetch_limit), True
+        if resp.get("rest_seconds"):
+            _rested_until[provider.name] = time.time() + resp["rest_seconds"]
         if not resp.get("success") and _rescue_eligible(provider):
             return _rescue_search(provider.name, str(resp.get("error", "")), query, fetch_limit), True
         return resp, False

@@ -148,7 +148,10 @@ def http_get_json(
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
         logger.warning("%s HTTP error: %s", label, exc)
-        return None, search_fail(f"{label} returned HTTP {exc.response.status_code}")
+        failure = search_fail(f"{label} returned HTTP {exc.response.status_code}")
+        if exc.response.status_code == 429:
+            failure["rest_seconds"] = rest_seconds(exc.response.headers)
+        return None, failure
     except httpx.RequestError as exc:
         logger.warning("%s request error: %s", label, exc)
         return None, search_fail(f"Could not reach {reach_target or label}: {exc}")
@@ -157,6 +160,18 @@ def http_get_json(
     except Exception as exc:  # noqa: BLE001
         logger.warning("%s response parse error: %s", label, exc)
         return None, search_fail(f"Could not parse {label} response as JSON")
+
+
+def rest_seconds(headers) -> float:
+    """Seconds until a refused (429) key may search again: ``Retry-After``, else the longest window the
+    provider reports as used up (Brave: ``X-RateLimit-Remaining``/``-Reset`` as "per-second, per-month")."""
+    def numbers(name):
+        return [float(v) for v in (headers.get(name) or "").split(",") if v.strip().replace(".", "", 1).isdigit()]
+    retry = numbers("Retry-After")
+    if retry:
+        return retry[0]
+    spent = [reset for remaining, reset in zip(numbers("X-RateLimit-Remaining"), numbers("X-RateLimit-Reset")) if remaining == 0]
+    return max(spent, default=0.0)
 
 
 def titled_rows(raw_results: List[Dict[str, Any]], description_key: str) -> List[Dict[str, Any]]:

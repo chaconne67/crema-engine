@@ -478,6 +478,28 @@ def _oauth_wire_namer(anthropic_tools: List[Dict[str, Any]]):
 _CLAUDE_CODE_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
 
 
+# Anthropic's own web search, put in place of the client ``web_search`` function when no search was chosen
+# (tools.web_tools.model_search_wanted, Crema 2026-11-09). A server tool: Anthropic runs it, so its name stays
+# "web_search" on the OAuth wire too (_apply_oauth_tool_names skips typed tools).
+_SERVER_WEB_SEARCH = {"type": "web_search_20250305", "name": "web_search"}
+
+
+def _is_web_search_function(tool: Dict[str, Any]) -> bool:
+    return tool.get("name") == "web_search" and "type" not in tool
+
+
+def _with_model_web_search(anthropic_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The tools with the ``web_search`` function swapped in place (same position, its cache_control kept) for
+    Anthropic's server-side search when ``model_search_wanted()``; unchanged otherwise."""
+    if not any(_is_web_search_function(t) for t in anthropic_tools):
+        return anthropic_tools
+    from tools.web_tools import model_search_wanted
+    if not model_search_wanted():
+        return anthropic_tools
+    return [{**_SERVER_WEB_SEARCH, **({"cache_control": t["cache_control"]} if "cache_control" in t else {})}
+            if _is_web_search_function(t) else t for t in anthropic_tools]
+
+
 def _apply_oauth_tool_names(system, anthropic_tools, anthropic_messages, to_wire):
     """OAuth request shape: the Claude Code first block, tool/description aliasing, the same aliases in
     the system prose that names those tools, and the same tool renames on replayed tool_use blocks so
@@ -490,7 +512,7 @@ def _apply_oauth_tool_names(system, anthropic_tools, anthropic_messages, to_wire
         if isinstance(block, dict) and block.get("type") == "text":
             block["text"] = _apply_oauth_prose_aliases(block.get("text", ""))
     for tool in anthropic_tools or []:
-        if "name" in tool:
+        if "name" in tool and "type" not in tool:  # a server tool (web_search) keeps Anthropic's own name
             tool["name"] = to_wire(tool["name"])
         if isinstance(tool.get("description"), str):
             tool["description"] = _apply_oauth_prose_aliases(tool["description"])  # prose-safe aliases only
@@ -548,6 +570,8 @@ def build_anthropic_kwargs(
     ``fast_mode`` adds ``extra_body.speed="fast"`` plus the fast-mode beta on native Anthropic only."""
     system, anthropic_messages = convert_messages_to_anthropic(messages, base_url=base_url, model=model)
     anthropic_tools = convert_tools_to_anthropic(tools) if tools else []
+    if anthropic_tools and not _is_third_party_anthropic_endpoint(base_url):
+        anthropic_tools = _with_model_web_search(anthropic_tools)
     # Nous Portal routes on its own catalog ids (``anthropic/claude-opus-4.8``); normalizing would
     # make the model unresolvable there (prefix AND dots kept).
     if not _is_nous_portal_endpoint(base_url):

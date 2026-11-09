@@ -503,6 +503,22 @@ def _effective_gemini_max_output_tokens(max_tokens: Optional[int], thinking_conf
     return requested
 
 
+def _with_google_search(gemini_tools: List[Dict[str, Any]], tool_config: Optional[Dict[str, Any]]):
+    """Google Search in place of the client ``web_search`` function when no search was chosen
+    (tools.web_tools.model_search_wanted, Crema 2026-11-09). Gemini 3 takes a built-in tool beside function
+    declarations only with ``includeServerSideToolInvocations`` (400 otherwise, checked 2026-11-09); the
+    server-side toolCall/toolResponse parts it returns carry no text and are not replayed (accepted as is)."""
+    declarations = gemini_tools[0]["functionDeclarations"] if gemini_tools else []
+    if not any(d.get("name") == "web_search" for d in declarations):
+        return gemini_tools, tool_config
+    from tools.web_tools import model_search_wanted
+    if not model_search_wanted():
+        return gemini_tools, tool_config
+    rest = [d for d in declarations if d.get("name") != "web_search"]
+    return ([{"functionDeclarations": rest}] if rest else []) + [{"googleSearch": {}}], {
+        **(tool_config or {}), "includeServerSideToolInvocations": True}
+
+
 def build_gemini_request(
     *, messages: List[Dict[str, Any]], tools: Any = None, tool_choice: Any = None, temperature: Optional[float] = None,
     max_tokens: Optional[int] = None, top_p: Optional[float] = None, stop: Any = None, thinking_config: Any = None,
@@ -511,11 +527,10 @@ def build_gemini_request(
     # Gemini 3+ both requires tool-call ids and accepts multimodal functionResponse parts.
     is_gemini3 = gemini_requires_tool_call_ids(model)
     contents, system_instruction = _build_gemini_contents(messages, include_tool_call_ids=is_gemini3, is_gemini3=is_gemini3)
-    optional = (
-        ("systemInstruction", system_instruction),
-        ("tools", _translate_tools_to_gemini(tools, json_schema=tools_as_json_schema)),
-        ("toolConfig", _translate_tool_choice_to_gemini(tool_choice)),
-    )
+    gemini_tools, tool_config = _translate_tools_to_gemini(tools, json_schema=tools_as_json_schema), _translate_tool_choice_to_gemini(tool_choice)
+    if is_gemini3:
+        gemini_tools, tool_config = _with_google_search(gemini_tools, tool_config)
+    optional = (("systemInstruction", system_instruction), ("tools", gemini_tools), ("toolConfig", tool_config))
     request: Dict[str, Any] = {"contents": contents, **{k: v for k, v in optional if v}}
     # Key order is part of the wire format (prompt-cache parity): temperature, maxOutputTokens, topP, stop, thinking.
     generation = (

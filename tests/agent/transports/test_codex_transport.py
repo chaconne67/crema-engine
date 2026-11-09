@@ -1492,6 +1492,7 @@ class TestXaiWebSearchBackendPreference:
     def test_explicit_firecrawl_prefers_client(self, monkeypatch):
         import agent.transports.codex as codex_mod
 
+        monkeypatch.setattr("tools.web_tools.model_search_wanted", lambda: False)  # a search was chosen
         monkeypatch.setattr(
             "agent.web_search_registry.get_active_search_provider",
             lambda: SimpleNamespace(name="firecrawl"),
@@ -1526,6 +1527,7 @@ class TestXaiWebSearchBackendPreference:
         """When no provider is registered and backend isn't xai, keep client."""
         import agent.transports.codex as codex_mod
 
+        monkeypatch.setattr("tools.web_tools.model_search_wanted", lambda: False)  # a search was chosen
         monkeypatch.setattr(
             "agent.web_search_registry.get_active_search_provider",
             lambda: None,

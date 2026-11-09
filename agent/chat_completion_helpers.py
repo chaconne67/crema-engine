@@ -1706,6 +1706,11 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
 
     if assistant_tool_calls:
         msg["tool_calls"] = [_assistant_tool_call_dict(agent, tc, i) for i, tc in enumerate(assistant_tool_calls)]
+    # The model's own web search keeps its query and sources in what later turns replay (the user sees
+    # ``content`` only), so the model still knows the answer came from that search.
+    search_note = getattr(assistant_message, "web_search_note", None)
+    if isinstance(search_note, str) and search_note and not isinstance(msg.get("content"), list):
+        msg["api_content"] = f"{search_note}\n\n{msg.get('content') or ''}".strip()
     return msg
 
 

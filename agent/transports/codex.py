@@ -162,6 +162,10 @@ def _xai_prefers_native_web_search() -> bool:
     reintroducing it).
     """
     try:
+        from tools.web_tools import model_search_wanted
+
+        if model_search_wanted():  # no search chosen: the model company's own (Crema, 2026-11-09)
+            return True
         from agent.web_search_registry import get_active_search_provider
 
         provider = get_active_search_provider()
@@ -198,6 +202,10 @@ def _openai_prefers_native_web_search() -> bool:
     OpenAI-compatible endpoint does not implement the server-side tool.
     """
     try:
+        from tools.web_tools import model_search_wanted
+
+        if model_search_wanted():  # no search chosen: the model company's own (Crema, 2026-11-09)
+            return True
         from agent.web_search_registry import get_active_search_provider
 
         provider = get_active_search_provider()

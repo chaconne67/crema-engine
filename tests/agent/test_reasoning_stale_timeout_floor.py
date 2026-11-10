@@ -58,6 +58,14 @@ def test_floor_matching_is_vendor_prefix_and_variant_suffix_transparent():
     assert floor("openai/gpt-4o") is None
 
 
+def test_mythos_models_get_their_fable_twins_floor():
+    """Mythos models have the same specs as their Fable twins, so they need the same floor."""
+    from agent.reasoning_timeouts import get_reasoning_stale_timeout_floor as floor
+
+    for mythos in ("claude-mythos-5-2", "anthropic/claude-mythos-5.2", "claude-mythos-5-1"):
+        assert floor(mythos) == floor(mythos.replace("mythos", "fable")) is not None, mythos
+
+
 # ── integration: _resolved_api_call_stale_timeout_base ─────────────────────
 
 

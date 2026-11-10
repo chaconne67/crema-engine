@@ -1171,7 +1171,7 @@ BEDROCK_CONTEXT_LENGTHS: Dict[str, int] = {
     # DEFAULT_CONTEXT_LENGTHS or context compresses early.
     **dict.fromkeys((
         "anthropic.claude-fable-5", "anthropic.claude-fable", "anthropic.claude-sonnet-5", "anthropic.claude-opus-4-8",
-        "anthropic.claude-opus-4-7", "anthropic.claude-opus-4-6", "anthropic.claude-sonnet-4-6",
+        "anthropic.claude-opus-4-7", "anthropic.claude-opus-4-6", "anthropic.claude-sonnet-4-6", "anthropic.claude-mythos",
     ), 1_000_000),
     **dict.fromkeys((
         "anthropic.claude-sonnet-4-5", "anthropic.claude-haiku-4-5", "anthropic.claude-opus-4", "anthropic.claude-sonnet-4",

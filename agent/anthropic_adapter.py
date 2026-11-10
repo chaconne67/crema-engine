@@ -89,7 +89,12 @@ _NO_XHIGH_CLAUDE_SUBSTRINGS = ("claude-opus-4-6", "claude-opus-4.6", "claude-son
 # Adaptive families where thinking is mandatory: ``thinking: {"type": "disabled"}`` answers HTTP
 # 400 (Portal flags them ``reasoning.mandatory``). The failure is asymmetric — a missing entry
 # 400s the turn, a spurious one only leaves thinking on — so when in doubt, add the family.
-_MANDATORY_THINKING_CLAUDE_SUBSTRINGS = ("claude-fable",)
+_MANDATORY_THINKING_CLAUDE_SUBSTRINGS = ("claude-fable", "claude-mythos", "claude-opus-5-5", "claude-opus-5.5")
+# Families whose documented "off" is ``thinking: {"type": "between_tools"}`` (no up-front thinking,
+# short notes between tool calls): ``disabled`` 400s there with a message pointing at it.
+_BETWEEN_TOOLS_OFF_CLAUDE_SUBSTRINGS = ("claude-sonnet-5-5", "claude-sonnet-5.5")
+# Haiku through 4.5 gets no thinking request; Haiku 5.5+ thinks adaptively.
+_HAIKU_VERSION_RE = re.compile(r"haiku-(\d{1,2})[-.](\d{1,2})(?!\d)")
 
 
 def _is_claude_model(model: str | None) -> bool:
@@ -179,8 +184,17 @@ def _accepts_thinking_disable(model: str) -> bool:
     return (
         _is_claude_model(model)
         and _supports_adaptive_thinking(model)
-        and not _model_matches(model, _MANDATORY_THINKING_CLAUDE_SUBSTRINGS)
+        and not _model_matches(model, _MANDATORY_THINKING_CLAUDE_SUBSTRINGS + _BETWEEN_TOOLS_OFF_CLAUDE_SUBSTRINGS)
     )
+
+
+def _is_pre_thinking_haiku(model: str) -> bool:
+    """Haiku generations that never get a thinking request (through 4.5). Haiku 5.5+ uses adaptive thinking."""
+    m = model.lower()
+    if "haiku" not in m:
+        return False
+    version = _HAIKU_VERSION_RE.search(m)
+    return version is None or (int(version.group(1)), int(version.group(2))) < (5, 5)
 
 
 def _forbids_sampling_params(model: str) -> bool:
@@ -526,15 +540,17 @@ def _apply_oauth_tool_names(system, anthropic_tools, anthropic_messages, to_wire
 def _thinking_kwargs(reasoning_config: Dict[str, Any], model: str, effective_max_tokens: int) -> Dict[str, Any]:
     """Map ``reasoning_config`` to Anthropic thinking kwargs. Adaptive models (Claude 4.6+,
     Kimi/Moonshot) get ``thinking.type=adaptive`` + ``output_config.effort``; older models and
-    manual-only compat endpoints (MiniMax) get budget_tokens. Haiku has no extended thinking. On
+    manual-only compat endpoints (MiniMax) get budget_tokens. Haiku through 4.5 gets none. On
     4.7+ ``thinking.display`` defaults to "omitted", hiding the reasoning Hermes shows in its CLI,
     so "summarized" is requested to keep the activity feed populated."""
     if reasoning_config.get("enabled") is False:
         # Adaptive models think by DEFAULT, so omitting the parameter is not a disable — the user
         # silently keeps paying. Mandatory-thinking models 400 on the disable, so they keep the
         # omission: a silently-ignored disable beats a dead turn.
+        if _model_matches(model, _BETWEEN_TOOLS_OFF_CLAUDE_SUBSTRINGS):
+            return {"thinking": {"type": "between_tools"}}
         return {"thinking": {"type": "disabled"}} if _accepts_thinking_disable(model) else {}
-    if "haiku" in model.lower():
+    if _is_pre_thinking_haiku(model):
         return {}
     effort = str(reasoning_config.get("effort", "medium")).lower()
     if _supports_adaptive_thinking(model):

@@ -195,6 +195,10 @@ _SNAPSHOTS: tuple[tuple[str, Optional[str], str, dict], ...] = (
         "claude-opus-5": _OPUS,
         "claude-opus-5-5": ("4.00", "20.00", "0.20", "5.00"),
     }),
+    # Fable 5.2 and Mythos 5.2 share rates; cache hits are 0.025x input.
+    ("anthropic", _ANTHROPIC_URL, "anthropic-pricing-2026-11", {
+        ("claude-fable-5-2", "claude-mythos-5-2"): ("8.00", "40.00", "0.20", "10.00"),
+    }),
     ("openai", "https://openai.com/api/pricing/", "openai-pricing-2026-03-16", {
         "gpt-4o": ("2.50", "10.00", "1.25"), "gpt-4o-mini": ("0.15", "0.60", "0.075"),
         "gpt-4.1": ("2.00", "8.00", "0.50"), "gpt-4.1-mini": ("0.40", "1.60", "0.10"),
@@ -223,6 +227,9 @@ _SNAPSHOTS: tuple[tuple[str, Optional[str], str, dict], ...] = (
     # Price List API had not published these SKUs machine-readably).
     ("bedrock", _BEDROCK_URL, "anthropic-list-2026-07", {
         ("anthropic.claude-opus-4-8", "anthropic.claude-opus-4-7", "anthropic.claude-opus-4-6"): _OPUS,
+    }),
+    ("bedrock", _BEDROCK_URL, "anthropic-list-2026-11", {
+        "anthropic.claude-fable-5-2": ("8.00", "40.00", "0.20", "10.00"),
     }),
     ("bedrock", _BEDROCK_URL, "bedrock-pricing-2026-06", {"anthropic.claude-sonnet-5": _SONNET}),
     ("bedrock", _BEDROCK_URL, "bedrock-pricing-2026-04", {
@@ -309,6 +316,7 @@ _ANTHROPIC_FAST_MODE_PRICING: Dict[str, PricingEntry] = {
     for _models, _rates in (
         (("claude-opus-4-8", "claude-opus-5"), ("10.00", "50.00", "1.00", "12.50")),
         (("claude-opus-5-5",), ("8.00", "40.00", "0.40", "10.00")),
+        (("claude-fable-5-2", "claude-mythos-5-2"), ("16.00", "80.00", "0.40", "20.00")),
     )
     for _model in _models
 }

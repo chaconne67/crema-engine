@@ -704,6 +704,7 @@ def _classify_summary_failure(e: Exception) -> _SummaryFailureKind:
     """
     status = _exc_status_code(e)
     err = str(e).lower()
+    verdict = classify_api_error(e).reason
     return _SummaryFailureKind(
         # Permanent-looking error on a distinct summary model: fall back to main instead of cooldown.
         model_not_found=status in {404, 503}
@@ -714,17 +715,16 @@ def _classify_summary_failure(e: Exception) -> _SummaryFailureKind:
         json_decode=isinstance(e, json.JSONDecodeError) or "expecting value" in err,
         # httpx premature-close errors are transient; treat like a timeout, not a 60s cooldown.
         streaming_closed=_is_connection_error(e),
-        # HTTP 200 with empty body from a degraded provider, plus the sibling "no usable response"
-        # shapes from _validate_llm_response.
-        empty_content=isinstance(e, RuntimeError) and any(
+        # HTTP 200 with empty body from a degraded provider, the sibling "no usable response" shapes from
+        # _validate_llm_response, and a safety block of the summary request (a refusal, like refusal content).
+        empty_content=verdict is FailoverReason.content_policy_blocked or (isinstance(e, RuntimeError) and any(
             m in err for m in (
                 "empty content", "refusal content", "llm returned none response", "llm returned invalid response",
             )
-        ),
+        )),
         # Truncated summary: one main-model retry, then ABORT preserving the session.
         truncated=isinstance(e, RuntimeError) and _TRUNCATED_SUMMARY_MARKER in err,
-        overloaded=classify_api_error(e).reason is FailoverReason.overloaded
-        or any(marker in err for marker in ("overloaded", "at capacity", "over capacity")),
+        overloaded=verdict is FailoverReason.overloaded or any(marker in err for marker in ("overloaded", "at capacity", "over capacity")),
     )
 
 
@@ -1987,10 +1987,36 @@ def _json_dict(text: Any) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _summarize_refused_tool_result(tool_name: str, args: dict, content: str) -> "str | None":
+    """Summary for a call an approval or write guard refused (``BLOCKED: ...`` / ``status``
+    ``blocked``/``pending_approval``), else None. The per-tool summarizers describe the call as done
+    ("ran ...", "wrote to ..."), which would turn a user's denial into a record of the action and
+    drop the "do not retry" instruction. Strictly below _PRUNE_MIN_CHARS, like the clarify summary,
+    so later prune passes keep it."""
+    payload = _json_dict(content)
+    status = payload.get("status")
+    error = payload.get("error") if isinstance(payload.get("error"), str) else ""
+    if not error and content.lstrip().startswith("BLOCKED"):
+        error = content.strip()
+    if status == "pending_approval":
+        outcome = "awaiting the user's approval, not run"
+    elif status == "blocked" or error.lstrip().startswith("BLOCKED"):
+        outcome = "BLOCKED, not run"
+        if "NOT consented" in error:
+            outcome += "; the user did NOT consent, do not retry or reach the same outcome another way"
+    else:
+        return None
+    target = _str_arg(args, "command") or _str_arg(args, "path")
+    target = f" `{target if len(target) <= 60 else target[:57] + '...'}`" if target else ""
+    return f"[{tool_name}]{target} {outcome}"[:_PRUNE_MIN_CHARS - 1]
+
+
 def _summarize_tool_result_unguarded(tool_name: str, tool_args: str, tool_content: str) -> str:
     """Build the summary line (unguarded; see ``_summarize_tool_result``)."""
     args = _json_dict(tool_args)
     content = tool_content or ""
+    if (refused := _summarize_refused_tool_result(tool_name, args, content)) is not None:
+        return refused
     content_len = len(content)
     line_count = content.count("\n") + 1 if content.strip() else 0
     summarizer = _TOOL_RESULT_SUMMARIZERS.get(tool_name)

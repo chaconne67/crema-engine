@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 
@@ -819,3 +820,274 @@ def test_native_gemini_detection_covers_express_but_not_vertex_oauth_openapi():
     assert not is_native_gemini_base_url(
         "https://aiplatform.googleapis.com/v1beta1/projects/p/locations/global/endpoints/openapi"
     )
+
+
+def test_thinking_tokens_are_counted_as_output_and_surfaced_as_reasoning():
+    """Gemini bills hidden thinking under its own ``thoughtsTokenCount``;
+    ``candidatesTokenCount`` covers visible output only while ``totalTokenCount``
+    includes thoughts. Dropping thoughts made the emitted usage internally
+    inconsistent (prompt + completion != total) and billed a thinking turn at a
+    fraction of its real output."""
+    from agent.gemini_native_adapter import translate_gemini_response
+    from agent.usage_pricing import normalize_usage
+
+    prompt, visible, thoughts = 10, 200, 5000
+    payload = {
+        "candidates": [{"content": {"parts": [{"text": "done"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {
+            "promptTokenCount": prompt,
+            "candidatesTokenCount": visible,
+            "thoughtsTokenCount": thoughts,
+            "totalTokenCount": prompt + visible + thoughts,
+        },
+    }
+
+    usage = translate_gemini_response(payload, model="gemini-2.5-flash").usage
+    assert usage.prompt_tokens + usage.completion_tokens == usage.total_tokens
+    assert usage.completion_tokens_details.reasoning_tokens == thoughts
+
+    canonical = normalize_usage(usage, provider="google")
+    assert canonical.output_tokens == visible + thoughts
+    assert canonical.reasoning_tokens == thoughts
+
+
+def test_streaming_usage_counts_thinking_tokens_like_the_non_streaming_path():
+    """Usage rides on the stream's finish chunk; it must agree with the
+    non-streaming assembly rather than under-reporting thinking."""
+    from agent.gemini_native_adapter import translate_stream_event
+
+    prompt, visible, thoughts = 7, 3, 900
+    event = {
+        "candidates": [{"content": {"parts": [{"text": "done"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {
+            "promptTokenCount": prompt,
+            "candidatesTokenCount": visible,
+            "thoughtsTokenCount": thoughts,
+            "totalTokenCount": prompt + visible + thoughts,
+        },
+    }
+
+    chunks = translate_stream_event(event, model="gemini-2.5-flash", tool_call_indices={})
+    usage = chunks[-1].usage
+    assert usage.prompt_tokens + usage.completion_tokens == usage.total_tokens
+    assert usage.completion_tokens_details.reasoning_tokens == thoughts
+
+
+def test_response_without_thinking_tokens_keeps_its_output_count():
+    """Non-thinking / older responses omit ``thoughtsTokenCount``; their numbers
+    must not move, and reasoning stays zero."""
+    from agent.gemini_native_adapter import translate_gemini_response
+    from agent.usage_pricing import normalize_usage
+
+    prompt, visible = 10, 5
+    payload = {
+        "candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {
+            "promptTokenCount": prompt,
+            "candidatesTokenCount": visible,
+            "totalTokenCount": prompt + visible,
+        },
+    }
+
+    usage = translate_gemini_response(payload, model="gemini-2.5-flash").usage
+    assert usage.completion_tokens == visible
+    assert usage.prompt_tokens + usage.completion_tokens == usage.total_tokens
+    assert normalize_usage(usage, provider="google").reasoning_tokens == 0
+
+
+def test_long_decode_continues_across_hops_and_reports_first_hop_prompt(monkeypatch):
+    """A CONTINUATION hop resends the SAME request plus the token (never the partial output); the hops
+    join into one turn whose usage is summed for billing, with hop 1's prompt kept as the context size."""
+    from agent.gemini_native_adapter import GeminiNativeClient
+
+    def hop(text, finish, token, prompt, out):
+        cand = {"content": {"role": "model", "parts": [{"text": text}]}, "finishReason": finish}
+        return {"candidates": [{**cand, **({"continuationToken": token} if token else {})}],
+                "usageMetadata": {"promptTokenCount": prompt, "candidatesTokenCount": out, "totalTokenCount": prompt + out}}
+
+    hops = [hop("part one ", "CONTINUATION", "tok-1", 100, 32768), hop("part two", "STOP", None, 32868, 500)]
+    sent = []
+
+    class _Stream:
+        def __init__(self, payload):
+            self.status_code, self._payload = 200, payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def iter_text(self):
+            # A mid-stream checkpoint (token, no finish) precedes the hop's final event.
+            checkpoint = {"candidates": [{"content": {"parts": [{"text": ""}]}, "continuationToken": "ckpt"}]}
+            yield f"data: {json.dumps(checkpoint)}\n\ndata: {json.dumps(self._payload)}\n\n"
+
+    class DummyHTTP:
+        def post(self, url, json=None, headers=None, timeout=None):
+            sent.append(json)
+            return DummyResponse(payload=hops[len(sent) - 1])
+
+        def stream(self, method, url, json=None, headers=None, timeout=None):
+            sent.append(json)
+            return _Stream(hops[len(sent) - 1])
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("agent.gemini_native_adapter.httpx.Client", lambda *a, **k: DummyHTTP())
+    client = GeminiNativeClient(api_key="AQ.test", base_url="https://generativelanguage.googleapis.com/v1beta")
+    kwargs = {"model": "gemini-4-argon", "messages": [{"role": "user", "content": "prove it"}], "max_tokens": 262_144}
+
+    response = client.chat.completions.create(**kwargs)
+    assert sent[1] == {**sent[0], "continuationToken": "tok-1"}
+    assert sent[0]["generationConfig"]["maxOutputTokens"] == 262_144  # not clamped to the per-request cap
+    assert response.choices[0].message.content == "part one part two"
+    assert response.choices[0].finish_reason == "stop"
+    usage = response.usage
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.initial_prompt_tokens) == (32968, 33268, 100)
+
+    sent.clear()
+    chunks = list(client.chat.completions.create(**kwargs, stream=True))
+    assert sent[1] == {**sent[0], "continuationToken": "tok-1"}  # the hop's final token, not the checkpoint
+    finishes = [c for c in chunks if c.choices[0].finish_reason]
+    assert [c.choices[0].finish_reason for c in finishes] == ["stop"]  # CONTINUATION is not the end
+    assert "".join(c.choices[0].delta.content or "" for c in chunks) == "part one part two"
+    assert (finishes[0].usage.prompt_tokens, finishes[0].usage.initial_prompt_tokens) == (32968, 100)
+
+
+def _scripted_stream_client(monkeypatch, streams):
+    """A GeminiNativeClient whose Nth stream yields ``streams[N]``: event dicts, then httpx drops on ``"DROP"``."""
+    from agent.gemini_native_adapter import GeminiNativeClient
+
+    sent = []
+
+    class _Stream:
+        status_code = 200
+
+        def __init__(self, script):
+            self._script = script
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def iter_text(self):
+            for item in self._script:
+                if item == "DROP":
+                    raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+                yield f"data: {json.dumps(item)}\n\n"
+
+    class DummyHTTP:
+        def stream(self, method, url, json=None, headers=None, timeout=None):
+            sent.append(json)
+            return _Stream(streams[min(len(sent), len(streams)) - 1])
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("agent.gemini_native_adapter.httpx.Client", lambda *a, **k: DummyHTTP())
+    client = GeminiNativeClient(api_key="AQ.test", base_url="https://generativelanguage.googleapis.com/v1beta")
+    kwargs = {"model": "gemini-4-argon", "messages": [{"role": "user", "content": "count"}], "stream": True}
+    return client, kwargs, sent
+
+
+def _ld_event(text, token=None, finish=None):
+    cand = {"content": {"role": "model", "parts": [{"text": text}]}}
+    return {"candidates": [{**cand, **({"continuationToken": token} if token else {}), **({"finishReason": finish} if finish else {})}]}
+
+
+def test_dropped_long_decode_stream_resumes_from_its_last_checkpoint(monkeypatch):
+    """Past 32K a stream checkpoints every ~5K tokens (the token rides the event whose text it commits).
+    A drop after a checkpoint resends the SAME request plus that token: no restart, no duplicated text."""
+    streams = [[_ld_event("1\n"), _ld_event("2\n", token="ckpt-2"), "DROP"], [_ld_event("3\n", finish="STOP")]]
+    client, kwargs, sent = _scripted_stream_client(monkeypatch, streams)
+
+    chunks = list(client.chat.completions.create(**kwargs))
+    assert sent[1] == {**sent[0], "continuationToken": "ckpt-2"}
+    assert "".join(c.choices[0].delta.content or "" for c in chunks) == "1\n2\n3\n"
+    assert [c.choices[0].finish_reason for c in chunks if c.choices[0].finish_reason] == ["stop"]
+
+
+@pytest.mark.parametrize("streams, requests", [
+    ([[_ld_event("1\n"), "DROP"]], 1),  # before the first checkpoint: nothing to resume from
+    ([[_ld_event("1\n", token="ckpt-1"), _ld_event("2\n"), "DROP"]], 1),  # "2" was shown but not committed
+    ([[_ld_event("1\n", token="ckpt-1"), "DROP"], ["DROP"]], 4),  # bounded: one token rides at most 3 resends
+])
+def test_dropped_stream_without_a_clean_checkpoint_raises(monkeypatch, streams, requests):
+    from agent.gemini_native_adapter import GeminiAPIError
+
+    client, kwargs, sent = _scripted_stream_client(monkeypatch, streams)
+    with pytest.raises(GeminiAPIError) as excinfo:
+        list(client.chat.completions.create(**kwargs))
+    assert excinfo.value.code == "gemini_stream_error"
+    assert len(sent) == requests
+
+
+def test_long_decode_hop_ceiling_ends_as_length(monkeypatch):
+    """A server that keeps answering CONTINUATION must not bill forever: past ceil(budget / 32,768) + 1
+    hops the turn ends as ``length`` (unary and streaming), with usage summed over the hops taken."""
+    from agent.gemini_native_adapter import GeminiNativeClient
+
+    def hop(n):
+        cand = {"content": {"role": "model", "parts": [{"text": f"p{n} "}]}, "finishReason": "CONTINUATION",
+                "continuationToken": f"tok-{n}"}
+        return {"candidates": [cand], "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15}}
+
+    sent = []
+
+    class _Stream:
+        def __init__(self, payload):
+            self.status_code, self._payload = 200, payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def iter_text(self):
+            yield f"data: {json.dumps(self._payload)}\n\n"
+
+    class DummyHTTP:
+        def post(self, url, json=None, headers=None, timeout=None):
+            sent.append(json)
+            return DummyResponse(payload=hop(len(sent)))
+
+        def stream(self, method, url, json=None, headers=None, timeout=None):
+            sent.append(json)
+            return _Stream(hop(len(sent)))
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("agent.gemini_native_adapter.httpx.Client", lambda *a, **k: DummyHTTP())
+    client = GeminiNativeClient(api_key="AQ.test", base_url="https://generativelanguage.googleapis.com/v1beta")
+    kwargs = {"model": "gemini-4-argon", "messages": [{"role": "user", "content": "go"}], "max_tokens": 65_536}
+
+    response = client.chat.completions.create(**kwargs)
+    assert len(sent) == 3  # 65,536 / 32,768 = 2 hops, +1 slack
+    assert response.choices[0].finish_reason == "length"
+    assert response.choices[0].message.content == "p1 p2 p3 "
+
+    sent.clear()
+    chunks = list(client.chat.completions.create(**kwargs, stream=True))
+    assert len(sent) == 3
+    finishes = [c for c in chunks if c.choices[0].finish_reason]
+    assert [c.choices[0].finish_reason for c in finishes] == ["length"]
+    assert (finishes[0].usage.prompt_tokens, finishes[0].usage.initial_prompt_tokens) == (30, 10)
+
+
+def test_long_decode_usage_keeps_canonical_buckets_on_first_hop():
+    """Context engines read the canonical buckets: input/cache_read follow the same first-hop split as
+    prompt_tokens, so cache_read never exceeds the context-facing prompt."""
+    from agent.gemini_long_decode import merge_hop_usage
+    from agent.gemini_native_adapter import _usage_from_metadata
+
+    hops = [{"promptTokenCount": 100, "cachedContentTokenCount": 40, "candidatesTokenCount": 32768},
+            {"promptTokenCount": 32868, "cachedContentTokenCount": 32800, "candidatesTokenCount": 10}]
+    usage = _usage_from_metadata(merge_hop_usage(hops))
+    assert (usage.prompt_tokens, usage.prompt_tokens_details.cached_tokens) == (32968, 32840)  # billing: summed
+    assert (usage.initial_prompt_tokens, usage.initial_cached_tokens) == (100, 40)

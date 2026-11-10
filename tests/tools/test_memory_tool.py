@@ -437,21 +437,23 @@ class TestMemoryToolDispatcher:
         assert "not available" in result["error"]
 
 
-    def test_replace_missing_content_still_distinct_error(self, store):
-        # When old_text IS present but content is missing, keep the original
-        # content-specific error (don't route through the old_text recovery path).
-        store.add("memory", "fact A")
-        result = json.loads(memory_tool(action="replace", old_text="fact A", store=store))
-        assert result["success"] is False
-        assert "content is required" in result["error"]
-        assert "current_entries" not in result
+    def test_replace_is_refused_and_points_at_patch(self, store):
+        # 'replace' overwrote the whole entry and models used it as a span swap, wiping
+        # sibling facts; it is gone from the tool, single and batch, and writes nothing.
+        store.add("memory", "Jeff drinks tea; prefers Rust; lives in Portland")
+        for kwargs in ({"action": "replace", "old_text": "tea", "content": "Jeff drinks coffee"},
+                       {"operations": [{"action": "add", "content": "new fact"},
+                                       {"action": "replace", "old_text": "tea", "content": "coffee"}]}):
+            result = json.loads(memory_tool(target="memory", store=store, **kwargs))
+            assert result["success"] is False and "use 'patch'" in result["error"], result
+        assert store.memory_entries == ["Jeff drinks tea; prefers Rust; lives in Portland"]
 
-    def test_new_text_alias_for_content_on_replace(self, store):
+    def test_new_text_alias_for_content_on_patch(self, store):
         # A caller mirroring old_text with new_text (the patch tool's shape)
         # must succeed instead of erroring 'content is required'.
         store.add("memory", "fact A")
         result = json.loads(
-            memory_tool(action="replace", old_text="fact A", new_text="fact A refined", store=store)
+            memory_tool(action="patch", old_text="fact A", new_text="fact A refined", store=store)
         )
         assert result["success"] is True
         assert "fact A refined" in store.memory_entries
@@ -500,7 +502,7 @@ class TestMemoryBatch:
         result = json.loads(memory_tool(
             target="memory",
             operations=[
-                {"action": "replace", "old_text": "old entry", "new_text": "updated entry"},
+                {"action": "patch", "old_text": "old entry", "new_text": "updated entry"},
                 {"action": "add", "new_text": "batched via new_text"},
             ],
             store=store,
@@ -899,13 +901,13 @@ class TestBackgroundReviewDeleteGate:
         assert record["payload"]["action"] == "remove"
         assert record["origin"] == "background_review"
 
-    def test_replace_staged_in_background_review(self, store, tmp_path, monkeypatch):
+    def test_patch_staged_in_background_review(self, store, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         store.add("memory", "entry the fork must not rewrite")
         token = set_current_write_origin("background_review")
         try:
             result = json.loads(memory_tool(
-                action="replace", old_text="entry the fork", content="rewritten by fork", store=store))
+                action="patch", old_text="entry the fork", content="rewritten by fork", store=store))
         finally:
             reset_current_write_origin(token)
         assert result["staged"] is True
@@ -952,7 +954,8 @@ class TestBackgroundReviewDeleteGate:
         att = set_review_attended(True)
         try:
             result = json.loads(memory_tool(
-                action="replace", old_text="entry an explicit", content="rewritten by refine", store=store))
+                action="patch", old_text="entry an explicit refine may rewrite", content="rewritten by refine",
+                store=store))
         finally:
             reset_review_attended(att)
             reset_current_write_origin(token)

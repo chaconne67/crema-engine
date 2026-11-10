@@ -1052,9 +1052,9 @@ def _cute_memory(a: dict, _r) -> str:
     action, target = a.get("action", "?"), a.get("target", "")
     if action == "add":
         return f"┊ 🧠 memory    +{target}: \"{_cute_trunc(a.get('content', ''))}\""
-    if action in ("replace", "remove"):
+    if action in ("replace", "patch", "remove"):
         old = a.get("old_text") or "<missing old_text>"
-        return f"┊ 🧠 memory    {'~' if action == 'replace' else '-'}{target}: \"{_cute_trunc(old)}\""
+        return f"┊ 🧠 memory    {'-' if action == 'remove' else '~'}{target}: \"{_cute_trunc(old)}\""
     return f"┊ 🧠 memory    {action}"
 
 

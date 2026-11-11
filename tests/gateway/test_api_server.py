@@ -929,8 +929,10 @@ class TestSkillsEndpoint:
             {"name": "github", "description": "GitHub workflow skill", "category": "github"},
             {"name": "ascii-art", "description": "ASCII art generation", "category": "creative"},
         ]
+        # autospec: the handler must call the finder the way the finder is written.
         with patch(
             "tools.skills_tool._find_all_skills",
+            autospec=True,
             return_value=list(fake_skills),
         ):
             app = _create_app(adapter)

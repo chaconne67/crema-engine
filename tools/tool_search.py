@@ -140,9 +140,6 @@ def _core_tool_names() -> frozenset[str]:
 _DIRECT_SURFACE_TOOLSETS = frozenset({"desktop_ui", "project", "setup",
                                       # Crema: the agent searches its notebook before every task.
                                       "knowledge",
-                                      # Crema: a misheard word is noticed in every message, which a
-                                      # catalog stub's 60 characters cannot say (thock_heard).
-                                      "thock",
                                       # Crema: a request it falls short of is recorded when it happens,
                                       # not after a search (crema_unmet).
                                       "crema_unmet"})

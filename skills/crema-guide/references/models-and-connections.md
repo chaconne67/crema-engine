@@ -244,4 +244,4 @@
 
 - Crema에는 음성 입력이 없다(2026-11-13부터). 입력창에 마이크 버튼이 없고, Crema는 Thock에 연결하지 않는다.
 - 말로 쓰고 싶으면 Thock(말을 글로 받아 적는 Aishift 프로그램)을 따로 설치해 쓴다. Thock은 Crema 입력창을 포함해 Windows 어느 창에든 받아 적는다. Thock의 설치·설정·오류는 Thock에서 본다.
-- 플랜에 든 Thock 음성 입력은 같은 Aishift 계정으로 로그인한 Thock에서 쓴다([account-updates-data.md](account-updates-data.md#계정과-요금)).
+- Thock은 Crema와 별개 제품이라 로그인과 요금이 따로다. Crema 플랜에는 Thock이 들어 있지 않다.

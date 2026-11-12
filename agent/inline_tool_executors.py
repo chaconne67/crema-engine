@@ -26,6 +26,13 @@ def tool_hook_ids(agent, effective_task_id: str, tool_call_id: Optional[str]) ->
     }
 
 
+def tool_hook_runtime(agent) -> Dict[str, Any]:
+    """The model the agent answers with right now (names only, no credentials), for ``pre_tool_call``
+    hooks that call that same model. The session row keeps the model the chat started with."""
+    return {"runtime_model": {"model": getattr(agent, "model", "") or "", "provider": getattr(agent, "provider", "") or "",
+                              "reasoning_config": getattr(agent, "reasoning_config", None)}}
+
+
 def emit_terminal_post_tool_call(
     agent,
     *,

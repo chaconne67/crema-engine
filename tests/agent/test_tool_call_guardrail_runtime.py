@@ -348,6 +348,32 @@ def test_relay_rewrite_is_guarded_before_dispatch_in_concurrent_path():
     assert "repeated_exact_failure_block" in messages[0]["content"]
 
 
+@pytest.mark.parametrize("path", ["_execute_tool_calls_sequential", "_execute_tool_calls_concurrent"])
+def test_pre_tool_call_hooks_get_the_model_answering_now(path):
+    agent = _make_agent("web_search")
+    agent.model, agent.provider, agent.reasoning_config = "gpt-now", "openai-codex", {"effort": "high"}
+    tc = _mock_tool_call("web_search", json.dumps({"query": "q"}), "c-runtime")
+    seen = []
+
+    def hooks(name, args, **kwargs):
+        seen.append(kwargs.get("runtime_model"))
+        return "stop", None
+
+    with patch("hermes_cli.plugins._dispatch_pre_tool_call_hooks", side_effect=hooks):
+        getattr(agent, path)(SimpleNamespace(content="", tool_calls=[tc]), [], "task-1")
+
+    assert seen == [{"model": "gpt-now", "provider": "openai-codex", "reasoning_config": {"effort": "high"}}]
+
+
+def test_pre_tool_call_directive_passes_the_runtime_model_to_hooks():
+    from hermes_cli import plugins
+
+    with patch("hermes_cli.lifecycle.invoke_hook", return_value=[]) as invoke:
+        plugins._get_pre_tool_call_directive_details("write_file", {}, runtime_model={"model": "m", "provider": "p"})
+
+    assert invoke.call_args.kwargs["runtime_model"] == {"model": "m", "provider": "p"}
+
+
 def test_plugin_pre_tool_block_wins_without_counting_as_toolguard_block():
     agent = _make_agent("web_search")
     args = {"query": "same"}

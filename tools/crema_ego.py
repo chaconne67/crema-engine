@@ -98,13 +98,14 @@ def enable(enabled: bool) -> Dict[str, Any]:
 
 def _ego(command: Path, *args: str, timeout: int = 120) -> Dict[str, Any]:
     """Runs ego-browser and reads the JSON it prints. The output goes through a file: ego lite, which the command
-    starts when it is not running, would keep a pipe open and the wait for it would never end."""
+    starts when it is not running, would keep a pipe open and the wait for it would never end. ego-browser prints its
+    notices (a new version is out) on lines of their own, on the stream its JSON is on: they are not the reply."""
     with tempfile.TemporaryFile() as out:
         subprocess.run([str(command), *args], stdout=out, stderr=subprocess.STDOUT, timeout=timeout, creationflags=NO_WINDOW, check=True)
         out.seek(0)
         text = out.read().decode("utf-8", "replace").strip()
     try:
-        return json.loads(text)
+        return json.loads("\n".join(line for line in text.splitlines() if not line.startswith("[ego-browser:notice]")))
     except ValueError:
         raise OSError(f"ego-browser {' '.join(args)}: {text[:300] or 'no output'}") from None
 

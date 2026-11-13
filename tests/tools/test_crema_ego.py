@@ -155,6 +155,16 @@ def test_install_with_no_browser_to_bring_along(monkeypatch, tmp_path):
     assert install.ran[1:] == [["import", "list"]]
 
 
+def test_a_notice_beside_ego_browsers_reply_is_not_the_reply(monkeypatch, tmp_path):
+    """ego-browser says a new version is out on a line of its own, on the stream its JSON is on (0.6.2.8, 2026-11-13:
+    every browser start failed on that line until ego lite was updated)."""
+    notice = ("[ego-browser:notice] Ego Lite update is available (current 0.6.2.8). Finish the current browser task, "
+              "then ask the user before running `ego-browser upgrade`; re-read the ego-browser Skill afterward.\n")
+    install = _Install(monkeypatch, tmp_path, listed=notice + json.dumps(LIST))
+    assert crema_ego.install() == {"installed": True, "enabled": True, "progress": None}
+    assert install.ran[-1][:3] == ["import", "--browser", "chrome"]
+
+
 @pytest.mark.parametrize("listed, imported", [
     ("Please complete the onboarding process first.", None),
     (LIST, {"success": False, "result_code": 3}),

@@ -18,6 +18,8 @@ metadata:
 
 이 설명서는 Crema와 함께 설치된다. Crema가 업데이트되면 이 설명서도 그 판의 내용으로 바뀐다.
 
+회사 서버에서 도는 판(Krema, Jabis)에서 일하고 있다면 [server-editions.md](references/server-editions.md)를 먼저 읽는다. 아래와 다른 파일들은 PC판 이야기이고, 서버판에는 없는 것이 많다.
+
 ## 이 스킬을 쓰는 법
 
 1. 사용자가 Crema 자체를 물으면 아래 표에서 주제를 찾아 그 참고 파일을 **먼저 읽고** 답한다. 예: "크레마에서 ~ 어떻게 해?", "~ 할 수 있어?", "왜 이렇게 됐어?", "이 버튼은 뭐야?"
@@ -53,6 +55,7 @@ metadata:
 | 에이전트가 쓸 수 있는 도구와 없는 도구, 명령 승인, 선택지로 묻기, 대화 압축, 지난 대화 검색, 제목, 작업 방식과 지침(SOUL.md·CREMA.md) | [engine.md](references/engine.md) |
 | 계정·요금, 무료 기간, 업데이트, 판별 변화, 설치·제거, 데이터 저장 위치, 백업 | [account-updates-data.md](references/account-updates-data.md) |
 | 오류 문구, 안 될 때 확인할 것 | [troubleshooting.md](references/troubleshooting.md) |
+| 서버판(Krema·Jabis): 로그인, 계정 등급마다 보이는 것, 모델을 고를 수 있는 계정, 서버판에 없는 것 | [server-editions.md](references/server-editions.md) |
 
 ## 늘 맞는 핵심 사실
 

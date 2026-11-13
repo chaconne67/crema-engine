@@ -816,6 +816,8 @@ _SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "X-XSS-Protection": "0",
     "Referrer-Policy": "no-referrer"}
+# Set by a front proxy that knows who is asking, never by the client itself (fixed_model_middleware).
+FIXED_MODEL_HEADER = "X-Crema-Fixed-Model"
 
 if AIOHTTP_AVAILABLE:
     @web.middleware
@@ -855,6 +857,25 @@ if AIOHTTP_AVAILABLE:
             # proper 413, not the handler's 400 "Invalid JSON".
             return _error_response("Request body too large.", 413, code="body_too_large")
 
+    # The request's fields that choose the model of a run (the per-request and the session handlers read them).
+    _MODEL_CHOICE_FIELDS = ("model", "model_id", "provider", "provider_id", "model_options")
+
+    @web.middleware
+    async def fixed_model_middleware(request, handler):
+        """A front proxy that knows who is asking (Crema's service server) marks the accounts that may not choose a
+        model with FIXED_MODEL_HEADER. A request of theirs that names one is refused, not run on another model
+        without a word. Without the header nothing changes."""
+        if (request.headers.get(FIXED_MODEL_HEADER) and request.method in {"POST", "PUT", "PATCH"}
+                and not request.content_type.startswith("multipart/")):
+            try:
+                body = json.loads(await request.read())
+            except ValueError:
+                body = None
+            if isinstance(body, dict) and any(field in body for field in _MODEL_CHOICE_FIELDS):
+                return _error_response(
+                    "This account cannot choose the model.", 403, code="model_choice_not_allowed")
+        return await handler(request)
+
     @web.middleware
     async def security_headers_middleware(request, handler):
         """Add security headers to all responses (including errors)."""
@@ -863,7 +884,7 @@ if AIOHTTP_AVAILABLE:
             response.headers.setdefault(k, v)
         return response
 else:
-    cors_middleware = body_limit_middleware = security_headers_middleware = None  # type: ignore
+    cors_middleware = body_limit_middleware = fixed_model_middleware = security_headers_middleware = None  # type: ignore
 
 _MEDIA_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
                ".webp": "image/webp", ".bmp": "image/bmp"}
@@ -4241,7 +4262,7 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         try:
             mws = [mw for mw in (
                 self._make_profile_prefix_middleware(), cors_middleware, body_limit_middleware,
-                security_headers_middleware) if mw is not None]
+                fixed_model_middleware, security_headers_middleware) if mw is not None]
             self._app = web.Application(middlewares=mws, client_max_size=MAX_REQUEST_BYTES)
             assert self._app is not None
             # Native routes + multiplex /p/<profile>/ mirrors (the prefix middleware validates and

@@ -275,6 +275,24 @@ def _summary(work: dict) -> dict:
     return {"space_id": work["id"], "space_name": work["name"], "status": work["phase"]}
 
 
+def _up() -> dict:
+    """Ego up, hidden, before anything calls it. Ego closes with Crema; ego-browser, finding none up, starts it on
+    screen: a blank '새 탭' window over the chats (2026-10-29, a conversation's work taken up after a restart; 2026-11-13,
+    a chat's own script calling ego-browser before any browser call). The windows as they were before."""
+    before = _windows("inspect")
+    if not before["roots"]:
+        _launch_hidden()
+    return before
+
+
+def wake() -> None:
+    """At Crema's start, with 웹 브라우저 조작 on and ego lite set up: Ego up, hidden, before an agent's script can call
+    ego-browser itself."""
+    if _enabled() and cli() and not _pending().exists():
+        with _browser_lock:
+            _up()
+
+
 def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = False) -> dict:
     """Lifecycle, not login detection: the model requests handoff and interprets the user's reply.
     State is per conversation. A timer, a URL word or a hidden window never confirms login."""
@@ -284,12 +302,8 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
         work = _load_work(session_id)
         if action == "start" and (not _enabled() or _pending().exists() or not cli()):
             raise ValueError("Enable 웹 브라우저 조작 in Crema settings before starting browser work")
-        # Ego closes with Crema; ego-browser, finding none up, starts it on screen: a blank '새 탭' window over the
-        # chats (2026-10-29, a conversation's work taken up after a restart). So Ego is up, hidden, before any call.
         if work or action == "start":
-            before = _windows("inspect")
-            if not before["roots"]:
-                _launch_hidden()
+            before = _up()
         space = _space(work) if work else None
         if work and space is None:
             # Closed outside Crema (a chat's own script called the SDK's finish(), 2026-10-29): only Crema's note of it

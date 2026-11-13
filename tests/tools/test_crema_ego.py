@@ -546,3 +546,22 @@ def test_replaced_window_cannot_take_control_back_from_human(monkeypatch, tmp_pa
     with pytest.raises(OSError, match="ownership changed"):
         crema_ego.browser("resume", "chat-a", confirmed=True)
     assert fake.spaces[1]["ownership"] == "agentDelegatedToUser"
+
+
+def test_crema_start_brings_ego_up_hidden_before_any_script_can(monkeypatch, tmp_path):
+    # A chat's own script called ego-browser with no Ego up; ego-browser started it on screen (2026-11-13).
+    fake = _Browser(monkeypatch, tmp_path)
+    crema_ego.wake()
+    assert fake.launched == 1
+    crema_ego.wake()  # already up: left as it is
+    assert fake.launched == 1 and fake.touched == []
+
+
+def test_crema_start_leaves_ego_off_when_browser_work_is_off_or_not_set_up(monkeypatch, tmp_path, config):
+    fake = _Browser(monkeypatch, tmp_path)
+    config["skills"]["disabled"].append("ego-browser")
+    crema_ego.wake()
+    config["skills"]["disabled"].remove("ego-browser")
+    monkeypatch.setattr(crema_ego, "cli", lambda: None)
+    crema_ego.wake()
+    assert fake.launched == 0 and fake.window_calls == []

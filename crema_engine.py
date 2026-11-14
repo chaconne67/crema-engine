@@ -304,14 +304,6 @@ async def main() -> None:
 
     crema_ego.cli()
 
-    def wake_ego():
-        try:
-            crema_ego.wake()
-        except Exception:
-            logging.getLogger(__name__).error("ego lite was not started hidden at Crema's start", exc_info=True)
-
-    threading.Thread(target=wake_ego, name="ego-wake", daemon=True).start()
-
     @settings.get("/api/crema/ego")
     async def ego_state():
         return await asyncio.to_thread(crema_ego.state)

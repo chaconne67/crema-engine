@@ -12,7 +12,6 @@ import shutil
 import subprocess
 import tempfile
 import threading
-import time
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -222,34 +221,6 @@ def _windows(action: str, **payload) -> dict:
     return call(action, _home() / "Application" / "ego.exe", **payload)
 
 
-def _launch_hidden() -> None:
-    exe = _home() / "Application" / "ego.exe"
-    if not exe.is_file():
-        raise FileNotFoundError(f"Ego is not installed at {exe}")
-    startup = subprocess.STARTUPINFO()
-    startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    startup.wShowWindow = 0
-    # Ego closes with Crema (a restart, an update), so it starts as after a crash; Chromium's restore prompt would show.
-    started = subprocess.Popen(
-        [str(exe), "--startup-ego-browser-service", "--hide-crash-restore-bubble"],
-        startupinfo=startup,
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        creationflags=NO_WINDOW,
-    )
-    # ego-browser starts its own Ego, without that flag, when it finds none up: wait for this one's hidden windows.
-    deadline = time.monotonic() + 20
-    while not any(window["pid"] == started.pid for window in _windows("inspect")["windows"]):
-        if started.poll() is not None or time.monotonic() > deadline:
-            raise OSError("Ego did not start in the background")
-        time.sleep(0.5)
-    # One minimized window in the taskbar, not hidden off-screen: Ego remembered that place, so windows the person or a
-    # site opened stood off-screen, shown only in the taskbar (주인님 2026-11-14). Only once Ego answers: the hidden
-    # start holds for its first window show alone, and a minimize before Ego's own show took it, so Ego showed the
-    # window on screen.
-    _sdk("console.log(JSON.stringify({spaces:await listTaskSpaces()}))", timeout=30)
-    _windows("minimize", pid=started.pid)
-
-
 def _sdk(script: str, *, timeout: int = 6) -> dict:
     command = cli()
     if not command:
@@ -281,24 +252,6 @@ def _summary(work: dict) -> dict:
     return {"space_id": work["id"], "space_name": work["name"], "status": work["phase"]}
 
 
-def _up() -> dict:
-    """Ego up, hidden, before anything calls it. Ego closes with Crema; ego-browser, finding none up, starts it on
-    screen: a blank '새 탭' window over the chats (2026-10-29, a conversation's work taken up after a restart; 2026-11-13,
-    a chat's own script calling ego-browser before any browser call). The windows as they were before."""
-    before = _windows("inspect")
-    if not before["roots"]:
-        _launch_hidden()
-    return before
-
-
-def wake() -> None:
-    """At Crema's start, with 웹 브라우저 조작 on and ego lite set up: Ego up, hidden, before an agent's script can call
-    ego-browser itself."""
-    if _enabled() and cli() and not _pending().exists():
-        with _browser_lock:
-            _up()
-
-
 def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = False) -> dict:
     """Lifecycle, not login detection: the model requests handoff and interprets the user's reply.
     State is per conversation. A timer, a URL word or a hidden window never confirms login."""
@@ -308,8 +261,9 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
         work = _load_work(session_id)
         if action == "start" and (not _enabled() or _pending().exists() or not cli()):
             raise ValueError("Enable 웹 브라우저 조작 in Crema settings before starting browser work")
-        if work or action == "start":
-            before = _up()
+        # Ego as it is (주인님 2026-11-14): not started with Crema; ego-browser starts it, with its own window, when
+        # browser work needs it and it is not running.
+        fresh = action == "start" and not work and not _windows("inspect")["roots"]
         space = _space(work) if work else None
         if work and space is None:
             # Closed outside Crema (a chat's own script called the SDK's finish(), 2026-10-29): only Crema's note of it
@@ -321,10 +275,7 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
             work = None
         if action == "start":
             if work:
-                current = space
-                if work["phase"] == "blocked":
-                    raise OSError("Background startup was not verified; finish this failed task before starting again")
-                if work["phase"] != "working" or current["ownership"] != "agent":
+                if work["phase"] != "working" or space["ownership"] != "agent":
                     raise ValueError("The browser is with the user; wait for confirmation and resume it")
                 return _summary(work)
             name = "Crema " + uuid.uuid4().hex[:12]
@@ -332,16 +283,9 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
                         "console.log(JSON.stringify({id:t.spaceId}))", timeout=20)
             work = {"id": made["id"], "name": name, "phase": "working", "window": None}
             _save_work(session_id, work)
-            visible_before = {w["hwnd"] for w in before["windows"] if w["visible"]}
-            visible_after = {w["hwnd"] for w in _windows("inspect")["windows"] if w["visible"]}
-            if visible_after - visible_before:
-                # Ego 0.6.2.5's usage-data question shows on a fresh start; it is answered 'Not now' and looked at again.
+            if fresh:
+                # Ego 0.6.2.5's usage-data question shows on a fresh start; it is answered 'Not now' (주인님 2026-10-30).
                 _windows("decline")
-                visible_after = {w["hwnd"] for w in _windows("inspect")["windows"] if w["visible"]}
-            if visible_after - visible_before:
-                work["phase"] = "blocked"
-                _save_work(session_id, work)
-                raise OSError("An Ego window became visible during background startup; browser work was not verified")
             return _summary(work)
 
         if action not in {"handoff", "resume", "finish"}:
@@ -409,7 +353,7 @@ def browser(action: str, session_id: str, *, page: str = "", confirmed: bool = F
             _save_work(session_id, work)
             return {**_summary(work), "reason": reason} if reason else _summary(work)
 
-        if work["phase"] not in {"working", "blocked"} or space["ownership"] != "agent":
+        if work["phase"] != "working" or space["ownership"] != "agent":
             raise ValueError("The user still has the browser; do not finish or hide their handoff")
         if work["window"]:
             _windows("hide", window=work["window"])

@@ -207,20 +207,15 @@ class _Browser:
         self.calls = []
         self.window_calls = []
         self.visible = []
-        self.launched = 0
-        self.running = False
+        self.started = 0
+        self.running = True  # Ego up; a test closes it to see ego-browser start it
         self.reason = "manual_takeover"
         self.window = {"hwnd": 33, "pid": 44, "created": "100", "title": "owned", "visible": True, "marker": "Crema.Ego.test"}
         monkeypatch.setattr(crema_ego, "_work_path", lambda session: tmp_path / (session + ".json") if session else
                             (_ for _ in ()).throw(ValueError("conversation required")))
         monkeypatch.setattr(crema_ego, "cli", lambda: "ego-browser")
-        monkeypatch.setattr(crema_ego, "_launch_hidden", self.launch)
         monkeypatch.setattr(crema_ego, "_sdk", self.sdk)
         monkeypatch.setattr(crema_ego, "_windows", self.windows)
-
-    def launch(self):
-        self.launched += 1
-        self.running = True
 
     @property
     def touched(self):
@@ -245,7 +240,9 @@ class _Browser:
         raise AssertionError(action)
 
     def sdk(self, script, **_):
-        assert self.running, "ego-browser finding no Ego up starts it on screen"
+        if not self.running:  # ego-browser, finding no Ego up, starts it with its own window
+            self.started += 1
+            self.running = True
         self.calls.append(script)
         if "listTaskSpaces" in script and ".handOff()" not in script:
             return {"spaces": list(self.spaces.values())}
@@ -271,35 +268,41 @@ class _Browser:
         raise AssertionError(script)
 
 
-def test_browser_starts_hidden_once_and_preserves_user_windows(monkeypatch, tmp_path):
+def test_browser_start_with_ego_up_leaves_every_window_as_it_is(monkeypatch, tmp_path):
     fake = _Browser(monkeypatch, tmp_path)
+    fake.running = True
     fake.visible = [{"hwnd": 7, "visible": True}]  # another window stays exactly as it was
     first = crema_ego.browser("start", "chat-a")
     assert first["space_id"] == 1 and first["status"] == "working"
     assert crema_ego.browser("start", "chat-a") == first
-    assert fake.launched == 1
+    assert fake.started == 0
     assert fake.touched == []
     assert not any(".handOff()" in call for call in fake.calls)
 
 
-def test_ego_usage_data_question_on_a_fresh_start_is_answered_not_now(monkeypatch, tmp_path):
+def test_browser_work_starts_ego_as_ego_does_and_answers_its_usage_question(monkeypatch, tmp_path):
+    # Not with Crema: ego-browser starts Ego when browser work needs it, its own window shown (주인님 2026-11-14).
     fake = _Browser(monkeypatch, tmp_path)
-    original = fake.windows
-    def windows(action, **kw):
-        if action == "inspect" and fake.launched and not any(w["hwnd"] == 9 for w in fake.visible)                 and not any(a == "decline" for a, _ in fake.window_calls):
-            fake.visible = [{"hwnd": 9, "visible": True, "title": "Help improve ego(lite)?"}]
-        return original(action, **kw)
-    monkeypatch.setattr(crema_ego, "_windows", windows)
+    fake.running = False
+    original = fake.sdk
+    def sdk(script, **kw):
+        if not fake.running:  # Ego, started, shows its window and, fresh, its usage-data question
+            fake.visible = [{"hwnd": 5, "visible": True, "title": "새 탭 - ego"},
+                            {"hwnd": 9, "visible": True, "title": "Help improve ego(lite)?"}]
+        return original(script, **kw)
+    monkeypatch.setattr(crema_ego, "_sdk", sdk)
     assert crema_ego.browser("start", "chat-a")["status"] == "working"
+    assert fake.started == 1
     assert fake.touched == ["decline"]
+    assert fake.visible == [{"hwnd": 5, "visible": True, "title": "새 탭 - ego"}]
 
 
-def test_work_taken_up_after_ego_closed_starts_it_hidden_first(monkeypatch, tmp_path):
+def test_work_taken_up_after_ego_closed_lets_ego_browser_start_it(monkeypatch, tmp_path):
     fake = _Browser(monkeypatch, tmp_path)
     first = crema_ego.browser("start", "chat-a")
-    fake.running = False  # Ego closed with Crema (a restart); the conversation then takes its work up again
+    fake.running = False  # Ego closed (with Crema, or by the user); the conversation then takes its work up again
     assert crema_ego.browser("start", "chat-a") == first
-    assert fake.launched == 2
+    assert fake.started == 1
 
 
 def test_browser_handoff_resume_same_space_and_normal_window(monkeypatch, tmp_path):
@@ -366,18 +369,14 @@ def test_a_page_prompt_handoff_is_taken_back_without_the_user_and_says_why(monke
     assert fake.spaces[1]["ownership"] == "agentDelegatedToUser"
 
 
-@pytest.mark.parametrize("failure", ["blocked", "renamed", "created_by_user", "user_owned",
+@pytest.mark.parametrize("failure", ["renamed", "created_by_user", "user_owned",
                                      "takeover_refused", "takeover_unconfirmed"])
 def test_automatic_handoff_keeps_ownership_and_failure_guards(monkeypatch, tmp_path, failure):
     fake = _Browser(monkeypatch, tmp_path)
     handler = crema_ego.registry.get_entry("crema_ego").handler
     handler({"action": "start"}, session_id="chat-a")
     fake.spaces[1]["ownership"] = "agentDelegatedToUser"
-    if failure == "blocked":
-        work = crema_ego._load_work("chat-a")
-        work["phase"] = "blocked"
-        crema_ego._save_work("chat-a", work)
-    elif failure == "renamed":
+    if failure == "renamed":
         fake.spaces[1]["name"] = "Another conversation's Space"
     elif failure == "created_by_user":
         fake.spaces[1]["createdBy"] = "user"
@@ -493,7 +492,7 @@ def test_start_cannot_ignore_disabled_browser(monkeypatch, tmp_path, config):
     config["skills"]["disabled"].append("ego-browser")
     with pytest.raises(ValueError, match="Enable"):
         crema_ego.browser("start", "chat-a")
-    assert fake.calls == [] and fake.launched == 0
+    assert fake.calls == [] and fake.started == 0
 
 
 def test_handoff_requires_existing_page_and_verified_gui(monkeypatch, tmp_path):
@@ -520,29 +519,6 @@ def test_crema_platform_exposes_the_single_browser_lifecycle():
     assert "crema_ego" in TOOLSETS["hermes-api-server"]["tools"]
 
 
-def test_unverified_start_cannot_become_success_on_retry(monkeypatch, tmp_path):
-    fake = _Browser(monkeypatch, tmp_path)
-    original = fake.windows
-    inspected = 0
-    def windows(action, **kw):
-        nonlocal inspected
-        if action == "inspect":
-            inspected += 1
-            if inspected == 2:
-                fake.visible = [{"hwnd": 777, "visible": True}]
-        return original(action, **kw)
-    monkeypatch.setattr(crema_ego, "_windows", windows)
-    with pytest.raises(OSError, match="became visible"):
-        crema_ego.browser("start", "chat-a")
-    with pytest.raises(OSError, match="not verified"):
-        crema_ego.browser("start", "chat-a")
-    assert crema_ego._load_work("chat-a")["phase"] == "blocked"
-    with pytest.raises(ValueError, match="working agent-owned"):
-        crema_ego.browser("handoff", "chat-a", page="p1")
-    crema_ego.browser("finish", "chat-a")
-    assert not crema_ego._work_path("chat-a").exists()
-
-
 def test_replaced_window_cannot_take_control_back_from_human(monkeypatch, tmp_path):
     fake = _Browser(monkeypatch, tmp_path)
     crema_ego.browser("start", "chat-a")
@@ -556,22 +532,3 @@ def test_replaced_window_cannot_take_control_back_from_human(monkeypatch, tmp_pa
     with pytest.raises(OSError, match="ownership changed"):
         crema_ego.browser("resume", "chat-a", confirmed=True)
     assert fake.spaces[1]["ownership"] == "agentDelegatedToUser"
-
-
-def test_crema_start_brings_ego_up_hidden_before_any_script_can(monkeypatch, tmp_path):
-    # A chat's own script called ego-browser with no Ego up; ego-browser started it on screen (2026-11-13).
-    fake = _Browser(monkeypatch, tmp_path)
-    crema_ego.wake()
-    assert fake.launched == 1
-    crema_ego.wake()  # already up: left as it is
-    assert fake.launched == 1 and fake.touched == []
-
-
-def test_crema_start_leaves_ego_off_when_browser_work_is_off_or_not_set_up(monkeypatch, tmp_path, config):
-    fake = _Browser(monkeypatch, tmp_path)
-    config["skills"]["disabled"].append("ego-browser")
-    crema_ego.wake()
-    config["skills"]["disabled"].remove("ego-browser")
-    monkeypatch.setattr(crema_ego, "cli", lambda: None)
-    crema_ego.wake()
-    assert fake.launched == 0 and fake.window_calls == []

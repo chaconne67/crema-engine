@@ -6,18 +6,27 @@ from agent.transports.base import ProviderTransport
 from agent.transports.types import NormalizedResponse, ToolCall
 
 
+def _pages(content: Any) -> str:
+    return "; ".join(f"{r.get('title', '')} <{r.get('url', '')}>" for r in content if isinstance(r, dict)) \
+        if isinstance(content, list) else f"failed: {(content or {}).get('error_code', 'no result')}"
+
+
 def _web_search_note(blocks: List[Dict[str, Any]]) -> str:
     """What this response's Anthropic web searches found, for later turns: each query with every page it
-    returned, then each passage the answer quoted (its citations), so the answer's facts keep their source."""
+    returned, then each passage the answer quoted (its citations), so the answer's facts keep their source.
+    A search started beside a tool call gets its pages in the next response, which notes them."""
     found = {b.get("tool_use_id"): b.get("content") for b in blocks if b.get("type") == "web_search_tool_result"}
-    lines = []
+    started = {b.get("id") for b in blocks if b.get("type") == "server_tool_use"}
+    lines = [f"[Pages from the web search I started in my previous step: {_pages(content) or 'no pages'}]"
+             for use_id, content in found.items() if use_id not in started]
     for b in blocks:
         if b.get("type") != "server_tool_use":
             continue
-        pages = found.get(b.get("id"))
-        sources = "; ".join(f"{r.get('title', '')} <{r.get('url', '')}>" for r in pages if isinstance(r, dict)) \
-            if isinstance(pages, list) else f"failed: {(pages or {}).get('error_code', 'no result')}"
-        lines.append(f"[I searched the web for {(b.get('input') or {}).get('query', '')!r} — {sources or 'no pages'}]")
+        query = (b.get("input") or {}).get("query", "")
+        if b.get("id") not in found:
+            lines.append(f"[I searched the web for {query!r} — its pages came with my next step]")
+            continue
+        lines.append(f"[I searched the web for {query!r} — {_pages(found[b.get('id')]) or 'no pages'}]")
     quoted = dict.fromkeys(
         f"[Quoted from {c.get('title', '')} <{c.get('url', '')}>: {c.get('cited_text', '')!r}]"
         for b in blocks if b.get("type") == "text" for c in (b.get("citations") or [])
@@ -114,12 +123,17 @@ class AnthropicTransport(ProviderTransport):
         if stop_details is not None:
             provider_data["stop_details"] = stop_details
         # Ordered channel only for the shape the parallel lists reconstruct wrongly: signed thinking, or
-        # Anthropic's own web search (its blocks have no place in the lists), followed by a tool call.
+        # Anthropic's own web search (its blocks have no place in the lists), followed by a tool call; and
+        # results of searches the previous response started beside its tool call, which open this response
+        # (dropping them leaves that search without a result, and Anthropic refuses the request).
         signed = any(b.get("type") in _THINKING_TYPES and (b.get("signature") or b.get("data")) for b in ordered_blocks)
-        searched = any(b.get("type") == "server_tool_use" for b in ordered_blocks)
-        if (signed or searched) and any(b.get("type") == "tool_use" for b in ordered_blocks):
+        started_here = {b.get("id") for b in ordered_blocks if b.get("type") == "server_tool_use"}
+        searched = bool(started_here)
+        carried = any(b.get("type") == "web_search_tool_result" and b.get("tool_use_id") not in started_here
+                      for b in ordered_blocks)
+        if carried or (signed or searched) and any(b.get("type") == "tool_use" for b in ordered_blocks):
             provider_data["anthropic_content_blocks"] = ordered_blocks
-        if searched:
+        if searched or carried:
             provider_data["web_search_note"] = _web_search_note(ordered_blocks)
         return NormalizedResponse(
             content="\n".join(text_parts) if text_parts else None, tool_calls=tool_calls or None,

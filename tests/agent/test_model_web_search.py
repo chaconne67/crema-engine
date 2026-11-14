@@ -115,6 +115,41 @@ class TestAnthropicSearchBlocksReplayInOrder:
         assert ordered[1]["content"][0]["url"] == "https://bok.or.kr"
         assert [c.name for c in result.tool_calls] == ["read_file"]
 
+    @pytest.mark.parametrize("tail", [
+        SimpleNamespace(type="tool_use", id="tu_2", name="read_file", input={"path": "b.txt"}),
+        SimpleNamespace(type="text", text="Soniox는 시간당 0.1달러입니다.", citations=None),
+    ])
+    def test_results_of_searches_started_in_the_previous_response_are_kept(self, tail):
+        """Seen 2026-11-11, 11-13, 11-14: Claude called a tool and started searches in one response; their results
+        opened the next response, and replaying that response without them made Anthropic refuse every later
+        request ("tool use ... without a corresponding web_search_tool_result block")."""
+        from agent.transports.anthropic import AnthropicTransport
+        blocks = [
+            SimpleNamespace(type="web_search_tool_result", tool_use_id="srv_1",
+                            content=[{"type": "web_search_result", "url": "https://soniox.com/pricing", "title": "Soniox",
+                                      "encrypted_content": "e", "page_age": None}]),
+            tail,
+        ]
+        stop = "tool_use" if tail.type == "tool_use" else "end_turn"
+        result = AnthropicTransport().normalize_response(SimpleNamespace(content=blocks, stop_reason=stop))
+        ordered = result.provider_data["anthropic_content_blocks"]
+        assert [b["type"] for b in ordered] == ["web_search_tool_result", tail.type]
+        assert ordered[0]["tool_use_id"] == "srv_1"
+        # What later turns read of it: the pages, not a failed search.
+        assert result.provider_data["web_search_note"] == (
+            "[Pages from the web search I started in my previous step: Soniox <https://soniox.com/pricing>]")
+
+    def test_a_search_whose_pages_come_in_the_next_step_is_not_written_as_failed(self):
+        """Seen 2026-11-14: noted as "failed: no result", Claude took its own search for failed and searched again."""
+        from agent.transports.anthropic import AnthropicTransport
+        blocks = [
+            SimpleNamespace(type="tool_use", id="tu_1", name="terminal", input={"command": "date"}),
+            SimpleNamespace(type="server_tool_use", id="srv_1", name="web_search", input={"query": "Soniox pricing"}),
+        ]
+        result = AnthropicTransport().normalize_response(SimpleNamespace(content=blocks, stop_reason="tool_use"))
+        assert result.provider_data["web_search_note"] == (
+            "[I searched the web for 'Soniox pricing' — its pages came with my next step]")
+
     def test_search_answer_keeps_its_query_and_sources_for_later_turns(self):
         """Seen 2026-11-09: with no trace of its search in the replayed history, Claude took back its answer."""
         from agent.chat_completion_helpers import build_assistant_message

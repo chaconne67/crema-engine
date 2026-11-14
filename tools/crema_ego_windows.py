@@ -41,7 +41,10 @@ public static class EgoWindows {
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out Rect r);
   [DllImport("user32.dll")] public static extern bool SystemParametersInfo(uint action, uint param, out Rect r, uint ini);
+  [DllImport("user32.dll")] public static extern bool GetWindowPlacement(IntPtr h, ref Placement p);
+  [DllImport("user32.dll")] public static extern bool SetWindowPlacement(IntPtr h, ref Placement p);
   public struct Rect { public int Left, Top, Right, Bottom; }
+  public struct Placement { public int length, flags, showCmd, minX, minY, maxX, maxY, Left, Top, Right, Bottom; }
 
   public static IntPtr[] All() {
     var found = new List<IntPtr>();
@@ -122,9 +125,9 @@ function Click-Control($w,$element) {
   [EgoWindows]::mouse_event(2,0,0,0,[UIntPtr]::Zero)
   [EgoWindows]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
 }
-# A hidden Ego window still showed as a blank box where it stood (2026-10-29), so hidden ones wait off-screen and
-# a shown one comes back to the middle of the screen. 0x15: keep size and order, do not activate.
-function Park($hwnd) { [void][EgoWindows]::SetWindowPos([IntPtr][long]$hwnd,[IntPtr]::Zero,-32000,-32000,0,0,0x15) }
+# A shown window comes to the middle of the screen: a new Ego window takes the place of the last one, and Ego
+# remembered an off-screen place while Crema kept its windows there (until 2026-11-14). 0x15: keep size and order,
+# do not activate.
 function Center($hwnd) {
   $box=New-Object EgoWindows+Rect
   $area=New-Object EgoWindows+Rect
@@ -138,7 +141,6 @@ function Hide-Owned($saved) {
   $now=Check-Window $saved
   [void][EgoWindows]::ShowWindow([IntPtr][long]$now.hwnd,0)
   if ([EgoWindows]::IsWindowVisible([IntPtr][long]$now.hwnd)) { throw 'Ego did not hide its owned window' }
-  Park $now.hwnd
 }
 $hostWindow=$null
 $shown=$null
@@ -148,6 +150,28 @@ try {
       $_.ExecutablePath -ieq $r.exe -and $_.CommandLine -notmatch '(^|\s)--type='
     } | ForEach-Object { $_.ProcessId })
     @{roots=$roots; windows=@(Windows)} | ConvertTo-Json -Depth 5 -Compress
+    exit 0
+  }
+  if ($r.action -eq 'minimize') {
+    # Ego just started hidden: one of its windows goes to the taskbar, minimized, opening in the middle of the
+    # screen when the person clicks it. Ego hides its other windows itself.
+    $main=Wait-For { @(Windows | Where-Object { $_.pid -eq $r.pid -and $_.title })[0] } 10 'Ego has no window to minimize'
+    $area=New-Object EgoWindows+Rect
+    [void][EgoWindows]::SystemParametersInfo(0x30,0,[ref]$area,0)
+    $width=[Math]::Min(1280,$area.Right-$area.Left-80)
+    $height=[Math]::Min(900,$area.Bottom-$area.Top-80)
+    $place=New-Object EgoWindows+Placement
+    $place.length=44
+    [void][EgoWindows]::GetWindowPlacement([IntPtr][long]$main.hwnd,[ref]$place)
+    $place.flags=0
+    $place.showCmd=7  # SW_SHOWMINNOACTIVE
+    $place.Left=$area.Left+[int](($area.Right-$area.Left-$width)/2)
+    $place.Top=$area.Top+[int](($area.Bottom-$area.Top-$height)/2)
+    $place.Right=$place.Left+$width
+    $place.Bottom=$place.Top+$height
+    [void][EgoWindows]::SetWindowPlacement([IntPtr][long]$main.hwnd,[ref]$place)
+    if (![EgoWindows]::IsIconic([IntPtr][long]$main.hwnd)) { throw 'Ego did not minimize its window' }
+    @{minimized=$main.hwnd} | ConvertTo-Json -Compress
     exit 0
   }
   if ($r.action -in @('hide','show') -and !$r.window.marker) {

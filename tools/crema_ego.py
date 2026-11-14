@@ -230,9 +230,8 @@ def _launch_hidden() -> None:
     startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     startup.wShowWindow = 0
     # Ego closes with Crema (a restart, an update), so it starts as after a crash; Chromium's restore prompt would show.
-    # Its hidden windows still showed as a blank box where they stood (2026-10-29): they are made off-screen.
     started = subprocess.Popen(
-        [str(exe), "--startup-ego-browser-service", "--hide-crash-restore-bubble", "--window-position=-32000,-32000"],
+        [str(exe), "--startup-ego-browser-service", "--hide-crash-restore-bubble"],
         startupinfo=startup,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=NO_WINDOW,
@@ -243,6 +242,12 @@ def _launch_hidden() -> None:
         if started.poll() is not None or time.monotonic() > deadline:
             raise OSError("Ego did not start in the background")
         time.sleep(0.5)
+    # One minimized window in the taskbar, not hidden off-screen: Ego remembered that place, so windows the person or a
+    # site opened stood off-screen, shown only in the taskbar (주인님 2026-11-14). Only once Ego answers: the hidden
+    # start holds for its first window show alone, and a minimize before Ego's own show took it, so Ego showed the
+    # window on screen.
+    _sdk("console.log(JSON.stringify({spaces:await listTaskSpaces()}))", timeout=30)
+    _windows("minimize", pid=started.pid)
 
 
 def _sdk(script: str, *, timeout: int = 6) -> dict:

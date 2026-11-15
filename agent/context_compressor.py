@@ -5575,6 +5575,9 @@ Write only the summary body. Do not include any preamble or prefix."""
 
         from agent.auxiliary_client import aux_progress_hook
 
+        if getattr(self, "_early_compaction_parent", ""):
+            return  # a background-review fork copies its conversation's summary and writes none
+        key = getattr(self, "_session_id", "") or id(self)
         job = self._early_compaction
         if job is not None:
             difference = _early_summary_difference(job, messages)
@@ -5617,6 +5620,12 @@ Write only the summary body. Do not include any preamble or prefix."""
                     job.state = {k: v for k, v in worker.__dict__.items() if before.get(k, _MISSING) is not v}
                     logger.info("Early compaction: summary ready (%d messages)", len(snapshot))
                     _save_early_compaction(job)
+                elif not isinstance(outcome, _CompressionAssembly) and not worker._last_compress_aborted:
+                    # Nothing to summarize yet (right after a compaction the protected tail can hold
+                    # nearly the whole transcript): forget this job so a later step starts again.
+                    if _EARLY_COMPACTIONS.get(key) is job:
+                        _EARLY_COMPACTIONS.pop(key, None)
+                    logger.info("Early compaction: nothing to summarize yet; a later step starts again")
                 else:
                     logger.info("Early compaction: no usable summary; the threshold compaction will write one")
             except AuxiliaryExplicitCancellation:
@@ -5635,20 +5644,32 @@ Write only the summary body. Do not include any preamble or prefix."""
     ) -> Optional[List[Dict[str, Any]]]:
         """The finalized early compaction for ``messages``, or None (none started, not usable for this
         call, no summary came, or the transcript no longer begins with the summarized messages). Any
-        started job is consumed either way."""
-        job = getattr(self, "_early_compaction", None)
-        if job is None:
-            return None
-        self._early_compaction = None
-        if not usable:
-            job.dropped = True
-            return None
+        started job is consumed either way. A background-review fork (``_early_compaction_parent``)
+        instead copies its conversation's ready summary and leaves it there for the conversation."""
+        parent = getattr(self, "_early_compaction_parent", "")
+        if parent:
+            ready = _EARLY_COMPACTIONS.get(parent) or _load_early_compaction(parent)
+            if (
+                ready is None or not usable or (ready.thread is not None and ready.thread.is_alive())
+                or ready.assembly is None or _early_summary_difference(ready, messages) is not None
+            ):
+                return None
+            job = _EarlyCompaction(anchors=ready.anchors, assembly=copy.deepcopy(ready.assembly),
+                                   state=copy.deepcopy(ready.state))
+        else:
+            job = getattr(self, "_early_compaction", None)
+            if job is None:
+                return None
+            self._early_compaction = None
+            if not usable:
+                job.dropped = True
+                return None
+            difference = _early_summary_difference(job, messages)
+            if difference is not None:
+                job.dropped = True
+                logger.info("Early compaction discarded: %s", difference)
+                return None
         n = len(job.anchors)
-        difference = _early_summary_difference(job, messages)
-        if difference is not None:
-            job.dropped = True
-            logger.info("Early compaction discarded: %s", difference)
-            return None
         if job.thread is not None and job.thread.is_alive():
             logger.info("Early compaction: waiting for the summary already being written")
             from agent.auxiliary_client import _notify_aux_progress

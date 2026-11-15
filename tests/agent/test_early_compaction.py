@@ -611,3 +611,70 @@ class TestPostToolStartsEarlyCompaction:
         with patch("agent.usage_anchor.anchored_context_tokens", return_value=None):
             _after_tools(agent, [{"role": "user", "content": "go"}])
         agent.context_compressor.start_early_compaction.assert_not_called()
+
+
+class TestEarlyCompactionRetriesWhenNothingWasSummarizable:
+    def test_a_later_step_starts_again_after_an_early_attempt_found_nothing_to_summarize(self):
+        # Right after a compaction the protected tail can hold nearly the whole transcript, so an early
+        # attempt finds nothing to summarize. A later step (more turns) must start again, so the
+        # threshold compaction does not write the summary while the user waits (2026-11-14 20:39).
+        c = _reply_compressor("RETRY")
+        calls = []
+
+        def fake(**_kw):
+            calls.append(1)
+            return _resp(SUMMARY)
+
+        msgs = _msgs(30)
+        with patch("agent.context_compressor.call_llm", side_effect=fake):
+            c.start_early_compaction(msgs[:5], current_tokens=80_000)  # too few messages: nothing to summarize
+            for t in threading.enumerate():
+                if t.name == "early-compaction":
+                    t.join(10)
+            assert c._early_compaction is None  # forgotten, so the next step may start again
+            c.start_early_compaction(msgs, current_tokens=82_000)
+            _wait_done(c)
+            assert len(calls) == 1  # the summary was written early, not at the threshold
+            out = c.compress(msgs + [{"role": "user", "content": "LATE_USER"}], current_tokens=90_000)
+        assert len(calls) == 1
+        assert "EARLY_SUMMARY_TEXT" in _contents(out)
+
+
+class TestBackgroundReviewUsesTheConversationsEarlySummary:
+    def test_the_review_fork_copies_the_summary_and_leaves_it_for_the_conversation(self):
+        # The background review compacts a detached copy of the conversation (no session id). It must
+        # use the conversation's ready summary instead of writing the same one again, and the
+        # conversation must still find that summary for its own compaction (2026-11-15 00:15).
+        from types import SimpleNamespace
+
+        from agent.background_review import _detach_fork_compression
+
+        calls = []
+
+        def fake(**_kw):
+            calls.append(1)
+            return _resp(SUMMARY)
+
+        msgs = _msgs(30)
+        with patch("agent.context_compressor.call_llm", side_effect=fake):
+            parent = _reply_compressor("REVIEWED")
+            parent.start_early_compaction(msgs, current_tokens=80_000)
+            _wait_done(parent)
+
+            review = SimpleNamespace(context_compressor=_reply_compressor("REVIEWED"))
+            _detach_fork_compression(review)
+            fork = review.context_compressor
+            review_msgs = copy.deepcopy(msgs) + [{"role": "user", "content": "REVIEW_PROMPT"}]
+            fork.start_early_compaction(review_msgs, current_tokens=82_000)  # the fork writes no summary of its own
+            out = fork.compress(review_msgs, current_tokens=90_000)
+            assert len(calls) == 1
+            assert "EARLY_SUMMARY_TEXT" in _contents(out)
+            assert out[-1]["content"] == "REVIEW_PROMPT"
+
+            later = _reply_compressor("REVIEWED")
+            live = msgs + [{"role": "user", "content": "LATE_USER"}]
+            out = later.compress(live, current_tokens=90_000)
+        assert len(calls) == 1
+        assert "EARLY_SUMMARY_TEXT" in _contents(out)
+        assert out[-1]["content"] == "LATE_USER"
+        assert "REVIEW_PROMPT" not in _contents(out)

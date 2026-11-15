@@ -875,7 +875,9 @@ def _detach_fork_compression(review_agent: Any) -> None:
     or cooldown/streak counters land on the parent's row. Force in-place mode and re-enable
     compression ONLY after the rebind succeeded (fail-closed); gates stay deferred until the first
     response so request #1 is a warm cache read."""
-    bind = getattr(getattr(review_agent, "context_compressor", None), "bind_session_state", None)
+    compressor = getattr(review_agent, "context_compressor", None)
+    parent_session_id = getattr(compressor, "_session_id", "") or ""
+    bind = getattr(compressor, "bind_session_state", None)
     detached = False
     if callable(bind):
         try:
@@ -896,6 +898,8 @@ def _detach_fork_compression(review_agent: Any) -> None:
     review_agent.compression_enabled = detached
     if detached:
         review_agent._review_defer_compaction_before_first_response = True
+        # The fork copies (never takes) its conversation's ready early summary instead of writing it again.
+        compressor._early_compaction_parent = parent_session_id
 
 
 def _routed_reasoning_config(task_cfg: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

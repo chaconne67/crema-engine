@@ -170,6 +170,17 @@ def test_timeline_links_backlinks_and_related(store):
     assert hit["slug"] == "project/월말-정산" and "reference/은행-내역" in hit.get("related", [])
 
 
+def test_timeline_dates_must_be_real_calendar_days(store):
+    store.write("project/월말-정산", title="월말 정산", body="정산 절차", sources=["chat:a"])
+    before = store.get("project/월말-정산")
+    for bad in ("2026-02-30", "2027-02-29", "2026-13-01", "2026-1-5", "2026/09/30", "어제", 20260930):
+        with pytest.raises(ValueError):
+            store.add_timeline("project/월말-정산", "잘못된 날", date=bad)
+    assert store.get("project/월말-정산") == before
+    assert store.add_timeline("project/월말-정산", "윤일", date="2028-02-29")["result"] == "added"
+    assert store.add_timeline("project/월말-정산", "오늘")["result"] == "added"
+
+
 def test_status_weights_and_maintenance(store, monkeypatch):
     store.write("reference/옛-주소", title="옛 사이트 주소", body="예전 주소는 old.example", sources=["chat:a"])
     store.write("reference/새-주소", title="새 사이트 주소", body="지금 주소는 new.example", sources=["chat:a"])

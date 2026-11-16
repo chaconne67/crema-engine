@@ -405,6 +405,13 @@ class KnowledgeStore:
         slug, summary = slugify(slug), (summary or "").strip()
         if not summary:
             raise ValueError("summary is required")
+        if date:
+            try:
+                real = time.strftime("%Y-%m-%d", time.strptime(date, "%Y-%m-%d")) == date
+            except (TypeError, ValueError):
+                real = False
+            if not real:
+                raise ValueError(f"date must be a real calendar day as YYYY-MM-DD, got {date!r}")
         date = date or time.strftime("%Y-%m-%d")
         with self.lock:
             row = self._live(slug)

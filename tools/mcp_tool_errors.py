@@ -362,6 +362,11 @@ def _make_mcp_body_cap_transport(httpx_mod, inner_transport, limit: int = _MCP_H
             self._inner = inner
 
         async def handle_async_request(self, request):
+            # Server-owned connections cannot reach the host/private network through redirects
+            # or OAuth metadata/token requests, which share this transport with MCP calls.
+            if os.environ.get("SERVICE_DIR"):
+                from tools.crema_services import validate_public_url
+                await asyncio.to_thread(validate_public_url, str(request.url))
             response = await self._inner.handle_async_request(request)
             declared = response.headers.get("content-length")
             with contextlib.suppress(ValueError):  # malformed header: the streamed cap still applies

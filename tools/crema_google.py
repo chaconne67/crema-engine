@@ -21,7 +21,9 @@ import hashlib
 import hmac
 import json
 import mimetypes
+import os
 import re
+import sys
 import secrets
 import threading
 import time
@@ -53,6 +55,8 @@ IDENTITY = "openid email"
 CONFIG_KEY = "google_accounts"
 SECRET_PREFIX = "CREMA_GOOGLE_"
 SEALED = "dpapi:"
+SERVER_SEALED = "fernet:"
+CLIENT_KEY = "CREMA_GOOGLE_CLIENT"
 CALENDAR = "https://www.googleapis.com/calendar/v3"
 DRIVE = "https://www.googleapis.com/drive/v3"
 UPLOAD = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink"
@@ -124,24 +128,71 @@ def _secret_name(address: str) -> str:
     return SECRET_PREFIX + re.sub(r"[^A-Z0-9]", "_", address.upper())
 
 
-def _seal(text: str) -> str:
-    """The sign-in as only this Windows user on this PC can open it (Windows DPAPI)."""
-    import win32crypt
+def _server_cipher():
+    from cryptography.fernet import Fernet
+    from hermes_constants import get_hermes_home
+    path = get_hermes_home() / ".google-key"
+    with _lock:
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(Fernet.generate_key())
+        return Fernet(path.read_bytes())
 
+
+def _seal(text: str) -> str:
+    if sys.platform != "win32":
+        return SERVER_SEALED + _server_cipher().encrypt(text.encode()).decode()
+    import win32crypt
     return SEALED + base64.b64encode(win32crypt.CryptProtectData(text.encode(), None, None, None, None, 0)).decode()
 
 
 def _unseal(value: str) -> str:
+    if value.startswith(SERVER_SEALED):
+        return _server_cipher().decrypt(value[len(SERVER_SEALED):].encode()).decode()
     import win32crypt
-
     return win32crypt.CryptUnprotectData(base64.b64decode(value[len(SEALED):]), None, None, None, 0)[1].decode()
+
+
+def personal_app(body: dict) -> dict:
+    """Keep the user's downloaded web-client JSON. Never return credentials."""
+    from hermes_cli.config import save_env_value
+    client = body.get("web")
+    if not isinstance(client, dict) or not all(isinstance(client.get(k), str) and client[k].strip()
+                                             for k in ("client_id", "client_secret")):
+        raise ValueError("웹 연결 앱의 JSON 파일을 선택해 주세요.")
+    redirects = client.get("redirect_uris")
+    if not isinstance(redirects, list) or not redirects or not all(isinstance(x, str) for x in redirects):
+        raise ValueError("연결 앱에 돌아올 주소가 필요합니다.")
+    if accounts():
+        raise ValueError("연결 앱을 바꾸려면 먼저 구글 연결을 끊어 주세요.")
+    save_env_value(CLIENT_KEY, _seal(json.dumps({k: client[k] for k in ("client_id", "client_secret", "redirect_uris")})))
+    return {"configured": True}
+
+
+def _client() -> dict:
+    from hermes_cli.config import get_env_value
+    value = get_env_value(CLIENT_KEY)
+    if value:
+        return json.loads(_unseal(value))
+    if os.environ.get("SERVICE_DIR"):
+        raise LookupError("personal_app_required")
+    return {"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET}
+
+
+def _home() -> str:
+    from hermes_constants import get_hermes_home
+    return str(get_hermes_home().resolve())
 
 
 def _grant(address: str) -> Dict[str, str]:
     from hermes_cli.config import get_env_value
 
     value = get_env_value(_secret_name(address))
-    if not value or not value.startswith(SEALED):  # none, or kept unsealed before Crema sealed it
+    if not value or not value.startswith((SEALED, SERVER_SEALED)):  # none, or kept unsealed before Crema sealed it
         raise LookupError(f"the Google sign-in for {address} is missing; connect it again in Settings")
     return json.loads(_unseal(value))
 
@@ -178,7 +229,14 @@ def _save(address: str, features: List[str]) -> None:
 
 def state() -> Dict[str, Any]:
     """Settings: the accounts and their features."""
-    return {"accounts": accounts()}
+    if not os.environ.get("SERVICE_DIR"):
+        return {"accounts": accounts()}
+    try:
+        _client()
+        configured = True
+    except LookupError:
+        configured = False
+    return {"accounts": accounts(), "personal_app": configured, "server": bool(os.environ.get("SERVICE_DIR"))}
 
 
 def remove(feature: str, address: str) -> Dict[str, Any]:
@@ -210,12 +268,16 @@ def start(feature: str, address: str, base: str) -> Dict[str, str]:
     kept = accounts()
     if not address and kept:
         address = kept[0]["address"]
+    client = _client()
+    redirect = base.rstrip("/") + CALLBACK
+    if client.get("redirect_uris") is not None and redirect not in client["redirect_uris"]:
+        raise ValueError("연결 앱의 돌아올 주소가 이 서비스 주소와 다릅니다.")
     verifier = secrets.token_urlsafe(48)
     flow = {"feature": feature, "address": address, "state": secrets.token_urlsafe(32), "verifier": verifier, "redirect": base.rstrip("/") + CALLBACK,
-            "status": "pending", "at": time.time()}
+            "status": "pending", "at": time.time(), "home": _home(), "client": client}
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
     url = AUTHORIZE + "?" + urllib.parse.urlencode({
-        "client_id": CLIENT_ID, "redirect_uri": flow["redirect"], "response_type": "code",
+        "client_id": client["client_id"], "redirect_uri": flow["redirect"], "response_type": "code",
         "scope": f"{FEATURES[feature]} {IDENTITY}", "include_granted_scopes": "true", "access_type": "offline",
         "prompt": "consent", **({"login_hint": address} if address else {}), "state": flow["state"],
         "code_challenge": challenge, "code_challenge_method": "S256"})
@@ -230,7 +292,7 @@ def start(feature: str, address: str, base: str) -> Dict[str, str]:
 def status(flow_id: str) -> Dict[str, str]:
     """pending, done (with the address) or failed (with why: denied, scopes, account, google, server)."""
     flow = _flows.get(flow_id)
-    if flow is None:
+    if flow is None or flow["home"] != _home() or time.time() - flow["at"] > FLOW_SECONDS:
         return {"status": "failed", "reason": "expired"}
     return {key: flow[key] for key in ("status", "reason", "address", "feature") if flow.get(key)}
 
@@ -238,8 +300,8 @@ def status(flow_id: str) -> Dict[str, str]:
 def finish(code: str, state: str, error: str) -> str:
     """Google came back: the flow whose state it carries is settled. Returns how it went, for the page shown."""
     with _lock:
-        flow = next((item for item in _flows.values() if item["status"] == "pending"
-                     and hmac.compare_digest(item["state"], state or "")), None)
+        flow = next((item for item in _flows.values() if item["status"] == "pending" and item["home"] == _home()
+                     and time.time() - item["at"] <= FLOW_SECONDS and hmac.compare_digest(item["state"], state or "")), None)
         if flow is None:
             return "unknown"
         flow["status"] = "working"
@@ -267,7 +329,7 @@ def _trade(flow: Dict[str, Any], code: str) -> str:
     (and, for Gmail, Gmail lets the address in); else why not."""
     try:
         tokens = _json("POST", TOKEN, form={
-            "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET, "code": code,
+            "client_id": flow["client"]["client_id"], "client_secret": flow["client"]["client_secret"], "code": code,
             "code_verifier": flow["verifier"], "redirect_uri": flow["redirect"], "grant_type": "authorization_code"})
     except GoogleError:
         return "google"
@@ -298,19 +360,21 @@ def _trade(flow: Dict[str, Any], code: str) -> str:
 def access_token(address: str) -> str:
     """A live access token for the Google account `address`, refreshed when it is about to run out."""
     grant = _grant(address)
+    cache_key = (_home(), grant["refresh_token"])
     with _lock:
-        token, until = _tokens.get(grant["refresh_token"], ("", 0))
+        token, until = _tokens.get(cache_key, ("", 0))
     if token and until - time.time() > 60:
         return token
+    client = _client()
     try:
-        found = _json("POST", TOKEN, form={"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET,
+        found = _json("POST", TOKEN, form={"client_id": client["client_id"], "client_secret": client["client_secret"],
                                            "refresh_token": grant["refresh_token"], "grant_type": "refresh_token"})
     except GoogleError as error:
         if error.reason == "invalid_grant":
             raise LookupError(f"Google no longer lets Crema into {address}; connect it again in Settings → 부가 기능 연동") from None
         raise
     with _lock:
-        _tokens[grant["refresh_token"]] = (found["access_token"], time.time() + int(found.get("expires_in") or 3600))
+        _tokens[cache_key] = (found["access_token"], time.time() + int(found.get("expires_in") or 3600))
     return found["access_token"]
 
 

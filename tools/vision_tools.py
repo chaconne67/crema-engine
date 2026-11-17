@@ -975,9 +975,16 @@ async def _materialize_video(video_url: str, task_id: Optional[str], temp_paths:
         ImageResolutionError, ResolveContext, _is_local_terminal_backend, resolve_image_source,
     )
     source = video_url.removeprefix("file://")
-    local_path = Path(os.path.expanduser(source))
     lowered = (video_url or "").strip().lower()
     path_like = bool(lowered) and not lowered.startswith(("http://", "https://", "data:"))
+    from tools.file_tools_paths import _profile_file_access_roots, _resolve_path_for_task
+    if path_like and _profile_file_access_roots() is not None:
+        resolved_source = _resolve_path_for_task(source, task_id or "default")
+        if not isinstance(resolved_source, Path):
+            raise PermissionError("Profile file access roots cannot validate a remote video path")
+        local_path = resolved_source
+    else:
+        local_path = Path(os.path.expanduser(source))
     if not _is_local_terminal_backend() and path_like:
         logger.info("Reading video source via terminal backend: %s", video_url)
         suffix = Path(source).suffix.lower()

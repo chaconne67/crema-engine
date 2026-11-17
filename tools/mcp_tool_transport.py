@@ -388,7 +388,7 @@ class MCPServerTransportMixin:
         # Same redirect boundary as the transport client too: httpx strips Authorization on a
         # cross-origin hop natively, but forwards every other configured header verbatim — under
         # strict_redirect_headers those must not leave the configured origin on the probe either.
-        probe_transport = _httpx.AsyncHTTPTransport(verify=ssl_verify, **_present(cert=client_cert))
+        probe_transport = _make_mcp_body_cap_transport(_httpx, _httpx.AsyncHTTPTransport(verify=ssl_verify, **_present(cert=client_cert)))
         _build_client = _make_redirect_header_stripper(
             _httpx, _httpx.URL(url), strict=strict_redirect_headers,
             configured_header_names={key.lower() for key in probe_headers})

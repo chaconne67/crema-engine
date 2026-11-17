@@ -71,7 +71,16 @@ async def resolve_image_source(
     # Everything else is a filesystem path — including bare relative names like "pic.png"
     # (a path-shape gate here regressed them once).
     candidate = s[len("file://"):] if s.lower().startswith("file://") else s
-    p = Path(os.path.expanduser(candidate))
+    from tools.file_tools_paths import _profile_file_access_roots, _resolve_path_for_task
+    if _profile_file_access_roots() is not None:
+        try:
+            p = _resolve_path_for_task(candidate, ctx.task_id or "default")
+        except Exception as exc:
+            raise SourceUnsafe(str(exc), src=s, origin="file") from exc
+        if not isinstance(p, Path):
+            raise SourceUnsafe("Profile file access roots cannot validate a remote image path", src=s)
+    else:
+        p = Path(os.path.expanduser(candidate))
     host_target = _permitted_host_read_target(p, ctx)
     if host_target is not None and host_target.is_file():
         _guard_credential_read(host_target, s)

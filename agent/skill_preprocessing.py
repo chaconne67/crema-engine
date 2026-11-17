@@ -106,6 +106,14 @@ def preprocess_skill_content(
     if not content:
         return content
     cfg = skills_cfg if isinstance(skills_cfg, dict) else load_skills_config()
+    try:
+        from tools.file_tools_paths import _profile_file_access_roots
+        scoped_file_access = _profile_file_access_roots() is not None
+    except Exception:
+        # A failed policy read must not enable skill-authored shell commands.
+        scoped_file_access = True
+    if scoped_file_access:
+        cfg = {**cfg, "inline_shell": False}
     if cfg.get("template_vars", True):
         content = substitute_template_vars(content, skill_dir, session_id)
     if cfg.get("inline_shell", False):

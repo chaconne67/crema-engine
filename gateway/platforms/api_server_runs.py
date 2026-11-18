@@ -238,6 +238,8 @@ def _set_run_status(self, run_id: str, status: str, **fields: Any) -> Dict[str, 
         current.setdefault("shutdown_requested_at", shutdown_requested_at)
     if status != "waiting_for_approval":
         current.pop("approval", None)
+    if status != "waiting_for_clarify":
+        current.pop("clarify", None)
     self._run_statuses[run_id] = current
     should_persist = (
         status != previous_status
@@ -246,7 +248,8 @@ def _set_run_status(self, run_id: str, status: str, **fields: Any) -> Dict[str, 
             "output", "error", "usage", "pending_steer", "session_id", "shutdown_requested_at"}))
     if run_id in self._run_idempotency_ids and should_persist:
         try:
-            self._run_idempotency_store.update_status(run_id, current)
+            # The question is live control state, just like the waiter that can accept its answer.
+            self._run_idempotency_store.update_status(run_id, {k: v for k, v in current.items() if k != "clarify"})
         except Exception:
             logger.exception("[api_server] failed to persist idempotent run status %s", run_id)
     return current
@@ -884,7 +887,17 @@ def _make_clarify_callback(self, run: _RunLaunch, *, _api_server) -> Callable[..
     """The run's clarify bridge (tools/clarify_tool.py's callback): one ``clarify.request`` event carries every
     question; the run then waits, as on an approval, until the client posts the answers
     (POST /v1/runs/{id}/clarify) or the clarify timeout passes."""
-    run_id, q, loop = run.run_id, run.queue, asyncio.get_running_loop()
+    run_id, loop = run.run_id, asyncio.get_running_loop()
+
+    def publish(event):
+        # Serialize publication with the HTTP reply/stop handlers; a reply can unblock the next question.
+        if self._run_statuses.get(run_id, {}).get("status") == "running":
+            self._set_run_status(run_id, "waiting_for_clarify", last_event="clarify.request", clarify=event)
+            run.put_event(event)
+
+    def expire(event):
+        if self._run_statuses.get(run_id, {}).get("clarify") is event:
+            self._set_run_status(run_id, "running")
 
     def _clarify(question, choices, multi_select=False, questions=None):
         import uuid
@@ -900,11 +913,12 @@ def _make_clarify_callback(self, run: _RunLaunch, *, _api_server) -> Callable[..
         clarify_gateway.register(clarify_id, run.approval_session_key, asked[0]["question"], None)
         event = _run_event(run_id, "clarify.request", clarify_id=clarify_id,
                            title=str(question or "").strip() if questions else "", questions=asked)
-        self._set_run_status(run_id, "waiting_for_clarify", last_event="clarify.request")
         with suppress(Exception):
-            loop.call_soon_threadsafe(q.put_nowait, event)
+            loop.call_soon_threadsafe(publish, event)
         raw = clarify_gateway.wait_for_response(clarify_id, clarify_gateway.get_clarify_timeout())
         if not raw:
+            with suppress(Exception):
+                loop.call_soon_threadsafe(expire, event)
             return TIMEOUT_RESPONSE
         reply = json.loads(raw)
         # Words written instead of picking are one message for all the questions (it may answer them, or ask

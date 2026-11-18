@@ -28,7 +28,8 @@ from tools.file_operations_common import DEFAULT_READ_LIMIT, count_conflict_bloc
 from tools import file_state
 from agent.redact import _is_secret_file_arg, redact_sensitive_text
 from tools.file_tools_paths import (
-    _expand_tilde, _path_resolution_warning, _resolve_base_dir, _resolve_path_for_task)
+    FileAccessDenied, _expand_tilde, _path_resolution_warning, _profile_file_access_roots,
+    _resolve_base_dir, _resolve_path_for_task)
 from tools.file_tools_write_guards import (
     _READ_DEDUP_STATUS_MESSAGE, _check_approval_required_write, _check_binary_document_write,
     _check_cross_profile_path, _check_protected_instruction_write, _check_sensitive_path,
@@ -754,6 +755,8 @@ def _resolve_or_none(filepath: str, task_id: str) -> str | None:
     """Task-resolved path string, or None when resolution fails for any reason."""
     try:
         return str(_resolve_path_for_task(filepath, task_id))
+    except FileAccessDenied:
+        raise
     except Exception:
         return None
 
@@ -860,11 +863,14 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
     cross-PROFILE guard it was named for no longer exists).
     """
     # write_file checks the binary-document guard before the mirror guard.
-    err = (_check_sensitive_path(path, task_id)
-           or _check_binary_document_write(path, task_id)
-           or _check_protected_instruction_write([path], task_id)
-           or _check_approval_required_write([path], task_id)
-           or (None if cross_profile else _check_cross_profile_path(path, task_id)))
+    try:
+        err = (_check_sensitive_path(path, task_id)
+               or _check_binary_document_write(path, task_id)
+               or _check_protected_instruction_write([path], task_id)
+               or _check_approval_required_write([path], task_id)
+               or (None if cross_profile else _check_cross_profile_path(path, task_id)))
+    except FileAccessDenied as exc:
+        return tool_error(str(exc))
     if not err and _is_internal_file_tool_content(content):
         err = ("Refusing to write internal read_file display text as file content. "
                "Strip read_file line-number prefixes or reconstruct the intended "
@@ -962,7 +968,10 @@ def patch_tool(mode: str = "replace", path: str = None, old_string: str = None,
             return collected
         _paths_to_check += collected[0]
         _content_write_paths += collected[1]
-    precheck_err = _write_precheck_error(_paths_to_check, _content_write_paths, task_id, cross_profile)
+    try:
+        precheck_err = _write_precheck_error(_paths_to_check, _content_write_paths, task_id, cross_profile)
+    except FileAccessDenied as exc:
+        return tool_error(str(exc))
     if precheck_err:
         return tool_error(precheck_err)
     try:
@@ -1063,6 +1072,8 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
             return tool_error(nt_err)
         try:
             resolved_search_path = str(_resolve_path_for_task(path, task_id))
+        except FileAccessDenied:
+            raise
         except (OSError, ValueError, RuntimeError) as exc:
             resolved_search_path = path
             # A RuntimeError still surfaces as the tool error unless the raw
@@ -1079,9 +1090,23 @@ def search_tool(pattern: str, target: str = "content", path: str = ".",
         if cached_search_nf is not None:
             return cached_search_nf
 
+        search_kwargs = {}
+        roots_configured = _profile_file_access_roots() is not None
+        if roots_configured:
+            # The backend accepts comma/space-separated roots when the whole path is missing.
+            # Validate each actual root before it can traverse and read any content.
+            if not Path(resolved_search_path).exists():
+                parts = ([part.strip() for part in path.split(",") if part.strip()]
+                         if "," in path else path.split())
+                if len(parts) > 1:
+                    for part in parts:
+                        _resolve_path_for_task(part, task_id)
+            # Search must not follow a symlink and read its target before we can filter results.
+            search_kwargs["follow_symlinks"] = False
         result = _get_file_ops(task_id).search(
             pattern=pattern, path=path, target=target, file_glob=file_glob,
-            limit=limit, offset=offset, output_mode=output_mode, context=context, order=order)
+            limit=limit, offset=offset, output_mode=output_mode, context=context, order=order,
+            **search_kwargs)
         omitted = _filter_read_blocked_search_results(result, task_id)
         for m in getattr(result, "matches", None) or ():
             if getattr(m, "content", None):

@@ -496,10 +496,12 @@ class SearchMixin:
 
     def _dispatch_search(self, pattern: str, path: str, target: str,
                          file_glob: Optional[str], limit: int, offset: int,
-                         output_mode: str, context: int, order: str = "discovery") -> SearchResult:
+                         output_mode: str, context: int, order: str = "discovery",
+                         follow_symlinks: Optional[bool] = None) -> SearchResult:
         if target == "files":
-            return self._search_files(pattern, path, limit, offset, order)
-        return self._search_content(pattern, path, file_glob, limit, offset, output_mode, context)
+            return self._search_files(pattern, path, limit, offset, order, follow_symlinks)
+        return self._search_content(
+            pattern, path, file_glob, limit, offset, output_mode, context, follow_symlinks)
 
     def _path_not_found_result(self, path: str) -> SearchResult:
         """Error result for a missing search root, with nearby-entry suggestions."""
@@ -521,7 +523,8 @@ class SearchMixin:
     def _try_multi_path_search(self, pattern: str, path: str, target: str,
                                file_glob: Optional[str], limit: int, offset: int,
                                output_mode: str, context: int,
-                               order: str = "discovery") -> Optional[SearchResult]:
+                               order: str = "discovery",
+                               follow_symlinks: Optional[bool] = None) -> Optional[SearchResult]:
         """Recover a not-found ``path`` that is really several paths in one string.
         Commas explicitly delimit paths (internal spaces preserved); without commas
         split on whitespace. Search every existing part, merge, and note skipped
@@ -541,11 +544,12 @@ class SearchMixin:
         if target == "files":
             # One global traversal across roots so modified ordering and pagination
             # are exact; root admission wraps the actual rg/find invocation.
-            merged = self._search_files(pattern, existing, limit, offset, order)
+            merged = self._search_files(pattern, existing, limit, offset, order, follow_symlinks)
         else:
             merged = SearchResult()
             for root in existing:
-                sub = self._search_content(pattern, root, file_glob, limit, offset, output_mode, context)
+                sub = self._search_content(
+                    pattern, root, file_glob, limit, offset, output_mode, context, follow_symlinks)
                 if sub.error:
                     return sub
                 merged.matches.extend(sub.matches)
@@ -659,7 +663,8 @@ class SearchMixin:
         return root == home or common == root
 
     def _search_files(self, pattern: str, path: str | List[str], limit: int, offset: int,
-                      order: str = "discovery") -> SearchResult:
+                      order: str = "discovery",
+                      follow_symlinks: Optional[bool] = None) -> SearchResult:
         """Search for files by name (glob-like) across one or more roots: rg --files,
         else a bounded find. ``order``: "discovery" (fast, bounded) or "modified"
         (exact global newest-first; needs rg 14+ or GNU find)."""
@@ -683,7 +688,8 @@ class SearchMixin:
                 return SearchResult(error=_ADMISSION_INTERRUPTED_ERROR)
             try:
                 return self._search_files_rg(search_pattern, path, limit, offset, order,
-                                             rg_executable=rg_executable)
+                                             rg_executable=rg_executable,
+                                             follow_symlinks=follow_symlinks)
             finally:
                 _release_filename_search_roots(keys)
 
@@ -760,7 +766,8 @@ class SearchMixin:
             truncated=len(raw_files) > offset + limit or bool(limit_reason), limit_reason=limit_reason)
 
     def _search_files_rg(self, pattern: str, path: str | List[str], limit: int, offset: int,
-                         order: str = "discovery", rg_executable: Optional[str] = None) -> SearchResult:
+                         order: str = "discovery", rg_executable: Optional[str] = None,
+                         follow_symlinks: Optional[bool] = None) -> SearchResult:
         """File-name search via ``rg --files`` (respects .gitignore, skips hidden dirs,
         parallel walk). Discovery order stays bounded and fast; exact modification-time
         ordering is explicit because it scans globally."""
@@ -801,7 +808,8 @@ class SearchMixin:
         root_args = " ".join(self._escape_native_tool_arg(root) for root in command_roots)
         cd_prefix = f"cd {self._escape_shell_arg(scoped_common)} && " if scoped_common else ""
         # ``--`` terminates options so a dash-prefixed root is never parsed as a flag.
-        rg_cmd = (f"{rg} --files{sort_arg} -g {self._escape_shell_arg(glob_pattern)}"
+        follow_arg = " --no-follow" if follow_symlinks is False else ""
+        rg_cmd = (f"{rg} --files{sort_arg}{follow_arg} -g {self._escape_shell_arg(glob_pattern)}"
                   f"{exclusion_args} -- {root_args}")
         result = self._run_rg_bounded([rg_cmd], fetch_limit, timeout=60, native_ok=not scoped_common,
                                       shell_prefix=f"set -o pipefail; {cd_prefix}")
@@ -823,12 +831,14 @@ class SearchMixin:
             truncated=len(all_files) > offset + limit or bool(limit_reason), limit_reason=limit_reason)
 
     def _search_content(self, pattern: str, path: str, file_glob: Optional[str],
-                        limit: int, offset: int, output_mode: str, context: int) -> SearchResult:
+                        limit: int, offset: int, output_mode: str, context: int,
+                        follow_symlinks: Optional[bool] = None) -> SearchResult:
         """Content search: rg, else grep; attaches zero-match steering hints."""
         used_rg = self._has_command('rg')
         if used_rg:
             result = self._search_with_rg(pattern, path, file_glob, limit, offset, output_mode, context,
-                                          rg_executable=self._resolve_command("rg") or "rg")
+                                          rg_executable=self._resolve_command("rg") or "rg",
+                                          follow_symlinks=follow_symlinks)
         elif self._has_command('grep'):
             result = self._search_with_grep(pattern, path, file_glob, limit, offset, output_mode, context)
         else:
@@ -872,12 +882,15 @@ class SearchMixin:
 
     def _search_with_rg(self, pattern: str, path: str, file_glob: Optional[str],
                         limit: int, offset: int, output_mode: str, context: int,
-                        rg_executable: Optional[str] = None) -> SearchResult:
+                        rg_executable: Optional[str] = None,
+                        follow_symlinks: Optional[bool] = None) -> SearchResult:
         """Search using ripgrep."""
         rg_executable = rg_executable or self._resolve_command("rg")
         if not rg_executable:
             return SearchResult(error="Content search requires ripgrep (rg).")
         cmd_parts = [self._quote_executable(rg_executable), "--line-number", "--no-heading", "--with-filename"]
+        if follow_symlinks is False:
+            cmd_parts.append("--no-follow")
         # Giant-single-line containment (cline#13525): a match inside a multi-MB
         # single-line dump makes rg emit the ENTIRE line (``head -n`` counts lines).
         # --max-columns bounds each printed line at the rg layer; --max-columns-preview

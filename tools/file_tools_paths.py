@@ -19,6 +19,60 @@ _CONTAINER_PATH_BACKENDS_FALLBACK = frozenset({"docker", "singularity", "modal",
 _ENV_CLASS_NAME_HINTS = ("local", "ssh", "docker", "singularity", "modal", "daytona")
 
 
+class FileAccessDenied(RuntimeError):
+    """A profile's file_access_roots policy rejected a model-supplied path."""
+
+
+def _profile_file_access_roots() -> tuple[Path, ...] | None:
+    """Return canonical file roots for the active profile, or None when unrestricted.
+
+    The profile context selects both Hermes home and config. Relative roots are anchored to that
+    profile home; no process environment lookup is used for the policy values.
+    """
+    from hermes_constants import get_hermes_home
+    from hermes_cli.config import load_config_readonly
+
+    home = Path(get_hermes_home()).resolve()
+    config = load_config_readonly()
+    if "file_access_roots" not in config:
+        return None
+    raw_roots = config["file_access_roots"]
+    if not isinstance(raw_roots, (list, tuple)):
+        raise FileAccessDenied("file_access_roots must be a list of paths")
+
+    roots: list[Path] = []
+    for raw_root in raw_roots:
+        if not isinstance(raw_root, str) or not raw_root.strip():
+            raise FileAccessDenied("file_access_roots contains an invalid path")
+        value = raw_root.strip()
+        if value == "~":
+            root = home
+        elif value.startswith("~/"):
+            root = home / value[2:]
+        else:
+            root = Path(value)
+            if not root.is_absolute():
+                root = home / root
+        roots.append(root.resolve())
+    return tuple(roots)
+
+
+def _enforce_profile_file_access(path: Path | PurePosixPath) -> None:
+    roots = _profile_file_access_roots()
+    if roots is None:
+        return
+    if not isinstance(path, Path):
+        raise FileAccessDenied(
+            "Profile file access roots cannot validate paths on a remote terminal backend")
+    try:
+        resolved = path.resolve()
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise FileAccessDenied(f"Cannot verify file access for {str(path)!r}") from exc
+    if not any(resolved == root or resolved.is_relative_to(root) for root in roots):
+        raise FileAccessDenied(
+            f"Access denied: {str(resolved)!r} is outside this profile's file_access_roots")
+
+
 def _expand_tilde(path: str) -> str:
     """Expand ``~`` using the effective profile home (``get_subprocess_home``) so
     gateway/cron runs, whose process HOME may differ, agree with interactive CLI sessions.
@@ -178,8 +232,10 @@ def _resolve_path_for_task(filepath: str, task_id: str = "default") -> Path | Pu
     """Resolve *filepath* against the task's absolute base directory
     (absolute inputs are returned resolved-but-unanchored)."""
     container_paths = _uses_container_paths(task_id)
-    return _anchor(_host_text(filepath, container_paths),
-                   lambda: _resolve_base_dir(task_id, container_paths=container_paths), container_paths)
+    resolved = _anchor(_host_text(filepath, container_paths),
+                       lambda: _resolve_base_dir(task_id, container_paths=container_paths), container_paths)
+    _enforce_profile_file_access(resolved)
+    return resolved
 
 
 

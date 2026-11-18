@@ -730,13 +730,14 @@ def _join_tier(parts: List[Optional[str]]) -> str:
 
 def _assistant_prompt_parts(agent: Any, system_message: Optional[str], ctx_len: Optional[int]) -> Dict[str, str]:
     """``agent.prompt_mode: assistant`` (FC-CRM ADR 0026): only what a narrow assistant uses — SOUL.md (who it
-    is and its work rules), guidance for the tools actually loaded, memory (this user) and the date. None of
-    Crema's working method, coding posture, skills index, context files, profile line or runtime environment:
+    is and its work rules), CREMA.md instructions, guidance for the tools actually loaded, memory (this user) and the date. None of
+    Crema's working method, coding posture, skills index, profile line or runtime environment:
     they cost tokens and turns on every call and steer a customer-facing assistant toward developer habits.
     Same three tiers, so everything shared across profiles stays in the cacheable prefix."""
-    stable, _ = _identity_parts(agent, ctx_len)
+    stable, soul_loaded = _identity_parts(agent, ctx_len)
     stable.append(_tool_guidance_block(agent))
     context = [system_message] if system_message is not None else []
+    context.extend(_context_files_part(agent, ctx_len, soul_loaded))
     volatile = [*_memory_parts(agent), _timestamp_line(agent)]
     return {"stable": _join_tier(stable), "context": _join_tier(context), "volatile": _join_tier(volatile)}
 

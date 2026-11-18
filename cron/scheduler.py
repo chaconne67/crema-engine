@@ -2485,6 +2485,11 @@ def run_job(
     ``extra_prompt``: optional per-run context from ``cronjob(action='run', prompt=...)`` (#57331). Appended
     to the stored prompt for this fire only — never persisted to the job definition.
     """
+    if os.environ.get("SERVICE_DIR"):
+        from fc_lifecycle import writable
+        from hermes_constants import get_hermes_home
+        if not writable(get_hermes_home()):
+            return False, "", "", "이용이 끝나 예약 작업을 실행하지 않았습니다."
     if (job.get("origin") or {}).get("platform") == "crema":
         from agent import crema_file_turns
         return crema_file_turns.scheduled(job)

@@ -567,11 +567,12 @@ def estimate_context(api, session_id: str, model: str = "", provider: str = "") 
         api._memory_sessions.checkin(agent)
 
 
-def distill(api, session_id: str, model: str = "", provider: str = "") -> dict:
+def distill(api, session_id: str, model: str = "", provider: str = "", *, on_review_ready=None) -> dict:
     """Run the engine's background review on one quiet chat, focused on the knowledge notebook, when
     it has something new: at least a few user turns or a tool call since it was last distilled. The
     review runs on the chat's model (or the configured auxiliary one) — the user's own account."""
-    from agent.background_review import _background_review_task_config, spawn_background_review_thread
+    from agent.background_review import (_background_review_task_config, spawn_background_review_thread,
+                                         prepare_background_review_run, finish_background_review_run)
     from agent.knowledge_store import KnowledgeStore
     from hermes_cli.config import load_config_readonly
 
@@ -592,14 +593,24 @@ def distill(api, session_id: str, model: str = "", provider: str = "") -> dict:
     started = time.time()
     before = _review_texts()
     agent = api._create_agent(session_id=session_id, requested_model=model or None, requested_provider=provider or None)
-    task_cfg = dict(_background_review_task_config())
-    task_cfg["extra_tools"] = list(task_cfg.get("extra_tools") or []) + list(KNOWLEDGE_TOOLS)
-    # Skills are reviewed here too (skills.creation_nudge_interval is 0 in Crema): one place for what Crema learns.
-    target, _ = spawn_background_review_thread(
-        agent, messages, review_memory=True, review_skills=True, focus=DISTILL_FOCUS, task_cfg=task_cfg, explicit=True)
+    review_run = None
     try:
+        # The server publishes the parent only after the native cancellation token exists:
+        # a new live turn may cancel even before the review's first provider request.
+        if on_review_ready is not None:
+            review_run = prepare_background_review_run(agent)
+            if review_run is None:
+                return {"ran": False, "written": [], "skipped": "review_active"}
+            on_review_ready(agent)
+        task_cfg = dict(_background_review_task_config())
+        task_cfg["extra_tools"] = list(task_cfg.get("extra_tools") or []) + list(KNOWLEDGE_TOOLS)
+        # One review path for notebook, memory and learned skills.
+        target, _ = spawn_background_review_thread(
+            agent, messages, review_memory=True, review_skills=True, focus=DISTILL_FOCUS, task_cfg=task_cfg, explicit=True,
+            **({"review_run": review_run} if review_run is not None else {}))
         reviewed = target()
     finally:
+        finish_background_review_run(agent, review_run)
         api._memory_sessions.checkin(agent)
     # A review that failed or did not run leaves these messages for the next try (audit ER-4); what it
     # wrote before failing is still reported.
@@ -626,7 +637,7 @@ async def daily_pass(api) -> None:
             logging.getLogger(__name__).warning("the daily knowledge pass failed", exc_info=True)
 
 
-def daily_once(api, now: float = None) -> dict:
+def daily_once(api, now: float = None, *, on_review_ready=None) -> dict:
     from agent.knowledge_store import KnowledgeStore
     from hermes_cli.config import load_config_readonly
 
@@ -651,7 +662,8 @@ def daily_once(api, now: float = None) -> dict:
             if int(chat.get("message_count") or 0) > store.distilled_count(chat["id"]):
                 tried += 1
                 # The chat's own model and provider (the sessions table keeps them), as a quiet chat is distilled.
-                if distill(api, chat["id"], str(chat.get("model") or ""), str(chat.get("billing_provider") or "")).get("ran"):
+                if distill(api, chat["id"], str(chat.get("model") or ""), str(chat.get("billing_provider") or ""),
+                           **({"on_review_ready": on_review_ready} if on_review_ready is not None else {})).get("ran"):
                     report["distilled"] += 1
         from tools.knowledge_tool import plan_free
 

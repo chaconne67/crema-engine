@@ -1612,7 +1612,9 @@ def crema_md_paths(cwd: Optional[str] = None, home_override: "Path | None" = Non
     HERMES_HOME (every chat; the user writes it in Crema's settings), then the one at the top of the chat's
     work folder *cwd* (that project only; it may have come with a downloaded folder, so a scanner hit blocks it)."""
     home_file = (Path(home_override) if home_override is not None else get_hermes_home()) / "CREMA.md"
-    paths = [("CREMA.md (all chats)", home_file, True)]
+    common = home_file.parent / ".service-instructions.md"
+    paths = [("CREMA.md (service)", common, True)] if common.is_file() else []
+    paths.append(("CREMA.md (all chats)", home_file, True))
     if cwd and (Path(cwd) / "CREMA.md").resolve() != home_file.resolve():
         paths.append(("CREMA.md (this project's folder)", Path(cwd) / "CREMA.md", False))
     return paths
@@ -1642,7 +1644,7 @@ def build_context_files_prompt(
             body = f"## {label}: {path}\n\n{_scan_context_content(content, label, user_authored=user_authored)}"
             sections.append(_truncate_content(body, label, context_length=context_length, read_path=str(path)))
     if sections:
-        precedence = (" Where the two disagree, follow this project's: it is the more specific." if len(sections) > 1
+        precedence = (" Where they disagree, follow this project's instructions when present; otherwise follow the user's own instructions over service instructions." if len(sections) > 1
                       else "")
         parts.append("# CREMA.md\n\nThe user's standing instructions for working in Crema. Follow them in this "
                      f"chat.{precedence}\n\n" + "\n\n".join(sections))

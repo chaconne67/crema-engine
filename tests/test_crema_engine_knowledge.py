@@ -474,3 +474,79 @@ def test_daily_upkeep_output_repairs_share_the_original_call_budget(store, judge
     assert len(calls) <= crema_engine.UPKEEP_MAX_CHECKS
     assert len(calls) > 1
     assert not report.get("upkeep_failed")
+
+
+def test_server_review_ready_is_before_request_and_can_cancel(store, monkeypatch):
+    from types import SimpleNamespace
+    parent=SimpleNamespace();api=FakeApi({"agent-client-a":(turns(3),time.time())})
+    api._create_agent=lambda **_:parent
+    tokens=[]
+    def ready(agent):
+        assert agent is parent
+        tokens.append(agent._background_review_run)
+        agent._background_review_run.cancel()
+    def spawn(agent,messages,**kwargs):
+        run=kwargs["review_run"]
+        assert run is tokens[0] and run.cancel_requested.is_set()
+        return lambda:False,"prompt"
+    monkeypatch.setattr("agent.background_review.spawn_background_review_thread",spawn)
+    result=crema_engine.distill(api,"agent-client-a",on_review_ready=ready)
+    assert result["ran"] is False and store.distilled_count("agent-client-a")==0
+    assert api._memory_sessions.checked_in==[parent]
+    assert tokens[0].request_done.is_set() and parent._background_review_run is None
+
+
+def test_server_review_setup_failure_releases_parent_and_token(store, monkeypatch):
+    from types import SimpleNamespace
+    parent=SimpleNamespace();api=FakeApi({"agent-client-a":(turns(3),time.time())})
+    api._create_agent=lambda **_:parent
+    tokens=[]
+    def ready(agent):
+        tokens.append(agent._background_review_run)
+        raise RuntimeError("setup failed")
+    with pytest.raises(RuntimeError,match="setup failed"):
+        crema_engine.distill(api,"agent-client-a",on_review_ready=ready)
+    assert api._memory_sessions.checked_in==[parent]
+    assert tokens[0].request_done.is_set() and parent._background_review_run is None
+    assert store.distilled_count("agent-client-a")==0
+
+
+def test_server_cancel_during_request_finishes_before_live_turn(store,monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    from agent.background_review import cancel_background_review_for_live_turn
+    parent=SimpleNamespace();api=FakeApi({"agent-client-a":(turns(3),time.time())})
+    api._create_agent=lambda **_:parent
+    started=threading.Event();done=threading.Event();results=[]
+    def spawn(agent,messages,**kwargs):
+        run=kwargs["review_run"]
+        def target():
+            started.set()
+            assert run.cancel_requested.wait(2)
+            return False
+        return target,"prompt"
+    monkeypatch.setattr("agent.background_review.spawn_background_review_thread",spawn)
+    def worker():
+        try:results.append(crema_engine.distill(api,"agent-client-a",on_review_ready=lambda _:None))
+        finally:done.set()
+    thread=threading.Thread(target=worker);thread.start();assert started.wait(2)
+    cancel_background_review_for_live_turn(parent)
+    assert done.wait(2);thread.join()
+    assert results[0]["ran"] is False and store.distilled_count("agent-client-a")==0
+
+
+def test_daily_pass_forwards_server_cancellation_to_review(store,monkeypatch):
+    from types import SimpleNamespace
+    parent=SimpleNamespace();api=FakeApi({"agent-client-a":(turns(3),time.time()-3600)})
+    api._create_agent=lambda **_:parent
+    ready=[]
+    def on_ready(agent):
+        ready.append(agent)
+        agent._background_review_run.cancel()
+    def spawn(agent,messages,**kwargs):
+        assert kwargs["review_run"].cancel_requested.is_set()
+        return lambda:False,"prompt"
+    monkeypatch.setattr("agent.background_review.spawn_background_review_thread",spawn)
+    report=crema_engine.daily_once(api,on_review_ready=on_ready)
+    assert ready==[parent] and report["distilled"]==0
+    assert store.distilled_count("agent-client-a")==0

@@ -129,7 +129,7 @@ class FileOperations(ABC):
     def search(self, pattern: str, path: str = ".", target: str = "content",
                file_glob: Optional[str] = None, limit: int = 50, offset: int = 0,
                output_mode: str = "content", context: int = 0,
-               order: str = "discovery") -> SearchResult:
+               order: str = "discovery", follow_symlinks: Optional[bool] = None) -> SearchResult:
         """Search for content or files."""
 
 
@@ -1407,7 +1407,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
     def search(self, pattern: str, path: str = ".", target: str = "content",
                file_glob: Optional[str] = None, limit: int = 50, offset: int = 0,
                output_mode: str = "content", context: int = 0,
-               order: str = "discovery") -> SearchResult:
+               order: str = "discovery", follow_symlinks: Optional[bool] = None) -> SearchResult:
         """Search for content (regex, ``target="content"``) or files (glob,
         ``target="files"``). ``output_mode``: "content", "files_only" or "count";
         ``context``: lines of context around matches; ``order``: file-search
@@ -1428,12 +1428,13 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         if "not_found" in exists_probe:
             # Models often pass several paths in one string: search the parts that exist.
             multi = self._try_multi_path_search(
-                pattern, path, target, file_glob, limit, offset, output_mode, context, order)
+                pattern, path, target, file_glob, limit, offset, output_mode, context, order,
+                follow_symlinks)
             if multi is not None:
                 return multi
             return self._path_not_found_result(path)
         result = self._dispatch_search(pattern, path, target, file_glob, limit, offset,
-                                       output_mode, context, order)
+                                       output_mode, context, order, follow_symlinks)
         exclusions = self._macos_search_exclusions(path)
         if exclusions and not result.error:
             skipped = ", ".join(item.split("/")[-1] for item in exclusions)

@@ -1062,12 +1062,8 @@ class GatewayStartupMixin:
         Never raises (logged at ``level``).
         """
         try:
-            from hermes_cli.config import load_config
-            from agent.shell_hooks import register_from_config
-            from agent.outbound_webhooks import register_from_config as register_outbound_webhooks
-            _hooks_cfg = load_config()
-            register_from_config(_hooks_cfg, accept_hooks=False)
-            register_outbound_webhooks(_hooks_cfg)
+            from crema_startup import initialize
+            initialize()
         except Exception:
             logger.log(level, fail_fmt, *fail_args, exc_info=True)
 

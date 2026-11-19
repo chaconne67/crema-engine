@@ -76,7 +76,9 @@ class _Handler(logging.Handler):
 
 
 def watch() -> None:
-    logging.getLogger().addHandler(_Handler(logging.ERROR))
+    root = logging.getLogger()
+    if not any(isinstance(handler, _Handler) for handler in root.handlers):
+        root.addHandler(_Handler(logging.ERROR))
 
 
 # The engine's own moments (hermes_cli/plugins.py VALID_HOOKS), kinds only.
@@ -112,11 +114,8 @@ def _model_failed(provider: str = "", status_code=None, reason=None, retryable=N
     record("model", f"{provider} {reason or status_code or 'error'}")
 
 
-def observe(manager) -> None:
-    """Into the plugin manager, as crema_engine.py adds its transform_llm_output."""
-    for name, callback in (("on_session_end", _turn_ended), ("post_tool_call", _tool_ended),
-                           ("post_approval_response", _approval_answered), ("api_request_error", _model_failed)):
-        manager._hooks.setdefault(name, []).append(callback)
+def observers():
+    return _turn_ended, _tool_ended, _approval_answered, _model_failed
 
 
 # The agent's own judgement that it could not do what was asked because of Crema (주인님 2026-10-24: a request

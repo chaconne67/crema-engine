@@ -59,11 +59,10 @@ async def main() -> None:
     token = os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN", "")
     if len(token) < 16:
         sys.exit("HERMES_DASHBOARD_SESSION_TOKEN is missing or too short")
-    use_only_crema_connections()
-    # The engine's own failures, for Crema to send when 오류 정보 보내기 is on (tools/crema_failures.py).
+    from crema_startup import initialize, prepare_desktop
     from tools import crema_failures
 
-    crema_failures.watch()
+    prepare_desktop(drop_next_input, use_only_crema_connections)
 
     # Only the packages bundled with Crema (the `crema` extra); never install more at run time.
     os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
@@ -90,24 +89,11 @@ async def main() -> None:
     api = APIServerAdapter(PlatformConfig(enabled=True, extra={"key": token, "host": "127.0.0.1", "port": free_port()}))
     if not await api.connect():
         sys.exit("the run API did not start")
-    # Chats that change the same file take turns (agent/crema_file_turns.py).
     from agent import crema_file_turns
-
-    crema_file_turns.install(api)
-    # The services connected (tools/crema_services.py), in the background so a slow one does not hold the engine.
     from tools import crema_services
 
+    initialize(api=api)
     asyncio.get_running_loop().run_in_executor(None, crema_services.sync_services)
-    from hermes_cli.plugins import get_plugin_manager
-
-    get_plugin_manager()._hooks.setdefault("transform_llm_output", []).append(drop_next_input)
-    crema_failures.observe(get_plugin_manager())
-    # The shell hooks in config.yaml (`hooks:`, only the allowlisted ones), as the Hermes gateway registers them at
-    # its start (gateway/run_startup.py); without this a configured hook never runs in Crema.
-    from agent.shell_hooks import register_from_config
-    from hermes_cli.config import load_config
-
-    register_from_config(load_config(), accept_hooks=False)
     # Scheduled tasks (tools/crema_schedule_tool.py): the engine's in-process cron ticker, as the Hermes gateway and
     # desktop backend run it; it runs while Crema is open.
     import threading

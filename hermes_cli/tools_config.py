@@ -577,6 +577,8 @@ def _get_platform_tools(config: dict, platform: str, *, include_default_mcp_serv
     """Resolve which individual toolset names are enabled for a platform."""
     platform_toolsets = config.get("platform_toolsets") or {}
     toolset_names = _coerce_platform_toolsets_value(platform_toolsets.get(platform), platform)
+    from crema_startup import desktop_toolsets
+    toolset_names = desktop_toolsets(config, platform, toolset_names)
     # An explicitly saved list (even a composite like ``hermes-discord``) is an opt-in to the platform's
     # native default-off toolsets — see _default_off_toolsets.
     # Track whether the user explicitly saved a toolset list for this platform (vs. falling back to the

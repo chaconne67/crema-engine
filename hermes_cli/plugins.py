@@ -1299,6 +1299,9 @@ class PluginManager(PluginLoaderMixin, PluginDispatchMixin, PluginLedgerMixin):
                     # Re-register so force-reload is symmetric (#60036; tracking #64178 — salvaged from PR
                     # #64188; outbound webhooks added per #92682 review).
                     self._re_register_config_hooks_after_force()
+                from crema_startup import select_hooks
+                select_hooks(self, load_config_readonly())
+
             except BaseException:
                 self._discovered = False
                 raise
@@ -1369,6 +1372,10 @@ class PluginManager(PluginLoaderMixin, PluginDispatchMixin, PluginLedgerMixin):
         manifests.extend(ep_manifests)
         disabled = _get_disabled_plugins()
         enabled = _get_enabled_plugins()  # None = opt-in default (nothing enabled)
+        if os.environ.get("CREMA_ENGINE_INPUT"):
+            from crema_startup import engine_input
+            startup = engine_input(load_config_readonly())
+            enabled = (enabled or set()) | set(startup["plugins"]["enabled"])
         stale_relay_keys = legacy_relay_plugin_keys(enabled)
         if stale_relay_keys:
             logger.warning("Removed Hermes plugin %s is still listed in plugins.enabled; "

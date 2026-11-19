@@ -61,11 +61,9 @@ def test_frames_outside_the_engine_are_left_out_and_codes_stay_ascii():
 def test_the_moments_the_user_was_let_down_are_kept_by_kind():
     import json
 
-    class Manager:
-        _hooks = {}
-
-    crema_failures.observe(Manager)
-    hooks = {name: callbacks[-1] for name, callbacks in Manager._hooks.items()}
+    on_end, on_tool, on_approval, on_error = crema_failures.observers()
+    hooks = {"on_session_end": on_end, "post_tool_call": on_tool,
+             "post_approval_response": on_approval, "api_request_error": on_error}
     hooks["on_session_end"](session_id="s", completed=True, failed=False, interrupted=False)  # a finished answer
     hooks["on_session_end"](completed=False, failed=False, interrupted=True, turn_exit_reason="interrupted")
     hooks["on_session_end"](completed=False, failed=True, interrupted=False,

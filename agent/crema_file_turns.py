@@ -82,15 +82,9 @@ class JudgeError(RuntimeError):
 
 
 def install(api) -> None:
-    """Remember the run API (who is replying, session titles) and add the hooks."""
+    """Bind the local run API for session titles and notifications."""
     global _api
     _api = api
-    from hermes_cli.plugins import get_plugin_manager
-
-    hooks = get_plugin_manager()._hooks
-    for name, callback in (("pre_tool_call", before_tool), ("post_tool_call", after_tool),
-                           ("transform_tool_result", tool_result), ("pre_llm_call", notes_for_turn)):
-        hooks.setdefault(name, []).append(callback)
 
 
 # ── the board ────────────────────────────────────────────────────────────────

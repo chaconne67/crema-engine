@@ -326,12 +326,14 @@ def _allows_private_ip_resolution(hostname: str, scheme: str) -> bool:
     return scheme == "https" and hostname in _TRUSTED_PRIVATE_IP_HOSTS
 
 
-def _resolved_ip_block_reason(ip: _IPAddress, allow_private: bool) -> Optional[str]:
+def _resolved_ip_block_reason(
+    ip: _IPAddress, allow_private: bool, *, allow_fake_ip: bool = True,
+) -> Optional[str]:
     """Why a resolved answer must be rejected, or None if it may be dialed. The metadata floor
     ignores ``allow_private``; ordinary private/internal classes are blocked only when it is False."""
     if _is_always_blocked_ip(ip):
         return "cloud metadata address"
-    if not allow_private and _is_blocked_ip(ip) and not _is_declared_fake_ip(ip):
+    if not allow_private and _is_blocked_ip(ip) and not (allow_fake_ip and _is_declared_fake_ip(ip)):
         return "private/internal address"
     return None
 
@@ -399,7 +401,9 @@ class SSRFConnectionBlocked(ValueError):
     """Raised when connect-time DNS resolution violates the URL safety policy."""
 
 
-def _resolved_http_connect_ips(host: str, port: int, scheme: str) -> list[str]:
+def _resolved_http_connect_ips(
+    host: str, port: int, scheme: str, *, public_only: bool = False,
+) -> list[str]:
     """Resolve and validate *host* at TCP-connect time; return dialable IP strings. Closes the
     DNS-rebinding gap between pre-flight validation and connect for direct httpx clients. The
     result is capped at ``_MAX_SSRF_CONNECT_IPS``, but EVERY answer is validated."""
@@ -408,7 +412,9 @@ def _resolved_http_connect_ips(host: str, port: int, scheme: str) -> list[str]:
         raise SSRFConnectionBlocked("Blocked request with empty hostname")
     if hostname in _BLOCKED_HOSTNAMES:
         raise SSRFConnectionBlocked(f"Blocked request to internal hostname: {hostname}")
-    allow_private = _global_allow_private_urls() or _allows_private_ip_resolution(hostname, scheme)
+    allow_private = not public_only and (
+        _global_allow_private_urls() or _allows_private_ip_resolution(hostname, scheme)
+    )
     try:
         addr_info = _getaddrinfo(hostname, port)
     except socket.gaierror as exc:
@@ -419,7 +425,7 @@ def _resolved_http_connect_ips(host: str, port: int, scheme: str) -> list[str]:
             raise SSRFConnectionBlocked(
                 f"Blocked request - unparseable IP address {raw!r} for hostname {hostname}"
             ) from ValueError(f"{ip_str!r} does not appear to be an IPv4 or IPv6 address")
-        reason = _resolved_ip_block_reason(ip, allow_private)
+        reason = _resolved_ip_block_reason(ip, allow_private, allow_fake_ip=not public_only)
         if reason is not None:
             raise SSRFConnectionBlocked(f"Blocked request to {reason} during connect: {hostname} -> {ip_str}")
         if ip_str not in safe_ips and len(safe_ips) < _MAX_SSRF_CONNECT_IPS:
@@ -427,6 +433,11 @@ def _resolved_http_connect_ips(host: str, port: int, scheme: str) -> list[str]:
     if not safe_ips:
         raise SSRFConnectionBlocked(f"Blocked request - DNS returned no results for: {hostname}")
     return safe_ips
+
+
+def resolve_public_connect_ips(host: str, port: int) -> list[str]:
+    """Validated addresses for a browser with private routing disabled."""
+    return _resolved_http_connect_ips(host, port, "http", public_only=True)
 
 
 class _SSRFGuardedBackendBase:

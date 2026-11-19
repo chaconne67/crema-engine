@@ -169,7 +169,7 @@ def _cleanup_inactive_browser_sessions():
         _bt.logger.info("Cleaning up inactive session for task: %s (inactive for %ss)", task_id, elapsed)
         try:
             with _session_owner_scope(task_id):
-                cleanup_browser(task_id)
+                _cleanup_browser_task(task_id)
             _forget_session_tracking(task_id)
         except Exception as e:
             with _bt._cleanup_lock:
@@ -589,9 +589,10 @@ def _drop_last_active_binding(task_id: str) -> None:
 def cleanup_browser(task_id: Optional[str] = None) -> None:
     """Clean up browser session(s) for a task: a bare task id reaps BOTH the primary
     session and any hybrid local sidecar; a ``::local`` key reaps only that one."""
-    if task_id is None:
-        task_id = "default"
+    _cleanup_browser_task(_bt._browser_task_key(task_id))
 
+
+def _cleanup_browser_task(task_id: str) -> None:
     session_keys = [task_id]
     sidecar_key = f"{task_id}{_bt._LOCAL_SUFFIX}"
     with _bt._cleanup_lock:
@@ -648,6 +649,8 @@ def _release_session_resources(task_id: str, session_info: Dict[str, Any]) -> No
         if os.path.exists(socket_dir):
             _kill_verified_daemon(socket_dir, session_name)
             shutil.rmtree(socket_dir, ignore_errors=True)
+    if storage := session_info.get("restricted_storage"):
+        shutil.rmtree(storage, ignore_errors=True)
 
 
 def _force_reap_browser_session(task_id: str) -> None:
@@ -718,7 +721,7 @@ def cleanup_all_browsers() -> None:
     with _bt._cleanup_lock:
         task_ids = list(_bt._active_sessions.keys())
     for task_id in task_ids:
-        cleanup_browser(task_id)
+        _cleanup_browser_task(task_id)
 
     try:  # tear down CDP supervisors so background threads exit
         from tools.browser_supervisor import SUPERVISOR_REGISTRY  # type: ignore[import-not-found]

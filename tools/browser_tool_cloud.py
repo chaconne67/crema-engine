@@ -236,6 +236,14 @@ def _use_real_profile() -> bool:
     return _origin()._browser_cfg("use_real_profile", False, bool, "use_real_profile from config")
 
 
+def _restrict_local_chromium() -> bool:
+    """An explicit browser.allow_private_urls=false also fences owned Chromium.
+
+    Existing local desktop installs without this setting retain LAN browsing.
+    """
+    return not _resolve_allow_private_urls(default=True)
+
+
 def _allow_private_urls() -> bool:
     """Whether the browser may navigate to private/internal addresses (default False: SSRF protection on).
 
@@ -248,7 +256,10 @@ def _allow_private_urls() -> bool:
     return _memo(_bt, "_allow_private_urls_resolved", "_cached_allow_private_urls", _resolve_allow_private_urls)
 
 
-def _resolve_allow_private_urls() -> bool:
+def _resolve_allow_private_urls(*, default: bool = False) -> bool:
     """Read the browser private-URL toggle from the active config scope."""
     _bt = _origin()
-    return _bt._browser_cfg("allow_private_urls", False, lambda v: is_truthy_value(v, default=False), "allow_private_urls from config")
+    return _bt._browser_cfg(
+        "allow_private_urls", default, lambda value: is_truthy_value(value, default=default),
+        "allow_private_urls from config",
+    )

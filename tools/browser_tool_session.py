@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from hermes_cli._subprocess_compat import windows_hide_flags
+from hermes_constants import get_hermes_home
+from utils import atomic_write_text
 from tools.browser_tool_origin import origin as _bt
 from tools import browser_tool_cdp as _cdp
 from tools import browser_tool_cloud as _cloud
@@ -253,7 +255,8 @@ def _create_local_session(task_id: str, allow_real_profile: bool = True) -> Dict
     ``allow_real_profile=False``: the user's cookie jar must not reach an arbitrary
     internal host the model chose.
     """
-    if allow_real_profile:
+    restricted = _cloud._restrict_local_chromium() and _cloud._get_browser_engine() != "lightpanda"
+    if allow_real_profile and not restricted:
         cdp_url, err = _real_profile._real_profile_cdp()
         if err:
             raise RuntimeError(err)
@@ -268,6 +271,8 @@ def _create_local_session(task_id: str, allow_real_profile: bool = True) -> Dict
         return _create_lightpanda_session(task_id)
 
     info = _session_record("h", None, {"local": True})
+    if restricted:
+        info["restricted_storage"] = get_hermes_home() / "browser" / info["session_name"]
     _bt.logger.info("Created local browser session %s for task %s", info["session_name"], task_id)
     return info
 
@@ -605,6 +610,43 @@ def _browser_command_preflight() -> Dict[str, Any]:
     return {"browser_cmd": browser_cmd}
 
 
+def _configure_restricted_chromium(env: Dict[str, str], storage: Path, *, closing: bool) -> None:
+    from tools.browser_tool_proxy import chromium_proxy_url
+
+    home = get_hermes_home().resolve()
+    downloads = home / "cache" / "browser-downloads"
+    if not all(path.resolve().is_relative_to(home) for path in (storage, downloads)):
+        raise ValueError("Browser storage directory is outside its account")
+    if not closing:
+        storage.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        storage.mkdir(mode=0o700, exist_ok=True)
+        downloads.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Its explicit config keeps agent-browser from loading a repository or host user config.
+        if not (config := storage / "agent-browser.json").exists():
+            atomic_write_text(config, "{}")
+    env.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(Path.home() / ".cache" / "ms-playwright"))
+    for key in tuple(env):
+        if key.startswith("AGENT_BROWSER_") and key not in {
+            "AGENT_BROWSER_SOCKET_DIR", "AGENT_BROWSER_IDLE_TIMEOUT_MS",
+        }:
+            del env[key]
+    _apply_chromium_sandbox_args(env)
+    for key in ("HOME", "USERPROFILE", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
+        env[key] = str(storage)
+    env["AGENT_BROWSER_ARGS"] = ",".join(filter(None, (
+        env.get("AGENT_BROWSER_ARGS"), "--disable-quic", "--dns-prefetch-disable",
+        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    )))
+    if not closing:
+        env.update(
+            AGENT_BROWSER_CONFIG=str(storage / "agent-browser.json"),
+            AGENT_BROWSER_PROFILE=str(storage / "chromium"),
+            AGENT_BROWSER_DOWNLOAD_PATH=str(downloads),
+            AGENT_BROWSER_PROXY=chromium_proxy_url(),
+            AGENT_BROWSER_PROXY_BYPASS="<-loopback>",
+        )
+
+
 def _spawn_and_collect(
     task_id: str, session_info: Dict[str, Any], cmd_parts: List[str],
     command: str, engine: str, timeout: int, stdin_payload: Optional[bytes] = None,
@@ -613,7 +655,7 @@ def _spawn_and_collect(
     task_socket_dir = _prepare_session_socket_dir(session_info["session_name"])
     _bt.logger.debug("browser cmd=%s task=%s socket_dir=%s (%d chars)",
                  command, task_id, task_socket_dir, len(task_socket_dir))
-    if engine != "lightpanda":
+    if engine != "lightpanda" and not session_info.get("restricted_storage"):
         _ensure_screen_for_headed_chromium()  # first command forks the daemon; a headed window needs the screen up
     browser_env = _agent_browser_command_env(task_socket_dir)
 
@@ -625,8 +667,11 @@ def _spawn_and_collect(
             _bt.logger.debug("browser: stripped Chromium-only AGENT_BROWSER_ARGS/AGENT_BROWSER_CHROME_FLAGS "
                              "for Lightpanda command %s (agent-browser rejects them with --engine lightpanda)",
                              command)
-    else:
+    elif not session_info.get("restricted_storage"):
         _apply_chromium_sandbox_args(browser_env)
+
+    if storage := session_info.get("restricted_storage"):
+        _configure_restricted_chromium(browser_env, storage, closing=command == "close")
 
     stdout_path = os.path.join(task_socket_dir, f"_stdout_{command}")
     stderr_path = os.path.join(task_socket_dir, f"_stderr_{command}")
@@ -728,13 +773,13 @@ def _dispatch_browser_command(
         backend_args = ["--cdp", session_info["cdp_url"]]
     else:
         backend_args = ["--session", session_info["session_name"]]
-        if (bd_port := _bot_desktop_attach_port(session_info)) is not None:
+        if not session_info.get("restricted_storage") and (bd_port := _bot_desktop_attach_port(session_info)) is not None:
             # A Chromium already runs on the Bot Desktop's shared profile (the human clicked the dock's
             # Browser first): a launch would be forwarded into it by Chromium's singleton and die without
             # a DevTools endpoint, so the session's daemon attaches to the port it advertises instead.
             # Same daemon (keyed by --session) either way, so snapshot refs stay valid across commands.
             backend_args += ["--cdp", str(bd_port)]
-        if _cloud._is_headed_mode():
+        if not session_info.get("restricted_storage") and _cloud._is_headed_mode():
             backend_args.append("--headed")
         if engine != "auto" and not _bt._is_camofox_mode():
             backend_args += ["--engine", engine]

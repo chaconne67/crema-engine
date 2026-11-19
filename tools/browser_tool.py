@@ -9,6 +9,7 @@ Sibling ``browser_tool_*`` modules hold extracted clusters.
 """
 
 import atexit
+import hashlib
 import json
 import logging
 import os
@@ -19,8 +20,9 @@ import threading
 import time
 from typing import Dict, Any, Optional, Union
 from pathlib import Path
+from urllib.parse import urlsplit
 from agent.redact import redact_cdp_url
-from hermes_constants import get_hermes_home, hermes_home_key
+from hermes_constants import get_hermes_home, get_hermes_home_override, hermes_home_key
 from utils import env_int
 from hermes_cli.config import DEFAULT_CONFIG, cfg_get
 
@@ -340,6 +342,16 @@ def _session_info_owned_by_task(session_info: Dict[str, Any], task_id: str, sess
     return (owner is None or owner == task_id) and (key is None or key == session_key)
 
 
+def _browser_task_key(task_id: Optional[str]) -> str:
+    """Namespace client-supplied task IDs by the routed account."""
+    task_id = task_id or "default"
+    home = get_hermes_home_override()
+    if home is None:
+        return task_id
+    profile = hashlib.sha256(home.encode()).hexdigest()
+    return f"profile:{profile}:{task_id}"
+
+
 def _last_session_key(task_id: str) -> str:
     """Session key a non-nav tool must use: the one that served the task's last navigation.
     If it was cleaned up or ownership no longer matches, fail closed by dropping the stale
@@ -631,17 +643,25 @@ def _secret_url_error(url: str) -> Optional[dict]:
     return None
 
 
+def _local_chromium_policy_applies(auto_local: bool) -> bool:
+    return (
+        _cloud._restrict_local_chromium()
+        and (auto_local or _cloud._is_local_mode())
+        and not _is_camofox_mode()
+        and _cloud._get_browser_engine() != "lightpanda"
+    )
+
+
 def _url_policy_error(url: str, *, auto_local: bool = False) -> Optional[dict]:
     """Backend-aware URL checks on an already-normalized URL; None if allowed. Ordered floors:
     (1) cloud metadata / IMDS refused UNCONDITIONALLY (a local Chromium on a cloud VM still
-    reaches the host IMDS); (2) private addresses refused unless local, sidecar-routed, or
-    ``browser.allow_private_urls``; (3) website policy allow/deny lists.
+    reaches the host IMDS); (2) private addresses refused for restricted Chromium or non-local
+    backends with private routing disabled; (3) website policy allow/deny lists.
 
     Credential-NAMED query params (``?token=``, ``?signature=``) are deliberately NOT a floor:
     magic links, OAuth callbacks and signed CDN assets are how the agent signs in and browses, and
     a cloud browser already sees every cookie and typed password of the session — refusing the
     URL protects nothing. Hermes' own secrets leaking into a URL are caught by ``_secret_url_error``."""
-    local = _cloud._is_local_backend()
     # Always-blocked floor: cloud metadata / IMDS endpoints are denied regardless of backend, hybrid
     # routing, or allow_private_urls. There's no legitimate agent use case for navigating to 169.254.169.254
     # / metadata.google.internal / ECS task metadata via a browser, and routing those to a local Chromium
@@ -650,7 +670,17 @@ def _url_policy_error(url: str, *, auto_local: bool = False) -> Optional[dict]:
     # local Chromium on a cloud VM still reaches the host IMDS).
     if _is_always_blocked_url(url):
         return _err("Blocked: URL targets a cloud metadata endpoint")
-    if not local and not auto_local and not _cloud._allow_private_urls() and not _is_safe_url(url):
+    if _local_chromium_policy_applies(auto_local):
+        from tools.url_safety import resolve_public_connect_ips
+
+        try:
+            target = urlsplit(url)
+            if target.scheme not in ("http", "https"):
+                return _err("Blocked: server browser requires an HTTP or HTTPS URL")
+            resolve_public_connect_ips(target.hostname or "", target.port or (443 if target.scheme == "https" else 80))
+        except ValueError:
+            return _err("Blocked: URL targets a private or internal address, or could not be resolved")
+    elif not _cloud._is_local_backend() and not auto_local and not _cloud._allow_private_urls() and not _is_safe_url(url):
         return _err("Blocked: URL targets a private or internal address")
     blocked = check_website_access(url)
     if blocked:
@@ -740,7 +770,7 @@ def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
     if safety_error is not None:
         return json.dumps(safety_error)
 
-    effective_task_id = task_id or "default"
+    effective_task_id = _browser_task_key(task_id)
     nav_session_key = _navigation_session_key(effective_task_id, url)
     auto_local_this_nav = _is_local_sidecar_key(nav_session_key)
 
@@ -814,7 +844,7 @@ def browser_snapshot(
     ``user_task`` is deprecated and unused (oversized snapshots always truncate-and-store)."""
     if _is_camofox_mode():
         return _camofox("camofox_snapshot", full, task_id)
-    effective_task_id = _last_session_key(task_id or "default")
+    effective_task_id = _last_session_key(_browser_task_key(task_id))
     result = _session._run_browser_command(effective_task_id, "snapshot", [] if full else ["-c"])
     if not result.get("success"):
         return _failed_response(result, "Failed to get snapshot")
@@ -867,7 +897,7 @@ def _camofox(func_name: str, *args):
 
 def _guarded_action(task_id: Optional[str], action: str, command: str, args: list, ok: Dict[str, Any], err: str) -> str:
     """Input action on the task's current page, refused when the SSRF guard flags the page."""
-    effective_task_id = _last_session_key(task_id or "default")
+    effective_task_id = _last_session_key(_browser_task_key(task_id))
     blocked = _blocked_private_page_action(effective_task_id, action)
     if blocked is not None:
         return blocked
@@ -890,7 +920,7 @@ def browser_type(ref: str, text: str, task_id: Optional[str] = None) -> str:
     """Type ``text`` into the element ``ref`` (fill: clears, then types)."""
     if _is_camofox_mode():
         return _camofox("camofox_type", ref, text, task_id)
-    effective_task_id = _last_session_key(task_id or "default")
+    effective_task_id = _last_session_key(_browser_task_key(task_id))
     blocked = _blocked_private_page_action(effective_task_id, "type")
     if blocked is not None:
         return blocked
@@ -914,7 +944,7 @@ def browser_scroll(direction: str, task_id: Optional[str] = None) -> str:
     _SCROLL_PIXELS = 500  # ~half a viewport in one call instead of 5x subprocess calls
     if _is_camofox_mode():  # Camofox REST API has no pixel argument; use repeated calls
         return [_camofox("camofox_scroll", direction, task_id) for _ in range(5)][-1]
-    effective_task_id = _last_session_key(task_id or "default")
+    effective_task_id = _last_session_key(_browser_task_key(task_id))
     result = _session._run_browser_command(effective_task_id, "scroll", [direction, str(_SCROLL_PIXELS)])
     return _tool_response(result, {"scrolled": direction}, f"Failed to scroll {direction}")
 
@@ -923,7 +953,7 @@ def browser_back(task_id: Optional[str] = None) -> str:
     """Navigate back in browser history."""
     if _is_camofox_mode():
         return _camofox("camofox_back", task_id)
-    effective_task_id = _last_session_key(task_id or "default")
+    effective_task_id = _last_session_key(_browser_task_key(task_id))
     result = _session._run_browser_command(effective_task_id, "back", [])
     if result.get("success"):
         # History can land on a private/internal/metadata address the navigate
@@ -981,7 +1011,7 @@ def browser_console(clear: bool = False, expression: Optional[str] = None, task_
     if _is_camofox_mode():
         return _camofox("camofox_console", clear, task_id)
 
-    effective_task_id = _last_session_key(task_id or "default")
+    effective_task_id = _last_session_key(_browser_task_key(task_id))
     blocked = _blocked_private_page_content(effective_task_id)
     if blocked is not None:
         return blocked
@@ -1079,7 +1109,7 @@ def _browser_eval(expression: str, task_id: Optional[str] = None) -> str:
     """Evaluate JS in the page context. Private-network guard in two halves: the literal
     pre-scan closes direct fetches (they never update ``location.href``); the post-eval
     page-URL recheck closes navigate-then-read."""
-    effective_task_id = _last_session_key(task_id or "default")
+    effective_task_id = _last_session_key(_browser_task_key(task_id))
 
     if _eval_policy._eval_ssrf_guard_active(effective_task_id):
         blocked_literal = _eval_policy._expression_targets_private_url(expression)
@@ -1183,7 +1213,7 @@ def browser_get_images(task_id: Optional[str] = None) -> str:
     if _is_camofox_mode():
         return _camofox("camofox_get_images", task_id)
 
-    effective_task_id = _last_session_key(task_id or "default")
+    effective_task_id = _last_session_key(_browser_task_key(task_id))
     result = _session._run_browser_command(effective_task_id, "eval", [_GET_IMAGES_JS])
     if not result.get("success"):
         return _failed_response(result, "Failed to get images")
@@ -1244,7 +1274,7 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
     from hermes_constants import get_hermes_dir
     screenshots_dir = get_hermes_dir("cache/screenshots", "browser_screenshots")
     screenshot_path = screenshots_dir / f"browser_screenshot_{uuid_mod.uuid4().hex}.png"
-    effective_task_id = _last_session_key(task_id or "default")
+    effective_task_id = _last_session_key(_browser_task_key(task_id))
     blocked = _blocked_private_page_content(effective_task_id)
     if blocked is not None:
         return blocked

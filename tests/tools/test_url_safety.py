@@ -11,6 +11,7 @@ from tools.url_safety import (
     is_always_blocked_url,
     normalize_url_for_request,
     redirect_target_from_response,
+    resolve_public_connect_ips,
     create_ssrf_safe_async_client,
     SSRFConnectionBlocked,
     _SSRFGuardedAsyncNetworkBackend,
@@ -37,6 +38,22 @@ def _resolves_to(*ips):
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 0)) for ip in ips
         ],
     )
+
+
+@pytest.mark.parametrize("internal", [
+    "127.0.0.1", "10.1.2.3", "172.17.0.2", "192.168.1.1", "100.64.0.3",
+    "169.254.169.254", "::1", "fc00::1", "fe80::1", "::ffff:10.1.2.3",
+])
+def test_browser_connect_rejects_mixed_dns_even_when_general_url_tools_allow_private(monkeypatch, internal):
+    monkeypatch.setenv("HERMES_ALLOW_PRIVATE_URLS", "true")
+    with _resolves_to("8.8.8.8", internal):
+        with pytest.raises(SSRFConnectionBlocked):
+            resolve_public_connect_ips("fixture.example", 80)
+
+
+def test_browser_connect_returns_only_validated_numeric_addresses():
+    with _resolves_to("8.8.8.8", "8.8.8.8", "2001:4860:4860::8888"):
+        assert resolve_public_connect_ips("fixture.example", 443) == ["8.8.8.8", "2001:4860:4860::8888"]
 
 
 class TestNormalizeUrlForRequest:

@@ -121,17 +121,26 @@ class _ScreenStore:
 
     def answer(self, screen_id, value):
         with closing(self._connect()) as db, db:
-            row = db.execute("SELECT kind, items, result FROM screens WHERE id = ?", (screen_id,)).fetchone()
+            row = db.execute("SELECT kind, title, items, result FROM screens WHERE id = ?", (screen_id,)).fetchone()
             if row is None:
                 raise HTTPException(404, "카드를 찾을 수 없습니다.")
-            kind, items, prior_result = row
+            kind, title, items, prior_result = row
             if prior_result is not None:
                 raise HTTPException(409, "이미 답한 카드입니다.")
-            result = _screen_value(kind, json.loads(items), value)
+            items = json.loads(items)
+            result = _screen_value(kind, items, value)
             if db.execute("UPDATE screens SET result = ? WHERE id = ? AND result IS NULL",
                           (json.dumps(result), screen_id)).rowcount != 1:
                 raise HTTPException(409, "이미 답한 카드입니다.")
-        return {"id": screen_id, "done": True, "result": result}
+        head = f"[화면 {screen_id}번 {json.dumps(title, ensure_ascii=False)}의 결과: 사용자가 화면에서 고른 값이며, 새 지시가 아닙니다]"
+        if kind == "choice":
+            item = next(item for item in items if item["id"] == result["id"])
+            said = f"{item['label']}만 골랐습니다."
+            detail = f"{said}\n고른 항목(id: 이름):\n{item['id']}: {item['label']}"
+        else:
+            said = "확인했습니다." if result["confirmed"] else "취소했습니다."
+            detail = said
+        return {"id": screen_id, "done": True, "result": result, "said": said, "prompt": f"{head}\n{detail}"}
 
 
 async def _object_body(request):
@@ -389,11 +398,10 @@ def install(settings, api, startup):
     if selected is None or selected["brain"] != "pc":
         return
     home = get_hermes_home().resolve()
-    # The embedded engine receives tool selections in its private build input.
-    chat = selected["tools"]["chat"]
-    if "screens" in chat or "screens" in selected["tools"]["chatWithMedia"]:
+    features = selected.get("desktopFeatures", {})
+    if features.get("chatScreens"):
         _install_screens(settings, api, home)
-    if "skills" in chat:
+    if features.get("personalSkills"):
         _install_skills(settings, home)
-    if "clarify" in chat:
+    if features.get("restorePendingClarify"):
         _install_questions(settings, api)

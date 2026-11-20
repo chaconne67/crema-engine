@@ -37,11 +37,14 @@ def desktop(tmp_path, monkeypatch):
     path = tmp_path / "build-input.json"
     monkeypatch.setenv("CREMA_ENGINE_INPUT", str(path))
 
-    def setup(names=(), *, brain="pc", api=None, media=None):
+    def setup(names=(), *, brain="pc", api=None, media=None, features=None):
+        if features is None:
+            features = {"chatScreens": "screens" in names or "screens" in (media or ()),
+                        "personalSkills": "skills" in names, "restorePendingClarify": "clarify" in names}
         path.write_text(json.dumps({
             "placement": "embedded" if brain == "pc" else "remote",
             "themeIds": ["fixture"],
-            "engineInputs": {"fixture": {"brain": brain, "tools": {
+            "engineInputs": {"fixture": {"brain": brain, "desktopFeatures": features, "tools": {
                 "chat": list(names), "chatWithMedia": list(names if media is None else media),
             }, "connectionPolicy": {"source": "local"}, "hooks": {}}},
         }), encoding="utf-8")
@@ -97,13 +100,23 @@ def test_local_screen_show_list_answer_and_restore(desktop, monkeypatch, tmp_pat
         with ThreadPoolExecutor(max_workers=2) as workers:
             first, second = workers.map(lambda _: client.post(route, json={"value": {"id": "one"}}), range(2))
         assert sorted((first.status_code, second.status_code)) == [200, 409]
-        assert next(out.json() for out in (first, second) if out.is_success) == {
-            "id": screen_id, "done": True, "result": {"id": "one"},
-        }
+        answered = next(out.json() for out in (first, second) if out.is_success)
+        assert answered["id"] == screen_id and answered["done"] is True
+        assert answered["result"] == {"id": "one"}
+        assert answered["said"] == f"{items[0]['label']}만 골랐습니다."
+        assert f"{screen_id}번" in answered["prompt"]
+        assert answered["prompt"].endswith(f"{answered['said']}\n고른 항목(id: 이름):\none: {items[0]['label']}")
         assert client.post(f"{SCREENS}/{other}", json={"value": {"confirmed": 1}}).status_code == 400
-        assert client.post(f"{SCREENS}/{other}", json={"value": {"confirmed": False}}).json() == {
-            "id": other, "done": True, "result": {"confirmed": False},
-        }
+        cancelled = client.post(f"{SCREENS}/{other}", json={"value": {"confirmed": False}}).json()
+        assert cancelled["id"] == other and cancelled["done"] is True
+        assert cancelled["result"] == {"confirmed": False}
+        assert cancelled["said"] == "취소했습니다."
+        assert cancelled["prompt"].endswith(cancelled["said"])
+        confirm = show({"kind": "confirm", "title": "계속할까요?"}, "agent-client-other")["id"]
+        accepted = client.post(f"{SCREENS}/{confirm}", json={"value": {"confirmed": True}}).json()
+        assert accepted["result"] == {"confirmed": True}
+        assert accepted["said"] == "확인했습니다."
+        assert accepted["prompt"].endswith(accepted["said"])
 
     restarted, _ = setup(["screens"], api=api)
     with TestClient(restarted) as client:
@@ -281,10 +294,13 @@ async def test_pending_question_is_bound_to_live_run_and_session(desktop, monkey
                 await asyncio.wait_for(run_task, timeout=5)
 
 
-@pytest.mark.parametrize("brain,names", [("server", ["screens", "skills", "clarify"]), ("pc", [])])
-def test_local_features_absent_when_engine_input_does_not_select_them(desktop, brain, names):
+@pytest.mark.parametrize("brain,features", [
+    ("server", {"chatScreens": True, "personalSkills": True, "restorePendingClarify": True}),
+    ("pc", {"chatScreens": False, "personalSkills": False, "restorePendingClarify": False}),
+])
+def test_local_features_absent_when_engine_input_does_not_select_them(desktop, brain, features):
     setup, home = desktop
-    settings, _ = setup(names, brain=brain)
+    settings, _ = setup(["screens", "skills", "clarify"], brain=brain, features=features)
     with TestClient(settings) as client:
         for route in (SCREENS, SKILLS, f"{PENDING}?session_id=agent-client-card"):
             assert client.get(route).status_code == 404

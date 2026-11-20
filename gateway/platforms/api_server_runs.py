@@ -696,24 +696,13 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
     if schedule is not None:
         if not selected_session_id:
             return _json_error(_openai_error, "Scheduled conversation is required", status=404)
-        session, missing = await self._get_existing_session_or_404(session_id)
+        _, missing = await self._get_existing_session_or_404(session_id)
         if missing is not None:
             return missing
         from engine_home import profile_has
         from hermes_constants import get_hermes_home
-        if profile_has(get_hermes_home(), "model_choice"):
-            locked = self._runtime_request_from_persisted_session_lock(session, {})
-            if locked:
-                route = locked["route"]
-                requested = locked["requested"]
-                agent_overrides.update(requested_model=requested.get("model"),
-                                       requested_provider=requested.get("provider"),
-                                       model_options=locked["model_options"])
-            else:
-                stored = self._stored_session_model(session)
-                route = self._resolve_route(stored) if stored else None
-                if stored and route is None:
-                    agent_overrides["requested_model"] = stored
+        if not profile_has(get_hermes_home(), "model_choice"):
+            route, agent_overrides = None, {}
     # History loads for the session the request actually selected — including one resolved from
     # a declared X-Hermes-Session-Key, whose persisted delivery rows must reach the next
     # same-key run's context (#98619).  previous_response_id continuations keep their
@@ -754,6 +743,7 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
             ephemeral_system_prompt=instructions, session_id=session_id, gateway_session_key=gateway_session_key,
             route=route, room_dispatch=room_dispatch, room_execution_policy=room_execution_policy,
             no_tools=no_tools,
+            **({"confirmed_runtime_lock": True} if schedule is not None else {}),
             **{k: agent_overrides.get(k) for k in ("requested_model", "requested_provider", "model_options")}),
         request_profile=request_profile,
         browser_control_principal=_api_server._api_request_browser_control_principal.get(),

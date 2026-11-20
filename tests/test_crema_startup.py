@@ -18,6 +18,51 @@ from crema_startup import hook_id, initialize
 ENGINE = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize(("provider", "mode"), [
+    ("openai-codex", "codex_responses"),
+    ("openrouter", "chat_completions"),
+    ("custom:crema", "chat_completions"),
+])
+def test_change_review_uses_the_active_chat_connection(monkeypatch, provider, mode):
+    from types import SimpleNamespace
+    from agent import auxiliary_client as aux
+    from crema_change_principles.scripts import reviewer
+
+    monkeypatch.setitem(__import__("sys").modules, "reviewer", reviewer)
+    from crema_change_principles.scripts import crema_gate
+
+    key, base, model = "fixture-active-key", "https://chat.invalid/v1", "chat-model"
+    opened = []
+
+    def make_client(**kwargs):
+        opened.append(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    def request(client, kwargs, **_):
+        assert kwargs["model"] == model
+        raw = getattr(client, "_real_client", client)
+        assert (raw.api_key, raw.base_url) == (key, base)
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))])
+
+    monkeypatch.setattr(aux, "_create_openai_client", make_client)
+    monkeypatch.setattr(aux, "_create_with_progress_once", request)
+    monkeypatch.setattr("hermes_cli.runtime_provider._get_named_custom_provider", lambda name:
+                        {"base_url": "https://other.invalid/v1", "api_key": "other"} if name == "custom:crema" else None)
+    runtime = {"api_key": key, "base_url": base, "api_mode": mode}
+    settings = {"provider": provider, "reasoning": None}
+    assert crema_gate.ask(runtime, "crema", model, settings, "판정", "답", {}, 5) == "{}"
+    assert len(opened) == 1
+
+    def fail(*args, **kwargs):
+        raise RuntimeError(key)
+
+    monkeypatch.setattr(aux, "_create_with_progress_once", fail)
+    with pytest.raises(RuntimeError, match="연결된 모델에서 판정 결과를 받지 못했습니다") as error:
+        crema_gate.ask(runtime, "crema", model, settings, "판정", "답", {}, 5)
+    assert key not in str(error.value)
+    assert len(opened) == 2
+
+
 def test_change_principles_reuses_plan_and_commit_gate(monkeypatch, tmp_path):
     from types import SimpleNamespace
     import sys

@@ -135,7 +135,9 @@ def test_service_job_and_import_pause_keep_existing_lanes(crema, monkeypatch):
     assert dispatched == [personal["id"]]
 
 
-def test_scheduled_result_retries_the_same_occurrence_without_restarting_the_turn(tmp_path, monkeypatch):
+@pytest.mark.parametrize("project", [None, {"id": "docs", "path": "/current"},
+                                    {"id": "docs", "path": "pc://own-pc/C:/current"}])
+def test_scheduled_result_retries_the_same_occurrence_without_restarting_the_turn(tmp_path, monkeypatch, project):
     import sys
     from types import SimpleNamespace
     from hermes_constants import set_hermes_home_override, reset_hermes_home_override
@@ -159,7 +161,12 @@ def test_scheduled_result_retries_the_same_occurrence_without_restarting_the_tur
 
         def post(self, url, *, json):
             assert url == "http://127.0.0.1:8754/p/own/v1/runs"
-            assert json == {"session_id": A, "input": "작업"}
+            assert json["session_id"] == A and json["input"] == "작업"
+            assert json.get("crema_project") == project
+            if project and project["path"].startswith("pc://"):
+                assert project["path"] in json["instructions"]
+            assert (json["provider"], json["model"], json["model_options"]) == (
+                "custom:own", "current-chat-model", {"reasoning": {"effort": "high"}, "service_tier": "priority"})
             occurrence = self.headers["Idempotency-Key"]
             assert self.headers[schedule.SCHEDULED_HEADER] == schedule.scheduled_signature("key", occurrence)
             sent.append(occurrence)
@@ -174,6 +181,9 @@ def test_scheduled_result_retries_the_same_occurrence_without_restarting_the_tur
         assert profile == home
         if path == "/api/engine-profile":
             return {"themeId": "test"}
+        if path == "/api/scheduled-context?sessionId=agent-client-a":
+            return {"project": project, "model": {"provider": "custom:own", "model": "current-chat-model",
+                                                  "reasoning": "high", "fast": True}}
         assert path == "/api/scheduled-results"
         posted.append(payload)
         if len(posted) == 1:
@@ -199,5 +209,55 @@ def test_scheduled_result_retries_the_same_occurrence_without_restarting_the_tur
         assert len(sent) == 1
         assert posted[0] == posted[1] == {"jobId": "job", "scheduledAt": "2026-11-20T09:00:00+00:00",
                                           "sessionId": A, "runId": "run-once", "status": "completed", "text": "끝"}
+    finally:
+        reset_hermes_home_override(token)
+
+
+def test_scheduled_pc_offline_posts_without_starting_a_run(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+    from tools import crema_schedule_tool as schedule
+
+    class ProfileAPIError(ValueError):
+        pass
+
+    def profile_api(home, path, payload=None, **_):
+        if path == "/api/engine-profile":
+            return {"themeId": "test"}
+        if path == f"/api/scheduled-context?sessionId={A}":
+            return {"project": {"id": "docs", "path": "pc://own-pc/C:/current"}, "model": None}
+        assert path == "/api/scheduled-results"
+        assert payload["status"] == "unavailable" and "PC" in payload["text"] and "맡지 못했습니다" in payload["text"]
+        return {"posted": True}
+
+    class Client:
+        def __init__(self, **_):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def post(self, url, *, json):
+            assert json["crema_project"]["path"] == "pc://own-pc/C:/current"
+            return SimpleNamespace(status_code=409, json=lambda: {"error": {"code": "scheduled_pc_unavailable"}})
+
+    monkeypatch.setattr(turns, "_api", SimpleNamespace(_port=8754))
+    monkeypatch.setitem(sys.modules, "engine_home", SimpleNamespace(
+        ProfileAPIError=ProfileAPIError, profile_api=profile_api, prepare_profile=lambda *_: None))
+    monkeypatch.setitem(sys.modules, "engine_keys", SimpleNamespace(engine_key=lambda _: "key"))
+    monkeypatch.setattr("hermes_state.SessionDB", lambda *_, **__: SimpleNamespace(
+        close=lambda: None, get_session=lambda _: {"id": A}, resolve_resume_session_id=lambda _: A))
+    monkeypatch.setattr("crema_startup.engine_input", lambda _: {
+        "themeId": "test", "tools": {"chat": ["crema_schedule"]}})
+    monkeypatch.setattr("httpx.Client", Client)
+    token = set_hermes_home_override(tmp_path)
+    try:
+        job = {"id": "job", "prompt": "작업", "origin": {"session_id": A},
+               "_scheduled_instant": "2026-11-20T18:00:00+09:00"}
+        assert not schedule.server_scheduled(job)[0]
     finally:
         reset_hermes_home_override(token)

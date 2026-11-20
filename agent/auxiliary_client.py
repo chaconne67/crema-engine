@@ -2886,7 +2886,7 @@ def _try_custom_endpoint() -> Tuple[Optional[Any], Optional[str]]:
     return _maybe_wrap_anthropic(_fallback_client, model, custom_key, custom_base, custom_mode), model
 
 
-def _build_xai_oauth_aux_client(model: str) -> Tuple[Optional[Any], Optional[str]]:
+def _build_xai_oauth_aux_client(model: str, *, connection=None) -> Tuple[Optional[Any], Optional[str]]:
     """CodexAuxiliaryClient for xAI Grok OAuth (Responses API); (None, None) if not authed.
 
     Caller must pass an explicit model — a pinned Grok default would rot as xAI's allowlist drifts.
@@ -2897,7 +2897,7 @@ def _build_xai_oauth_aux_client(model: str) -> Tuple[Optional[Any], Optional[str
             "pass model explicitly (auxiliary.<task>.model in config.yaml)."
         )
         return None, None
-    resolved = _resolve_xai_oauth_for_aux()
+    resolved = connection or _resolve_xai_oauth_for_aux()
     if resolved is None:
         return None, None
     api_key, base_url = resolved
@@ -2915,7 +2915,7 @@ def _codex_base_url_override() -> str:
     return _scoped_key_env("HERMES_CODEX_BASE_URL").rstrip("/")
 
 
-def _build_codex_client(model: str) -> Tuple[Optional[Any], Optional[str]]:
+def _build_codex_client(model: str, *, connection=None) -> Tuple[Optional[Any], Optional[str]]:
     """CodexAuxiliaryClient for an explicit model; (None, None) without a Codex OAuth token.
 
     No auto-selected default: the Codex model allow-list is undocumented and drifts.
@@ -2926,16 +2926,19 @@ def _build_codex_client(model: str) -> Tuple[Optional[Any], Optional[str]]:
             "pass model explicitly (auxiliary.<task>.model in config.yaml)."
         )
         return None, None
-    pool_present, entry = _select_pool_entry("openai-codex")
-    codex_token = _pool_runtime_api_key(entry) if pool_present else None
-    codex_override = _codex_base_url_override()
-    if codex_token:
-        base_url = codex_override or _pool_runtime_base_url(entry, _CODEX_AUX_BASE_URL) or _CODEX_AUX_BASE_URL
+    if connection:
+        codex_token, base_url = connection
     else:
-        codex_token = _read_codex_access_token()
-        if not codex_token:
-            return None, None
-        base_url = codex_override or _CODEX_AUX_BASE_URL
+        pool_present, entry = _select_pool_entry("openai-codex")
+        codex_token = _pool_runtime_api_key(entry) if pool_present else None
+        codex_override = _codex_base_url_override()
+        if codex_token:
+            base_url = codex_override or _pool_runtime_base_url(entry, _CODEX_AUX_BASE_URL) or _CODEX_AUX_BASE_URL
+        else:
+            codex_token = _read_codex_access_token()
+            if not codex_token:
+                return None, None
+            base_url = codex_override or _CODEX_AUX_BASE_URL
     logger.debug("Auxiliary client: Codex OAuth (%s via Responses API)", model)
     real_client = _create_openai_client(
         api_key=codex_token, base_url=base_url,
@@ -3001,7 +3004,8 @@ def _try_azure_foundry(
     return client, final_model
 
 
-def _try_anthropic(explicit_api_key: Optional[Union[str, Callable[[], str]]] = None) -> Tuple[Optional[Any], Optional[str]]:
+def _try_anthropic(explicit_api_key: Optional[Union[str, Callable[[], str]]] = None, *,
+                   explicit_base_url: Optional[str] = None) -> Tuple[Optional[Any], Optional[str]]:
     try:
         from agent.anthropic_adapter import build_anthropic_client
         from agent.anthropic_credentials import resolve_anthropic_token
@@ -3029,6 +3033,7 @@ def _try_anthropic(explicit_api_key: Optional[Union[str, Callable[[], str]]] = N
                 cfg_base_url = (model_cfg.get("base_url") or "").strip().rstrip("/")
                 if cfg_base_url and _is_anthropic_compatible_host(cfg_base_url):
                     base_url = cfg_base_url
+    base_url = explicit_base_url or base_url
     from agent.anthropic_credentials import _is_oauth_token
     is_oauth = _is_oauth_token(token)
     model = _get_aux_model_for_provider("anthropic") or "claude-haiku-4-5-20251001"
@@ -4806,6 +4811,7 @@ class _ResolveRequest(NamedTuple):
     main_runtime: Optional[Dict[str, Any]]
     is_vision: bool
     task: Optional[str]
+    use_bound_connection: bool = False
 
 
 _ResolveResult = Tuple[Optional[Any], Optional[str]]
@@ -4930,7 +4936,12 @@ def _resolve_auto_branch(req: _ResolveRequest) -> _ResolveResult:
 
 def _resolve_openrouter_branch(req: _ResolveRequest) -> _ResolveResult:
     """OpenRouter."""
-    client, default = _try_openrouter(explicit_api_key=req.explicit_api_key, model=req.model)
+    if req.use_bound_connection and req.explicit_api_key and req.explicit_base_url:
+        client = _create_openai_client(api_key=req.explicit_api_key, base_url=req.explicit_base_url,
+                                        default_headers=build_or_headers())
+        default = None
+    else:
+        client, default = _try_openrouter(explicit_api_key=req.explicit_api_key, model=req.model)
     if client is None:
         logger.warning("resolve_provider_client: openrouter requested but %s",
                        _describe_openrouter_unavailable(model=req.model))
@@ -4942,8 +4953,12 @@ def _resolve_nous_branch(req: _ResolveRequest) -> _ResolveResult:
     """Nous Portal (OAuth)."""
     model = req.model
     # Vision: caller flag, _PROVIDER_VISION_MODELS override, or a known vision id.
-    client, default = _try_nous(vision=(req.is_vision or model in _PROVIDER_VISION_MODELS.values()
-                                        or (model or "").strip().lower() == "mimo-v2-omni"))
+    if req.use_bound_connection and req.explicit_api_key and req.explicit_base_url:
+        client = _create_openai_client(api_key=req.explicit_api_key, base_url=req.explicit_base_url)
+        default = None
+    else:
+        client, default = _try_nous(vision=(req.is_vision or model in _PROVIDER_VISION_MODELS.values()
+                                            or (model or "").strip().lower() == "mimo-v2-omni"))
     if client is None:
         logger.warning("resolve_provider_client: nous requested but Nous Portal not configured (run: hermes auth)")
         return None, None
@@ -4977,14 +4992,21 @@ def _resolve_openai_codex_branch(req: _ResolveRequest) -> _ResolveResult:
         raw_client = _create_openai_client(api_key=codex_token, base_url=base_url,
                                            default_headers=_codex_cloudflare_headers(codex_token, base_url=base_url))
         return raw_client, _normalize_resolved_model(model, req.provider)
-    client, default = _build_codex_client(model)
+    if req.use_bound_connection and req.explicit_api_key and req.explicit_base_url:
+        client, default = _build_codex_client(model, connection=(req.explicit_api_key, req.explicit_base_url))
+    else:
+        client, default = _build_codex_client(model)
     return _route_or_warn(req, client, default, no_token_msg)
 
 
 def _resolve_xai_oauth_branch(req: _ResolveRequest) -> _ResolveResult:
     """xAI Grok OAuth (device code → Responses API). Without this branch xai-oauth falls to the generic
     oauth_external arm, returns (None, None), and silently re-routes every aux task to the Step-2 fallback."""
-    client, default = _build_xai_oauth_aux_client(req.model)
+    if req.use_bound_connection and req.explicit_api_key and req.explicit_base_url:
+        client, default = _build_xai_oauth_aux_client(
+            req.model, connection=(req.explicit_api_key, req.explicit_base_url))
+    else:
+        client, default = _build_xai_oauth_aux_client(req.model)
     return _route_or_warn(req, client, default,
                           "resolve_provider_client: xai-oauth requested but no xAI "
                           "OAuth token found (run: hermes model -> xAI Grok OAuth — SuperGrok / Premium+)")
@@ -5193,7 +5215,10 @@ def _resolve_api_key_branch(req: _ResolveRequest, pconfig: Any, resolve_creds: C
     """PROVIDER_REGISTRY ``api_key`` providers (Anthropic via its own resolver), honouring explicit overrides."""
     provider = req.provider
     if provider == "anthropic":
-        client, default_model = _try_anthropic(explicit_api_key=req.explicit_api_key)
+        client, default_model = _try_anthropic(
+            explicit_api_key=req.explicit_api_key,
+            **({"explicit_base_url": req.explicit_base_url} if req.use_bound_connection else {}),
+        )
         return _route_or_warn(req, client, default_model,
                               "resolve_provider_client: anthropic requested but no Anthropic credentials found")
     creds = resolve_creds(provider)
@@ -5347,14 +5372,16 @@ def resolve_provider_client(
     provider: str, model: str = None, async_mode: bool = False, raw_codex: bool = False,
     explicit_base_url: str = None, explicit_api_key: Optional[Union[str, Callable[[], str]]] = None,
     api_mode: str = None, main_runtime: Optional[Dict[str, Any]] = None, is_vision: bool = False,
-    task: Optional[str] = None,
+    task: Optional[str] = None, *, use_bound_connection: bool = False,
 ) -> Tuple[Optional[Any], Optional[str]]:
     """Central router: return a configured client (auth, base URL, API format) for a provider + optional model.
     The client always exposes ``.chat.completions.create()``; Codex/Responses providers get an adapter.
     ``provider``: built-in name, ``custom:<name>``, "custom" (OPENAI_BASE_URL + OPENAI_API_KEY) or "auto"
     (full auto-detection chain). ``model=None`` → provider's default aux model. ``raw_codex`` → bare OpenAI
     client for ``responses.stream()`` callers. ``api_mode`` forces "codex_responses"/"chat_completions"/
-    "anthropic_messages" instead of auto-detect. Returns (client, resolved_model) or (None, None)."""
+    "anthropic_messages" instead of auto-detect. ``use_bound_connection`` uses an already
+    authenticated chat connection where the provider normally selects from its credential pool.
+    Returns (client, resolved_model) or (None, None)."""
     _validate_proxy_env_urls()
     # Keep the pre-alias name so a custom_providers entry named like a built-in alias
     # (e.g. "kimi" → "kimi-coding") is still reachable via the named-custom branch.
@@ -5404,7 +5431,7 @@ def resolve_provider_client(
         model = _get_aux_model_for_provider(provider) or _read_main_model_for_aux() or model
     req = _ResolveRequest(
         provider, original_provider, model, async_mode, raw_codex,
-        explicit_base_url, explicit_api_key, api_mode, main_runtime, is_vision, task,
+        explicit_base_url, explicit_api_key, api_mode, main_runtime, is_vision, task, use_bound_connection,
     )
     branch = _EXPLICIT_PROVIDER_BRANCHES.get(provider)
     alias_identity = original_provider.removeprefix("custom:")

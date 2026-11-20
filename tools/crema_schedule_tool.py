@@ -9,6 +9,7 @@ import hmac
 import time
 from contextvars import ContextVar
 from typing import Any, Dict
+from urllib.parse import urlencode
 
 from tools.registry import registry, tool_error
 
@@ -91,6 +92,8 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
         return result("failed", "예약 발생 시각을 확인하지 못했습니다.")
     occurrence = "crema-scheduled-" + hashlib.sha256(f"{job['id']}:{when}".encode()).hexdigest()
     outbox = home / "cron" / "crema-results" / (occurrence + ".json")
+    submitted = outbox.with_suffix(".request")
+    outbox.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if outbox.is_file():
         payload = json.loads(outbox.read_text(encoding="utf-8"))
     else:
@@ -102,6 +105,43 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
         run_id = occurrence
         status = "unavailable"
         text = "예약을 시작할 수 없습니다."
+        if submitted.is_file():
+            body = json.loads(submitted.read_text(encoding="utf-8"))
+        elif api is not None:
+            try:
+                query = urlencode({"sessionId": session})
+                context = profile_api(home, f"/api/scheduled-context?{query}", timeout=5)
+            except ProfileAPIError as error:
+                if error.status == 404:
+                    jobs.pause_job(job["id"], MISSING_SOURCE)
+                    return result("failed", MISSING_SOURCE)
+                if error.status != 409:
+                    raise
+                api = None
+                text = "프로젝트의 현재 폴더를 확인하지 못해 예약을 맡지 못했습니다."
+            else:
+                project, model = context["project"], context["model"]
+                if project is not None:
+                    body["crema_project"] = project
+                    path = project["path"]
+                    if path.startswith("pc://"):
+                        device, _, folder = path[5:].partition("/")
+                        body["instructions"] = (
+                            f"이 예약의 작업 폴더는 연결 PC의 {path}입니다. 폴더의 파일은 PC 도구로 다루세요. "
+                            f"pc_files의 folder나 path에는 위 참조를 쓰고, "
+                            f"pc_run을 사용한다면 pc에 {device}를, 명령에 PC 경로 {folder}를 쓰세요."
+                        )
+                if model is not None:
+                    body.update({field: model[field] for field in ("model", "provider") if field in model})
+                    options = {}
+                    if model.get("reasoning"):
+                        options["reasoning"] = {"effort": model["reasoning"]}
+                    if model.get("fast"):
+                        options["service_tier"] = "priority"
+                    if options:
+                        body["model_options"] = options
+                # Lost acceptance is retried with the same request even if the chat changes.
+                atomic_json_write(submitted, body, mode=0o600)
         if api is not None:
             url = f"http://127.0.0.1:{api._port}/p/{home.name}/v1/runs"
             with httpx.Client(headers=headers, timeout=15, trust_env=False) as client:
@@ -111,6 +151,7 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
                     while True:
                         if cancel_event is not None and cancel_event.is_set():
                             client.post(f"{url}/{run_id}/stop")
+                            submitted.unlink(missing_ok=True)
                             return result("failed", "예약 실행을 중단했습니다.")
                         current = client.get(f"{url}/{run_id}")
                         current.raise_for_status()
@@ -125,14 +166,18 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
                     else:
                         status, text = "failed", "예약 실행을 마치지 못했습니다."
                 elif reply.status_code == 404:
+                    submitted.unlink(missing_ok=True)
                     jobs.pause_job(job["id"], MISSING_SOURCE)
                     return result("failed", MISSING_SOURCE)
                 elif reply.status_code == 409:
-                    text = "프로젝트의 현재 폴더를 확인하지 못했거나 대화가 사용 중입니다. 예약을 맡지 못했습니다."
+                    code = reply.json().get("error", {}).get("code")
+                    text = ("연결된 PC를 확인하지 못해 예약을 맡지 못했습니다."
+                            if code == "scheduled_pc_unavailable" else
+                            "프로젝트의 현재 폴더를 확인하지 못했거나 대화가 사용 중입니다. 예약을 맡지 못했습니다.")
         payload = {"jobId": job["id"], "scheduledAt": when, "sessionId": session, "runId": run_id,
                    "status": status, "text": text}
-        outbox.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         atomic_json_write(outbox, payload, mode=0o600)
+    submitted.unlink(missing_ok=True)
     try:
         post_scheduled_result(home, outbox, payload)
     except ProfileAPIError as error:

@@ -498,16 +498,25 @@ def install_change_principles(settings):
 def _change_principles_decision(event):
     import subprocess
 
+    from agent.subagent_lifecycle import get_active_subagent_parent
     from hermes_constants import get_hermes_home
     from tools.environments.local import build_subprocess_env
 
     home = get_hermes_home()
     script = Path(__file__).with_name("crema_change_principles") / "scripts" / "crema_gate.py"
     env = build_subprocess_env(scrub_secrets=True)
-    # The review process sees the same profile database with no inherited model keys.
+    # Keep credentials out of both the hook event and the child environment.
+    agent = get_active_subagent_parent()
+    runtime = {}
+    current = event["extra"]["runtime_model"]
+    if (event["hook_event_name"] == "pre_tool_call" and isinstance(current, dict) and agent is not None
+            and current.get("provider") == agent.provider and current.get("model") == agent.model):
+        runtime = {field: getattr(agent, field, "") for field in ("base_url", "api_mode", "api_key")}
+        if callable(runtime["api_key"]):
+            runtime["api_key"] = runtime["api_key"]()
     env.update(HERMES_HOME=str(home), CHANGE_PRINCIPLES_HOME=str(home / ".change-principles"))
     proc = subprocess.run(
-        [sys.executable, "-X", "utf8", str(script)], input=json.dumps(event), env=env,
+        [sys.executable, "-X", "utf8", str(script)], input=json.dumps({"event": event, "runtime": runtime}), env=env,
         capture_output=True, text=True, encoding="utf-8", check=True,
         timeout=25 if event["hook_event_name"] == "pre_tool_call" else 5,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),

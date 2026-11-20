@@ -215,14 +215,17 @@ def test_desktop_launch_preserves_tools_and_hooks(app, tmp_path, monkeypatch):
 
     start = threading.Thread.start
 
-    def stop_at_ticker(thread):
-        if thread.name == "crema-cron-ticker":
-            raise Started
-        return start(thread)
+    def skip_ticker(thread):
+        if thread.name != "crema-cron-ticker":
+            return start(thread)
+
+    def capture_settings(config):
+        raise Started
 
     monkeypatch.setattr(APIServerAdapter, "connect", connect)
     monkeypatch.setattr(crema_engine, "free_port", lambda: 8650)
-    monkeypatch.setattr(threading.Thread, "start", stop_at_ticker)
+    monkeypatch.setattr(threading.Thread, "start", skip_ticker)
+    monkeypatch.setattr("uvicorn.Server", capture_settings)
     monkeypatch.setattr(asyncio.BaseEventLoop, "run_in_executor", lambda loop, *_: loop.create_future())
     root = logging.getLogger()
     try:
@@ -232,14 +235,11 @@ def test_desktop_launch_preserves_tools_and_hooks(app, tmp_path, monkeypatch):
         check_registration(home, startup, expected)
         assert sum(isinstance(handler, crema_failures._Handler) for handler in root.handlers) == 1
         config = load_config()
-        expected["chat"]["enabledToolsets"] = sorted([*expected["chat"]["enabledToolsets"], "screens"])
         check_tools(config, "api_server", expected["chat"])
         # Exercise the saved overlay produced by the desktop's media settings.
         optional = set(startup["tools"]["chatWithMedia"]) - set(startup["tools"]["chat"])
         config["platform_toolsets"] = {"api_server": ["hermes-api-server", *sorted(optional)]}
-        media_chat = expected["chatWithMediaAndComputerSelected"]
-        media_chat["enabledToolsets"] = sorted([*media_chat["enabledToolsets"], "screens"])
-        check_tools(config, "api_server", media_chat)
+        check_tools(config, "api_server", expected["chatWithMediaAndComputerSelected"])
         from cron.jobs import list_jobs
         assert list_jobs(include_disabled=True) == expected["defaultSchedules"]
 

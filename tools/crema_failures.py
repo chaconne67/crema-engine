@@ -17,6 +17,8 @@ import re
 import sys
 import threading
 import traceback
+import uuid
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -26,8 +28,18 @@ ROOT = Path(__file__).resolve().parent.parent  # the engine source
 UNSAFE = re.compile(r"[^A-Za-z0-9_.:/<>+ -]")
 LIMIT = 50
 _lock = threading.Lock()
-_waiting: List[Dict[str, Any]] = []
-_seen: set = set()
+_waiting = defaultdict(list)
+_seen = defaultdict(set)
+
+
+def _home():
+    from hermes_constants import get_hermes_home
+    return get_hermes_home().resolve()
+
+
+def _server_profile(home):
+    import os
+    return bool(os.environ.get("SERVICE_DIR") and home.parent.name == "profiles")
 
 
 def _frames(tb) -> List[str]:
@@ -46,12 +58,20 @@ def record(stage: str, code: str, trace: List[str] = ()) -> None:
     stage, code = UNSAFE.sub("", stage)[:32], UNSAFE.sub("", code)[:48]
     if not (stage and code):
         return
-    kind = (stage, code, tuple(trace[-1:]))
+    home = _home()
+    server = _server_profile(home)
+    kind = (stage, code, () if server else tuple(trace[-1:]))
     with _lock:
-        if kind in _seen or len(_waiting) >= LIMIT:
+        waiting, seen = _waiting[home], _seen[home]
+        if kind in seen or len(waiting) >= LIMIT:
             return
-        _seen.add(kind)
-        _waiting.append({"stage": stage, "code": code, "details": {"trace": list(trace)} if trace else {}})
+        seen.add(kind)
+        row = {"stage": stage, "code": code}
+        if server:
+            row["eventId"] = str(uuid.uuid4())
+        else:
+            row["details"] = {"trace": list(trace)} if trace else {}
+        waiting.append(row)
 
 
 def failed(stage: str, exc: BaseException) -> None:
@@ -61,10 +81,34 @@ def failed(stage: str, exc: BaseException) -> None:
 
 def take() -> Dict[str, Any]:
     """The failures waiting (then none are), with this Windows's version for the report."""
+    home = _home()
+    if _server_profile(home):
+        return {"os": "server", "failures": []}
     with _lock:
-        taken = _waiting[:]
-        _waiting.clear()
+        taken = _waiting.pop(home, [])
     return {"os": UNSAFE.sub("", platform.platform(terse=True))[:48], "failures": taken}
+
+
+def flush_server():
+    """Send each pending profile's events in order, keeping the same ID after a transport error."""
+    from engine_home import HOME, ProfileAPIError, profile_api
+
+    with _lock:
+        pending = [(home, rows[:]) for home, rows in _waiting.items()
+                   if home.parent == (HOME / "profiles").resolve() and _server_profile(home)]
+    for home, rows in pending:
+        for row in rows:
+            try:
+                reply = profile_api(home, "/api/diagnostics/report", row, timeout=3)
+                if not isinstance(reply, dict) or type(reply.get("recorded")) is not bool:
+                    break
+            except ProfileAPIError as error:
+                if error.status not in (401, 403, 404):
+                    break
+            except (OSError, ValueError):
+                break
+            with _lock:
+                _waiting[home].remove(row)
 
 
 class _Handler(logging.Handler):
@@ -86,7 +130,8 @@ def _turn_ended(completed=None, failed=None, interrupted=None, turn_exit_reason=
     if interrupted:
         record("turn", "stopped")
     elif failed or completed is False:
-        record("turn", str(turn_exit_reason or "unfinished").split("(")[0])
+        reason = str(turn_exit_reason or "unfinished").split("(")[0]
+        record("turn", reason if re.fullmatch(r"[A-Za-z0-9_.-]{1,48}", reason) else "unfinished")
 
 
 def _tool_ended(tool_name: str = "", result: Any = None, status: str = "", **_: Any) -> None:
@@ -111,7 +156,10 @@ def _model_failed(provider: str = "", status_code=None, reason=None, retryable=N
                   max_retries=None, **_: Any) -> None:
     if retryable and retry_count is not None and max_retries is not None and retry_count < max_retries:
         return  # tried again
-    record("model", f"{provider} {reason or status_code or 'error'}")
+    kind = reason if isinstance(reason, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,25}", reason) else None
+    code = kind or (str(status_code) if isinstance(status_code, int) else "error")
+    provider = provider if isinstance(provider, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,22}", provider) else "provider"
+    record("model", f"{provider} {code}")
 
 
 def observers():

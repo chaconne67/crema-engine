@@ -102,3 +102,102 @@ def test_a_one_shot_missed_while_closed_still_runs_once(crema):
     made = call(A, action="create", when="in 30m", task="x")["created"]
     jobs.save_jobs([dict(jobs.get_job(made["id"]), next_run_at=(NOW - timedelta(hours=5)).isoformat())])
     assert [j["id"] for j in jobs.get_due_jobs()] == [made["id"]]
+
+
+def test_service_job_and_import_pause_keep_existing_lanes(crema, monkeypatch):
+    from types import SimpleNamespace
+    import sys
+    import cron.scheduler as scheduler
+    from tools import crema_schedule_tool
+
+    monkeypatch.setenv("SERVICE_DIR", "/test/service")
+    monkeypatch.setitem(sys.modules, "fc_lifecycle", SimpleNamespace(writable=lambda home: True))
+    monkeypatch.setattr(crema_schedule_tool, "PLATFORM", "api_server")
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly",
+                        lambda: {"crema_personal_schedule_mode": "conversation"})
+    service = jobs.create_job("managed schedule", "every 1h")
+    imported = jobs.create_job("from Crema", "every 1h")
+    jobs.pause_job(imported["id"], "PC판 Crema 가져오기")
+    assert "error" in call(A, action="resume", id=imported["id"])
+    assert not jobs.get_job(imported["id"])["enabled"]
+    made = call(A, action="create", when="every 1h", task="personal")["created"]
+    personal = jobs.get_job(made["id"])
+    assert personal["origin"]["session_id"] == A
+
+    managed_result = (True, "independent", "managed", None)
+    personal_result = (True, "conversation", "personal", None)
+    dispatched = []
+    monkeypatch.setattr(scheduler, "_prepare_job_prompt", lambda *args, **kwargs: (managed_result, None))
+    monkeypatch.setattr(crema_schedule_tool, "server_scheduled",
+                        lambda job, **kwargs: dispatched.append(job["id"]) or personal_result)
+    assert run_job(service) == managed_result
+    assert run_job(personal) == personal_result
+    assert dispatched == [personal["id"]]
+
+
+def test_scheduled_result_retries_the_same_occurrence_without_restarting_the_turn(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+    from tools import crema_schedule_tool as schedule
+
+    home = tmp_path / "profiles/own"
+    home.mkdir(parents=True)
+    session_api = SimpleNamespace(_port=8754)
+    monkeypatch.setattr(turns, "_api", session_api)
+    sent, posted = [], []
+
+    class Client:
+        def __init__(self, *, headers, **_):
+            self.headers = headers
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def post(self, url, *, json):
+            assert url == "http://127.0.0.1:8754/p/own/v1/runs"
+            assert json == {"session_id": A, "input": "작업"}
+            occurrence = self.headers["Idempotency-Key"]
+            assert self.headers[schedule.SCHEDULED_HEADER] == schedule.scheduled_signature("key", occurrence)
+            sent.append(occurrence)
+            return SimpleNamespace(status_code=202, json=lambda: {"run_id": "run-once"})
+
+        def get(self, url):
+            assert url.endswith("/run-once")
+            return SimpleNamespace(raise_for_status=lambda: None,
+                                   json=lambda: {"status": "completed", "output": "끝"})
+
+    def call_profile(profile, path, payload=None, **_):
+        assert profile == home
+        if path == "/api/engine-profile":
+            return {"themeId": "test"}
+        assert path == "/api/scheduled-results"
+        posted.append(payload)
+        if len(posted) == 1:
+            raise OSError("reply lost")
+        return {"posted": False, "chatId": "a", "rev": 2}
+
+    error = type("ProfileAPIError", (ValueError,), {})
+    monkeypatch.setitem(sys.modules, "engine_home", SimpleNamespace(
+        ProfileAPIError=error, profile_api=call_profile, prepare_profile=lambda *_: home))
+    monkeypatch.setitem(sys.modules, "engine_keys", SimpleNamespace(engine_key=lambda _: "key"))
+    monkeypatch.setattr("hermes_state.SessionDB", lambda *_, **__: SimpleNamespace(
+        close=lambda: None, get_session=lambda _: {"id": A}, resolve_resume_session_id=lambda _: A))
+    monkeypatch.setattr("crema_startup.engine_input", lambda _: {
+        "themeId": "test", "tools": {"chat": ["crema_schedule"]}})
+    monkeypatch.setattr("httpx.Client", Client)
+    token = set_hermes_home_override(home)
+    try:
+        job = {"id": "job", "prompt": "작업", "origin": {"session_id": A, "profile": "own"},
+               "_scheduled_instant": "2026-11-20T18:00:00+09:00"}
+        with pytest.raises(OSError, match="lost"):
+            schedule.server_scheduled(job)
+        assert schedule.server_scheduled(job)[0]
+        assert len(sent) == 1
+        assert posted[0] == posted[1] == {"jobId": "job", "scheduledAt": "2026-11-20T09:00:00+00:00",
+                                          "sessionId": A, "runId": "run-once", "status": "completed", "text": "끝"}
+    finally:
+        reset_hermes_home_override(token)

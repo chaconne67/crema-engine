@@ -1,5 +1,6 @@
 """The engine's own failures for 오류 정보 보내기: where and what kind, never what was said or worked on."""
 import logging
+from collections import defaultdict
 
 import pytest
 
@@ -8,8 +9,8 @@ from tools import crema_failures
 
 @pytest.fixture(autouse=True)
 def fresh(monkeypatch):
-    monkeypatch.setattr(crema_failures, "_waiting", [])
-    monkeypatch.setattr(crema_failures, "_seen", set())
+    monkeypatch.setattr(crema_failures, "_waiting", defaultdict(list))
+    monkeypatch.setattr(crema_failures, "_seen", defaultdict(set))
     handler = crema_failures._Handler(logging.ERROR)
     logging.getLogger().addHandler(handler)
     yield
@@ -109,3 +110,50 @@ def test_crema_offers_the_unmet_tool_directly():
 
     assert "crema_unmet" in TOOLSETS["hermes-api-server"]["tools"]
     assert "crema_unmet" in _DIRECT_SURFACE_TOOLSETS
+
+
+def test_unmet_and_native_failures_use_one_profile_queue(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from uuid import UUID
+    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+
+    monkeypatch.setenv("SERVICE_DIR", str(tmp_path / "service"))
+    developer, staff, jabis = (tmp_path / "profiles" / name for name in ("dev", "staff", "jabis"))
+    expected = [("unmet", "no_tool files"), ("model", "provider auth"), ("tool", "file exit 7"),
+                ("approval", "timeout"), ("turn", "unfinished"), ("settings", "GET 500")]
+    for home in (developer, staff, jabis):
+        token = set_hermes_home_override(home)
+        try:
+            crema_failures.crema_unmet({"why": "no_tool", "area": "files"})
+            crema_failures._model_failed(provider="provider", reason="auth")
+            crema_failures._tool_ended(tool_name="file", status="error", result={"exit_code": 7})
+            crema_failures._approval_answered(choice="timeout")
+            crema_failures._turn_ended(failed=True)
+            crema_failures.record("settings", "GET 500")
+            crema_failures.record("settings", "GET 500", ["never sent"])
+            assert crema_failures.take() == {"os": "server", "failures": []}
+        finally:
+            reset_hermes_home_override(token)
+    deliveries = {}
+    initial = {}
+
+    def report(home, path, row, timeout):
+        assert path == "/api/diagnostics/report"
+        assert set(row) == {"eventId", "stage", "code"}
+        UUID(row["eventId"])
+        if home == developer and not initial:
+            initial.update(row)
+            raise OSError("lost response")
+        deliveries.setdefault(home, []).append(row)
+        return {"recorded": home != developer}  # developer consent is off in Django
+
+    monkeypatch.setitem(__import__("sys").modules, "engine_home", SimpleNamespace(
+        HOME=tmp_path, ProfileAPIError=type("ProfileAPIError", (ValueError,), {}), profile_api=report))
+    crema_failures.flush_server()
+    assert developer not in deliveries
+    crema_failures.flush_server()
+    assert deliveries[developer][0] == initial
+    assert set(deliveries) == {developer, staff, jabis}
+    for rows in deliveries.values():
+        assert [(row["stage"], row["code"]) for row in rows] == expected
+    assert len({row["eventId"] for rows in deliveries.values() for row in rows}) == 18

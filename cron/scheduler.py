@@ -455,6 +455,8 @@ def _resolve_cron_disabled_toolsets(cfg: dict) -> list[str]:
         disabled = ["messaging", "clarify"]
     else:
         disabled = ["cronjob", "messaging", "clarify"]
+    if cfg.get("file_access_roots") is not None:
+        disabled.append("backup")
     agent_cfg = (cfg or {}).get("agent") or {}
     from agent.skill_utils import parse_config_string_list
 
@@ -2490,7 +2492,16 @@ def run_job(
         from hermes_constants import get_hermes_home
         if not writable(get_hermes_home()):
             return False, "", "", "이용이 끝나 예약 작업을 실행하지 않았습니다."
-    if (job.get("origin") or {}).get("platform") == "crema":
+    origin = (job.get("origin") or {}).get("platform")
+    if os.environ.get("SERVICE_DIR") and origin in ("api_server", "crema"):
+        from hermes_cli.config import load_config_readonly
+        from tools.crema_schedule_tool import MISSING_SOURCE, server_scheduled
+        if origin != "api_server" or load_config_readonly().get("crema_personal_schedule_mode") != "conversation":
+            from cron.jobs import pause_job
+            pause_job(job["id"], MISSING_SOURCE)
+            return False, "", "", MISSING_SOURCE
+        return server_scheduled(job, cancel_event=cancel_event, extra_prompt=extra_prompt)
+    if origin == "crema":
         from agent import crema_file_turns
         return crema_file_turns.scheduled(job)
     job_id = job["id"]

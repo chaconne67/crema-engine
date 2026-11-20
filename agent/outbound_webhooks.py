@@ -223,6 +223,10 @@ def _make_callback(event: str, target: WebhookTarget):
     """Build the notify-only closure ``invoke_hook()`` calls per firing."""
 
     def _callback(**kwargs: Any) -> None:
+        if target.name == "service-server" and event == "on_session_end":
+            from tools.crema_schedule_tool import scheduled_turn
+            if scheduled_turn() is not None:
+                return  # The profile's scheduled-result posting owns the user notification.
         if event in _TOOL_SCOPED_EVENTS and not target.matches_tool(kwargs.get("tool_name")):
             return
         delivery_id = uuid.uuid4().hex

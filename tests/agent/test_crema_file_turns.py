@@ -337,12 +337,21 @@ def test_a_command_leaves_a_file_another_chat_saved_meanwhile_to_that_chat(api, 
 
 
 def test_install_puts_the_turn_rule_in_the_engines_pre_tool_call(api, judge, repo, monkeypatch):
+    from crema_startup import initialize
     from hermes_cli.plugins import _dispatch_pre_tool_call_hooks, get_plugin_manager
 
+    build = repo.path / "build-input.json"
+    build.write_text(json.dumps({
+        "themeIds": ["crema"], "placement": "embedded", "engineInputs": {"crema": {
+            "brain": "pc", "plugins": {"enabled": []}, "hookOptions": {},
+            "hooks": {"pre_tool_call": ["engine/agent/crema_file_turns.py:before_tool"]},
+        }},
+    }))
+    monkeypatch.setenv("CREMA_ENGINE_INPUT", str(build))
     hooks = get_plugin_manager()._hooks
     before = {name: list(hooks.get(name, [])) for name in ("pre_tool_call", "post_tool_call", "transform_tool_result", "pre_llm_call")}
     try:
-        turns.install(api)
+        initialize(api=api)
         report = repo.path / "report.py"
         write(A, report, "v2\n")
         api.replying(A)

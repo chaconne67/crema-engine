@@ -18,6 +18,40 @@ from crema_startup import hook_id, initialize
 ENGINE = Path(__file__).resolve().parents[1]
 
 
+def test_change_principles_reuses_plan_and_commit_gate(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    import sys
+    import crema_engine
+
+    config = {"crema_theme": "krema-developer", "terminal": {"cwd": str(tmp_path)}}
+    active = {"allowed": True}
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: config)
+    monkeypatch.setattr("crema_startup.engine_input", lambda _: {
+        "brain": "server", "hookOptions": {"changePrinciples": {"default": False}}})
+    monkeypatch.setitem(sys.modules, "engine_home", SimpleNamespace(profile_has=lambda *_: active["allowed"]))
+    events = []
+    decisions = iter([("hold", "plan missing"), None, ("hold", "commit check"), None, ("notice", "read only")])
+    monkeypatch.setattr(crema_engine, "_change_principles_decision",
+                        lambda event: events.append(event) or next(decisions))
+    call = crema_engine.change_principles_hook
+    assert call("write_file", args={"path": "product.py"}, session_id="own") is None
+    assert events == []
+    config["crema_change_principles"] = {"enabled": True}
+    assert call("write_file", args={"path": "product.py"}, session_id="own") == {
+        "action": "block", "message": "plan missing"}
+    assert call("write_file", args={"path": "product.py"}, session_id="own") is None
+    assert call("terminal", args={"command": "git commit"}, session_id="own") == {
+        "action": "block", "message": "commit check"}
+    assert call("terminal", args={"command": "git commit"}, session_id="own") is None
+    assert call("patch", args={"path": "product.py"}, session_id="own") == {
+        "action": "context", "message": "read only"}
+    assert events[0]["cwd"] == str(tmp_path) and events[0]["session_id"] == "own"
+    assert events[0]["transcript_path"] is None and events[2]["tool_input"] == {"command": "git commit"}
+    active["allowed"] = False
+    assert call("write_file", args={"path": "product.py"}, session_id="own") is None
+    assert len(events) == 5
+
+
 @pytest.fixture
 def app(monkeypatch):
     source = os.environ.get("CREMA_APP_SOURCE")
@@ -92,8 +126,22 @@ def check_registration(home, startup, expected):
     plugins = {name: {"enabled": entry.enabled, "loaded": entry.module is not None, "deferred": entry.deferred}
                for name, entry in manager._plugins.items()}
     assert plugins == expected["plugins"]
+    wanted = {event: list(callbacks) for event, callbacks in startup["hooks"].items()}
+    diagnostics = startup["hookOptions"].get("profileHooks")
+    if diagnostics:
+        wanted["on_session_end"][:0] = diagnostics["on_session_end"]
+        wanted["post_tool_call"][1:1] = diagnostics["post_tool_call"]
+        wanted["api_request_error"] = diagnostics["api_request_error"]
+        wanted["post_approval_response"] = diagnostics["post_approval_response"]
+        # The browser notice and storage cleanup compose within its one replacement callback.
+        assert len(manager._hooks["transform_llm_output"]) == 1
+        emitted = manager._hooks["transform_llm_output"][0]
+        assert emitted(response_text="Reply\n[[NEXT_INPUT: x]]", turn_id="snapshot") == "Reply"
+    if "changePrinciples" in startup["hookOptions"]:
+        wanted["pre_tool_call"][:0] = ["engine/crema_engine.py:change_principles_hook"]
+        wanted["pre_llm_call"][:0] = ["engine/crema_engine.py:change_principles_start"]
     assert {event: [hook_id(callback, home) for callback in callbacks]
-            for event, callbacks in manager._hooks.items()} == startup["hooks"]
+            for event, callbacks in manager._hooks.items()} == wanted
     assert [{"path": path.relative_to(home / "skills").as_posix(), "bundleSha256": _dir_hash(path.parent)}
             for path in _iter_active_skill_mds(sort=True)] == expected["skills"]
 
@@ -139,11 +187,14 @@ def test_desktop_launch_preserves_tools_and_hooks(app, tmp_path, monkeypatch):
         check_registration(home, startup, expected)
         assert sum(isinstance(handler, crema_failures._Handler) for handler in root.handlers) == 1
         config = load_config()
+        expected["chat"]["enabledToolsets"] = sorted([*expected["chat"]["enabledToolsets"], "screens"])
         check_tools(config, "api_server", expected["chat"])
         # Exercise the saved overlay produced by the desktop's media settings.
         optional = set(startup["tools"]["chatWithMedia"]) - set(startup["tools"]["chat"])
         config["platform_toolsets"] = {"api_server": ["hermes-api-server", *sorted(optional)]}
-        check_tools(config, "api_server", expected["chatWithMediaAndComputerSelected"])
+        media_chat = expected["chatWithMediaAndComputerSelected"]
+        media_chat["enabledToolsets"] = sorted([*media_chat["enabledToolsets"], "screens"])
+        check_tools(config, "api_server", media_chat)
         from cron.jobs import list_jobs
         assert list_jobs(include_disabled=True) == expected["defaultSchedules"]
 
@@ -192,7 +243,18 @@ def test_gateway_profile_preserves_tools_hooks_and_schedules(app, tmp_path, monk
         check_registration(home, startup, expected)
         config = load_config()
         assert config["plugins"]["enabled"] == expected["configuredPlugins"]
-        check_tools(config, "api_server", expected["chat"])
+        chat = expected["chat"]
+        if "backup" in chat["disabledToolsets"]:
+            chat["disabledToolsets"].remove("backup")
+            for field, item in (
+                ("enabledToolsets", "backup"), ("selected", "crema_backup"),
+                ("schemasBeforeToolSearchWithoutCredentials", "crema_backup"),
+            ):
+                chat[field] = sorted([*chat[field], item])
+            field = "schemasAfterToolSearchWithoutCredentials"
+            if "tool_search" not in chat[field]:
+                chat[field] = sorted([*chat[field], "crema_backup"])
+        check_tools(config, "api_server", chat)
         check_tools(config, "cron", expected["cron"])
         from agent import outbound_webhooks
         from hermes_cli.plugins import get_plugin_manager

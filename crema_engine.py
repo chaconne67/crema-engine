@@ -59,10 +59,10 @@ async def main() -> None:
     token = os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN", "")
     if len(token) < 16:
         sys.exit("HERMES_DASHBOARD_SESSION_TOKEN is missing or too short")
-    from crema_startup import initialize, prepare_desktop
+    import crema_startup as startup
     from tools import crema_failures
 
-    prepare_desktop(drop_next_input, use_only_crema_connections)
+    startup.prepare_desktop(use_only_crema_connections)
 
     # Only the packages bundled with Crema (the `crema` extra); never install more at run time.
     os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
@@ -92,7 +92,7 @@ async def main() -> None:
     from agent import crema_file_turns
     from tools import crema_services
 
-    initialize(api=api)
+    startup.initialize(api=api)
     asyncio.get_running_loop().run_in_executor(None, crema_services.sync_services)
     # Scheduled tasks (tools/crema_schedule_tool.py): the engine's in-process cron ticker, as the Hermes gateway and
     # desktop backend run it; it runs while Crema is open.
@@ -111,6 +111,14 @@ async def main() -> None:
     from crema_free import create_router as free_connection_router
 
     settings = FastAPI()
+    install_change_principles(settings)
+    try:
+        from crema_desktop_features import install as install_desktop_features
+    except ModuleNotFoundError as error:
+        if error.name != "crema_desktop_features":
+            raise
+    else:
+        install_desktop_features(settings, api, startup)
     settings.include_router(free_connection_router())
     for router in (oauth.router, config_env.config_router, config_env.router, models.router, audio.router):
         settings.include_router(router)
@@ -386,6 +394,14 @@ async def main() -> None:
                                             or path in (crema_google.CALLBACK, "/api/crema/front"))
         if not back and not hmac.compare_digest(given.encode(), token.encode()):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        if path == "/api/config" and request.method != "GET":
+            try:
+                incoming = await request.json()
+            except ValueError:
+                incoming = {}
+            changes = incoming.get("config") if isinstance(incoming, dict) else None
+            if isinstance(changes, dict) and "crema_change_principles" in changes:
+                return JSONResponse({"detail": "server_owned_setting"}, status_code=403)
         # A settings call that did not finish (an install, a connection, an address refused): the route, never what
         # was asked. An exception the route did not answer comes through here, before the server makes its 500 of it.
         def failed(status):
@@ -423,17 +439,116 @@ async def main() -> None:
 # The app (app.js splitNextInput) takes up to three end lines with blank lines between them; the stored chat drops
 # the same, so a CHAT_TITLE or CHAT_ROLE line above a blank line does not stay in later turns' history.
 NEXT_INPUT_LINE = re.compile(r"(?:\s*(?:\A|\n)[ \t>*_`]*(?:CHAT_ROLE|CHAT_TITLE|NEXT_INPUT):[^\n]*){1,3}\s*\Z")
+SERVER_REPLY_MARKERS = re.compile(r"(?:\s*\[\[(?:TITLE|ROLE|NEXT_INPUT):[^\n]*?\]\]){1,3}\s*\Z")
 
 
 def drop_next_input(response_text: str = "", session_id: str = "", **_) -> str | None:
     """The `transform_llm_output` hook: the reply without its end lines (CHAT_TITLE, NEXT_INPUT), or None to keep it."""
-    text = NEXT_INPUT_LINE.sub("", response_text or "").rstrip()
+    text = NEXT_INPUT_LINE.sub("", SERVER_REPLY_MARKERS.sub("", response_text or "")).rstrip()
     # The stored chat loses the line, so the log says what it was: a chat without the grey suggestion then shows
     # whether the model left the line out or wrote "-" (주인님 2026-11-05).
     end = re.search(r"NEXT_INPUT:([^\n]*)", (response_text or "")[len(text):])
     kind = "missing" if not end else "none" if end.group(1).strip(" *_`") in ("", "-") else "given"
     logging.getLogger(__name__).info("next input: session=%s %s", session_id, kind)
     return text if text and text != (response_text or "").rstrip() else None
+
+
+def _change_principles_options(config):
+    from crema_startup import engine_input
+    startup = engine_input(config)
+    if startup is None:
+        return None
+    if startup["brain"] == "server":
+        from engine_home import profile_has
+        from hermes_constants import get_hermes_home
+        if not profile_has(get_hermes_home(), "change_principles"):
+            return None
+    return startup["hookOptions"].get("changePrinciples")
+
+
+def _change_principles_enabled(config, options):
+    return bool(options is not None and (config.get("crema_change_principles") or {}).get(
+        "enabled", options["default"]) is True)
+
+
+def install_change_principles(settings):
+    from fastapi import HTTPException
+    from hermes_cli.config import load_config_readonly, save_config
+
+    @settings.get("/api/crema/change-principles")
+    def read():
+        config = load_config_readonly()
+        options = _change_principles_options(config)
+        if options is None:
+            raise HTTPException(403, "change_principles_not_allowed")
+        return {"enabled": _change_principles_enabled(config, options)}
+
+    @settings.put("/api/crema/change-principles")
+    def write(body: dict):
+        config = load_config_readonly()
+        if _change_principles_options(config) is None:
+            raise HTTPException(403, "change_principles_not_allowed")
+        enabled = body.get("enabled")
+        if type(enabled) is not bool:
+            raise HTTPException(400, "enabled_must_be_boolean")
+        save_config({"crema_change_principles": {"enabled": enabled}}, merge_existing=True)
+        return {"enabled": enabled}
+
+
+def _change_principles_decision(event):
+    import subprocess
+
+    from hermes_constants import get_hermes_home
+    from tools.environments.local import build_subprocess_env
+
+    home = get_hermes_home()
+    script = Path(__file__).with_name("crema_change_principles") / "scripts" / "crema_gate.py"
+    env = build_subprocess_env(scrub_secrets=True)
+    # The review process sees the same profile database with no inherited model keys.
+    env.update(HERMES_HOME=str(home), CHANGE_PRINCIPLES_HOME=str(home / ".change-principles"))
+    proc = subprocess.run(
+        [sys.executable, "-X", "utf8", str(script)], input=json.dumps(event), env=env,
+        capture_output=True, text=True, encoding="utf-8", check=True,
+        timeout=25 if event["hook_event_name"] == "pre_tool_call" else 5,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return json.loads(proc.stdout)
+
+
+def _change_principles_dispatch(event, session_id="", task_id="", tool_name="", args=None, runtime_model=None, **_):
+    from hermes_cli.config import load_config_readonly
+    from tools.terminal_tool import resolve_task_overrides
+
+    config = load_config_readonly()
+    if not session_id or not _change_principles_enabled(config, _change_principles_options(config)):
+        return None
+    cwd = resolve_task_overrides(task_id).get("cwd") or (config.get("terminal") or {}).get("cwd")
+    if not cwd or not Path(cwd).is_absolute():
+        cwd = os.getcwd()
+    try:
+        decision = _change_principles_decision({
+            "hook_event_name": event, "session_id": session_id, "cwd": cwd,
+            "tool_name": tool_name, "tool_input": args or {}, "transcript_path": None,
+            "extra": {"runtime_model": runtime_model},
+        })
+    except Exception:
+        if event == "pre_tool_call":
+            return {"action": "block", "message": "변경 원칙 판정을 마치지 못했습니다."}
+        return None
+    if decision:
+        kind, reason = decision
+        return {"action": "context" if kind == "notice" else "block", "message": reason}
+    return None
+
+
+def change_principles_hook(tool_name="", **info):
+    if tool_name in ("terminal", "write_file", "patch"):
+        return _change_principles_dispatch("pre_tool_call", tool_name=tool_name, **info)
+    return None
+
+
+def change_principles_start(**info):
+    _change_principles_dispatch("pre_llm_call", **info)
 
 
 KNOWLEDGE_TOOLS = ("knowledge_search", "knowledge_get", "knowledge_write")

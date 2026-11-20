@@ -178,7 +178,7 @@ def _client() -> dict:
     value = get_env_value(CLIENT_KEY)
     if value:
         return json.loads(_unseal(value))
-    if os.environ.get("SERVICE_DIR"):
+    if _app_required():
         raise LookupError("personal_app_required")
     return {"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET}
 
@@ -227,16 +227,25 @@ def _save(address: str, features: List[str]) -> None:
     save_config(config)
 
 
+def _app_required() -> bool:
+    from crema_startup import connection_policy
+    return connection_policy().get(
+        "googleApp", "required-personal" if os.environ.get("SERVICE_DIR") else "optional-personal"
+    ) == "required-personal"
+
+
 def state() -> Dict[str, Any]:
     """Settings: the accounts and their features."""
-    if not os.environ.get("SERVICE_DIR"):
-        return {"accounts": accounts()}
-    try:
-        _client()
-        configured = True
-    except LookupError:
-        configured = False
-    return {"accounts": accounts(), "personal_app": configured, "server": bool(os.environ.get("SERVICE_DIR"))}
+    from hermes_cli.config import get_env_value
+    result = {"accounts": accounts()}
+    if os.environ.get("CREMA_ENGINE_INPUT") or os.environ.get("SERVICE_DIR"):
+        result["app_required"] = _app_required()
+    if os.environ.get("SERVICE_DIR"):
+        configured = bool(get_env_value(CLIENT_KEY))
+        if configured:
+            _client()  # Validate the same stored personal app that sign-in will use.
+        result.update(personal_app=configured, server=True)
+    return result
 
 
 def remove(feature: str, address: str) -> Dict[str, Any]:

@@ -83,7 +83,7 @@ def _asks_sign_in(url: str) -> bool:
 
 def snapshot(job: dict) -> dict:
     keys = ("id", "name", "status", "error")
-    if os.environ.get("SERVICE_DIR"):
+    if job.get("profile_connection"):
         keys += ("authorization_url",)
     return {key: job[key] for key in keys}
 
@@ -110,20 +110,26 @@ def start(name: str, url: str, title: str = "") -> dict:
     """Connect the service at `url` as `name` in the background: {id, name, status: "signing_in", error}; follow
     it with job_state(). Raises ValueError for a name or address it cannot take."""
     from hermes_cli.mcp_config import _get_mcp_servers
+    from crema_startup import connection_policy
 
+    policy = connection_policy()
+    if not policy.get("mcp", True):
+        raise ValueError("service connections are disabled")
+    profile_connection = policy.get("source", "profile" if os.environ.get("SERVICE_DIR") else "local") == "profile"
     name, url, title = name.strip().lower(), url.strip(), title.strip()
     if not NAME.match(name):
         raise ValueError("name: lowercase letters, digits and '-', up to 40 (e.g. higgsfield)")
     if not url.startswith("https://"):
         raise ValueError("the address must start with https://")
-    if os.environ.get("SERVICE_DIR"):
+    if profile_connection:
         validate_public_url(url)
     if name in _get_mcp_servers():
         raise ValueError(f"'{name}' is connected already")
     with _lock:
         if any(other["home"] == _home() and other["name"] == name and other["status"] == "signing_in" for other in _jobs.values()):
             raise ValueError(f"'{name}' is being connected already")
-        job = {"id": uuid.uuid4().hex, "name": name, "status": "signing_in", "error": "", "flow": None, "cancelled": False, "home": _home(), "authorization_url": ""}
+        job = {"id": uuid.uuid4().hex, "name": name, "status": "signing_in", "error": "", "flow": None,
+               "cancelled": False, "home": _home(), "authorization_url": "", "profile_connection": profile_connection}
         _jobs[job["id"]] = job
     from agent.memory_provider import spawn_context_thread
     spawn_context_thread(target=_connect, args=(job, url, title), name=f"crema-service-{name}").start()
@@ -134,10 +140,11 @@ def _connect(job: dict, url: str, title: str) -> None:
     from hermes_cli.mcp_config import _remove_mcp_server, _save_mcp_server
 
     name = job["name"]
+    profile_connection = job.get("profile_connection", bool(os.environ.get("SERVICE_DIR")))
     try:
         sign_in = _asks_sign_in(url)
         config = {"url": url, **({"auth": "oauth"} if sign_in else {}), **({"title": title} if title else {})}
-        if sign_in and os.environ.get("SERVICE_DIR"):
+        if sign_in and profile_connection:
             origin = os.environ.get("PUBLIC_ORIGIN", "").rstrip("/")
             if not origin.startswith("https://"):
                 raise ValueError("service_public_origin_required")
@@ -154,14 +161,14 @@ def _connect(job: dict, url: str, title: str) -> None:
                 if flow.get("authorization_url") and not opened:
                     opened = True
                     job["authorization_url"] = flow["authorization_url"]
-                    if not os.environ.get("SERVICE_DIR"):
+                    if not profile_connection:
                         webbrowser.open(flow["authorization_url"])
                 time.sleep(1)
                 flow = _api("GET", f"/api/mcp/oauth/flows/{job['flow']}")
         if job["cancelled"]:
             raise RuntimeError("cancelled")
         sync_services()
-        if os.environ.get("SERVICE_DIR"):
+        if profile_connection:
             from tools.mcp_tool_discovery import get_mcp_status
             live = next((item for item in get_mcp_status() if item["name"] == name), {})
             if live.get("status") != "connected":
@@ -178,7 +185,7 @@ def _connect(job: dict, url: str, title: str) -> None:
             _remove_mcp_server(name)
             sync_services()
         finally:
-            job["error"] = "connection_failed" if os.environ.get("SERVICE_DIR") else str(exc)
+            job["error"] = "connection_failed" if profile_connection else str(exc)
             job["status"] = "cancelled" if job["cancelled"] else "failed"
         if not job["cancelled"]:
             from tools import crema_failures
@@ -245,7 +252,7 @@ def crema_services(args: Dict[str, Any], **_: Any) -> str:
         return tool_error(str(exc))
     deadline = time.monotonic() + WAIT_S
     while (state := job_state(started["id"]))["status"] == "signing_in" and time.monotonic() < deadline:
-        if state.get("authorization_url") and os.environ.get("SERVICE_DIR"):
+        if state.get("authorization_url"):
             return json.dumps(state)
         time.sleep(1)
     if state["status"] != "done":

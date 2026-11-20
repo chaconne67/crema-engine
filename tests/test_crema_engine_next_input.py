@@ -48,3 +48,18 @@ def test_logs_given_when_the_guess_follows_a_blank_line(caplog):
     caplog.set_level("INFO", logger="crema_engine")
     drop_next_input(response_text="답.\n\nCHAT_TITLE: -\n\nNEXT_INPUT: 커밋해 줘", session_id="agent-client-d")
     assert [r.getMessage() for r in caplog.records] == ["next input: session=agent-client-d given"]
+
+
+def test_stored_reply_is_clean_without_changing_sse():
+    from types import SimpleNamespace
+    from crema_startup import _chain_reply
+    from gateway.platforms.api_server_runs import _run_reply
+
+    raw = "답변입니다.\n\n[[TITLE: 제목]]\n[[ROLE: 검토]]\n[[NEXT_INPUT: 계속]]"
+    notice = "서버 브라우저로 봅니다."
+    transform = _chain_reply(lambda response_text, **_: f"{notice}\n\n{response_text}", drop_next_input)
+    persisted = transform(raw, session_id="fixture")
+    assert persisted == f"{notice}\n\n답변입니다."
+    data = {"final_response": persisted, "pre_transform_response": raw}
+    assert _run_reply(data, SimpleNamespace(request_profile="fixture", scheduled=None)) == f"{notice}\n\n{raw}"
+    assert _run_reply(data, SimpleNamespace(request_profile="fixture", scheduled={})) == persisted

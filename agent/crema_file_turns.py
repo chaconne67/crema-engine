@@ -63,6 +63,10 @@ Reply with JSON only: {"decision": "a_first|b_first|together|ask_user", "reason"
 
 _api = None
 _guard = threading.Lock()
+_pc_condition = threading.Condition()
+_pc_leases = {}
+_pc_pending = {}
+_PC_WRITES = {"pc_files": "files", "pc_save": "save", "pc_run": "run"}
 _path_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 # tool_call_id -> Git state before a terminal command / what to tell the chat after it.
 _before_terminal: dict[str, dict[str, float]] = {}
@@ -417,8 +421,127 @@ def _chat_folder(task_id: str) -> Optional[str]:
     return _registered_task_cwd_override(task_id)
 
 
+def _pc_call(session_id, tool_call_id):
+    from hermes_constants import get_hermes_home
+    return get_hermes_home().resolve(), session_id, tool_call_id
+
+
+def _before_pc(tool_name, args, session_id, tool_call_id):
+    if tool_name == "pc_files" and args.get("action") != "edit":
+        return None
+    from tools.crema_schedule_tool import scheduled_turn
+    if scheduled_turn() is not None:
+        from tools.approval_context import _get_approval_mode
+        if _get_approval_mode() != "off":
+            return None  # The account guard handles the pending human approval.
+    call = _pc_call(session_id, tool_call_id)
+    if not session_id or not tool_call_id:
+        return {"action": "block", "message": "PC 파일 차례를 확인할 대화가 없습니다."}
+    with _pc_condition:
+        if call in _pc_leases:
+            return {"action": "modify", "args": _pc_leases[call]}
+        if call in _pc_pending:
+            return {"action": "block", "message": "같은 PC 작업의 파일 차례를 확인하고 있습니다."}
+        ticket = _pc_pending[call] = object()
+    try:
+        return _reserve_pc(call, ticket, tool_name, args)
+    finally:
+        with _pc_condition:
+            if _pc_pending.get(call) is ticket:
+                _pc_pending.pop(call)
+
+
+def _reserve_pc(call, ticket, tool_name, args):
+    from engine_home import profile_api
+    from tools.crema_schedule_tool import scheduled_pc_unavailable
+
+    pc = args.get("pc")
+    path = args.get("path")
+    if isinstance(path, str) and path.startswith("pc://"):
+        pc, _, path = path[5:].partition("/")
+    try:
+        target = profile_api(call[0], "/api/pc/lease-target", {
+            "kind": _PC_WRITES[tool_name], "sessionId": call[1],
+            **({"pc": pc} if pc is not None else {}), **({"path": path} if path is not None else {}),
+        }, timeout=10)
+        device, key = target["device"], target["pathKey"]
+        if not all(isinstance(value, str) and value for value in (device, key)):
+            raise ValueError("invalid PC file lease target")
+        if tool_name == "pc_run" or target.get("capable") is False:
+            key = "*"
+        changes = {"pc": device, "pathKey": key}
+        if tool_name != "pc_run":
+            if not isinstance(target["path"], str) or not target["path"]:
+                raise ValueError("invalid PC path")
+            changes["path"] = target["path"]
+    except (OSError, ValueError, KeyError, TypeError):
+        scheduled_pc_unavailable("PC 연결 또는 파일 차례를 확인하지 못해 예약에서 맡지 못했습니다.")
+        return {"action": "block", "message": "연결된 PC에서 작업할 파일과 차례를 확인하지 못했습니다."}
+
+    with _pc_condition:
+        def available():
+            return _pc_pending.get(call) is not ticket or not any(
+                other[0] == call[0] and existing["pc"] == device and (key == "*" or existing["pathKey"] in ("*", key))
+                for other, existing in _pc_leases.items())
+
+        if not _pc_condition.wait_for(available, timeout=12):
+            scheduled_pc_unavailable("다른 대화가 이 PC 파일을 쓰고 있어 예약에서 맡지 못했습니다.")
+            return {"action": "block", "message": "다른 대화가 이 PC 파일을 바꾸고 있습니다. 작업이 끝난 뒤 다시 시도해 주세요."}
+        if _pc_pending.get(call) is not ticket:
+            return {"action": "block", "message": "PC 파일 차례를 기다리는 동안 대화 실행이 끝났습니다."}
+        _pc_leases[call] = changes
+    return {"action": "modify", "args": changes}
+
+
+def _after_pc(result, session_id, tool_call_id):
+    call = _pc_call(session_id, tool_call_id)
+    with _pc_condition:
+        target = _pc_leases.pop(call, None)
+        _pc_condition.notify_all()
+    if not target or not (chat := _chat(session_id)):
+        return
+    try:
+        answer = result if isinstance(result, dict) else json.loads(result)
+        data = answer.get("data", answer)
+        if answer.get("error") or answer.get("ok") is False or data.get("error") or not data.get("path"):
+            return
+        key = data.get("pathKey", "*")
+        if not isinstance(key, str) or (target["pathKey"] != "*" and key != target["pathKey"]):
+            return
+        path = str(data["path"])
+        expected = f"pc://{target['pc']}/"
+        if path.startswith("pc://") and not path.startswith(expected):
+            return
+        if not path.startswith(expected):
+            path = expected + path
+    except (TypeError, ValueError, AttributeError):
+        return
+    conn = _board()
+    try:
+        task = _task_for(conn, chat)
+        if not any(event.kind == "crema_wrote" and event.payload.get("tool_call_id") == tool_call_id
+                   for event in _session_events(conn, chat)):
+            _add_event(conn, task.id, "crema_wrote", {
+                "path": path, "key": expected + (path if key == "*" else key),
+                "made": data.get("made"), "tool_call_id": tool_call_id,
+            })
+    finally:
+        conn.close()
+
+
+def release_pc_turn(session_id="", **_):
+    home = _pc_call(session_id, "")[0]
+    with _pc_condition:
+        for calls in (_pc_leases, _pc_pending):
+            for call in [call for call in calls if call[:2] == (home, session_id)]:
+                calls.pop(call)
+        _pc_condition.notify_all()
+
+
 def before_tool(tool_name: str = "", args: Optional[dict] = None, session_id: str = "", task_id: str = "",
                 tool_call_id: str = "", **_: Any) -> Optional[dict]:
+    if tool_name in _PC_WRITES:
+        return _before_pc(tool_name, args or {}, session_id, tool_call_id)
     chat = _chat(session_id) if tool_name in (*WRITE_TOOLS, "terminal") else None
     if not chat:
         return None
@@ -512,6 +635,9 @@ def _wait(conn, me, holder, path: str, reason: str, *, ask: bool) -> str:
 
 def after_tool(tool_name: str = "", args: Optional[dict] = None, result: Any = None, session_id: str = "",
                task_id: str = "", tool_call_id: str = "", **_: Any) -> None:
+    if tool_name in _PC_WRITES:
+        _after_pc(result, session_id, tool_call_id)
+        return
     with _guard:
         _running.pop(tool_call_id, None)
         meanwhile = _meanwhile.pop(tool_call_id, set())
@@ -1106,7 +1232,8 @@ def files_since(session_id: str, since: int) -> list[dict]:
             files[payload.get("key")] = {"path": payload.get("path"), "made": payload.get("made")}
         elif seen["made"] is None:
             seen["made"] = payload.get("made")
-    return [item for item in files.values() if item["path"] and os.path.exists(item["path"])]
+    return [item for item in files.values() if item["path"]
+            and (item["path"].startswith("pc://") or os.path.exists(item["path"]))]
 
 
 def woken(session_id: str) -> None:

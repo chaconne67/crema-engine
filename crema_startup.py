@@ -3,11 +3,8 @@
 import inspect
 import json
 import os
-from functools import lru_cache
+from functools import lru_cache, wraps
 from pathlib import Path
-
-
-_desktop_reply = None
 
 
 @lru_cache(maxsize=1)
@@ -26,12 +23,16 @@ def engine_input(config):
     return deployment["engineInputs"][theme]
 
 
-def prepare_desktop(reply_hook, isolate_connections):
-    global _desktop_reply
+def connection_policy():
+    from hermes_cli.config import load_config_readonly
+    startup = engine_input(load_config_readonly()) if os.environ.get("CREMA_ENGINE_INPUT") else None
+    return startup["connectionPolicy"] if startup is not None else {}
+
+
+def prepare_desktop(isolate_connections):
     startup = engine_input({})
     if startup is None or startup["brain"] != "pc":
         raise ValueError("CREMA_ENGINE_INPUT must point to an embedded engine deployment")
-    _desktop_reply = reply_hook
     if startup["connectionPolicy"]["source"] == "local":
         isolate_connections()
     os.environ["HERMES_BUNDLED_SKILLS"] = str(Path(os.environ["CREMA_ENGINE_INPUT"]).with_name("skills"))
@@ -82,13 +83,32 @@ def hook_id(callback, home):
     return None
 
 
-def _desktop_callbacks():
+def _callbacks(desktop):
     from agent import crema_file_turns
+    from crema_engine import drop_next_input
     from tools import crema_failures
 
-    return (crema_file_turns.before_tool, crema_file_turns.after_tool, crema_file_turns.notes_for_turn,
-            crema_file_turns.tool_result, *crema_failures.observers(),
-            *([_desktop_reply] if _desktop_reply is not None else []))
+    desktop_hooks = (crema_file_turns.before_tool, crema_file_turns.after_tool, crema_file_turns.notes_for_turn,
+                     crema_file_turns.tool_result) if desktop else ()
+    return (*desktop_hooks, *crema_failures.observers(), drop_next_input)
+
+
+def _profile_hooks(selected, additions):
+    hooks = {event: list(callbacks) for event, callbacks in selected.items()}
+    for event, callbacks in additions.items():
+        position = {"on_session_end": 0, "post_tool_call": 1}.get(event, len(hooks.get(event, ())))
+        hooks.setdefault(event, [])[position:position] = callbacks
+    return hooks
+
+
+def _chain_reply(first, second):
+    first = inspect.unwrap(first)
+    @wraps(first)
+    def transform(response_text, **info):
+        noticed = first(response_text=response_text, **info)
+        cleaned = second(response_text=noticed or response_text, **info)
+        return cleaned if cleaned is not None else noticed
+    return transform
 
 
 def select_hooks(manager, config):
@@ -101,20 +121,19 @@ def select_hooks(manager, config):
         return
 
     home = Path(manager.home_path)
-    selected = startup["hooks"]
+    selected = _profile_hooks(startup["hooks"], config.get("crema_profile_hooks", {}))
     own_plugins = tuple(f"plugins/{name}/" for name in startup["plugins"]["enabled"])
-    desktop = ({hook_id(callback, home): callback for callback in _desktop_callbacks()}
-               if startup["brain"] == "pc" else {})
+    builtins = {hook_id(callback, home): callback for callback in _callbacks(startup["brain"] == "pc")}
     target_names = {f"outbound:{entry['name']}" for entry in startup["hookOptions"].get("outbound", [])}
     ordered = {}
     for event in dict.fromkeys([*manager._hooks, *selected]):
-        available = dict(desktop)
+        available = dict(builtins)
         extensions = []
         config_hooks = []
         wanted = selected.get(event, ())
         for callback in manager._hooks.get(event, ()):
             name = hook_id(callback, home)
-            if name and (name in wanted or name in desktop or name in target_names
+            if name and (name in wanted or name in builtins or name in target_names
                          or name.startswith((*own_plugins, "server/fc_lifecycle.py:"))):
                 available.setdefault(name, callback)
             elif getattr(callback, "__module__", None) in {"agent.shell_hooks", "agent.outbound_webhooks"}:
@@ -125,6 +144,18 @@ def select_hooks(manager, config):
         if required:
             raise ValueError(f"Missing engine hooks for {event}: {', '.join(required)}")
         callbacks = extensions + [available[name] for name in wanted if name in available] + config_hooks
+        pair = ("plugins/settings/browser_fallback.py:reply", "engine/crema_engine.py:drop_next_input")
+        if event == "transform_llm_output" and all(name in wanted for name in pair):
+            first, second = (available[name] for name in pair)
+            # The engine uses the first replacement. Take both transformations at that seam.
+            callbacks = [(_chain_reply(first, second) if callback is first else callback)
+                         for callback in callbacks if callback is not second]
+        from crema_engine import change_principles_hook, change_principles_start
+        if event in ("pre_tool_call", "pre_llm_call"):
+            gate = change_principles_hook if event == "pre_tool_call" else change_principles_start
+            callbacks = [callback for callback in callbacks if callback is not gate]
+            if "changePrinciples" in startup["hookOptions"]:
+                callbacks.insert(0, gate)
         if callbacks:
             ordered[event] = callbacks
     # Keep the original mapping because plugin registration leases capture it.
@@ -142,6 +173,9 @@ def initialize(*, api=None):
 
     config = load_config()
     startup = engine_input(config)
+    if config.get("crema_profile_hooks"):
+        from tools import crema_failures
+        crema_failures.watch()
     if api is not None:
         from agent import crema_file_turns
         crema_file_turns.install(api)

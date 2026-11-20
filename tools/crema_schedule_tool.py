@@ -4,11 +4,170 @@ agent/crema_file_turns.scheduled), so the work runs in that chat with its contex
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
+import time
+from contextvars import ContextVar
 from typing import Any, Dict
 
 from tools.registry import registry, tool_error
 
 PLATFORM = "crema"
+SCHEDULED_HEADER = "X-Crema-Scheduled-Turn"
+_scheduled_turn = ContextVar("crema_scheduled_turn", default=None)
+MISSING_SOURCE = "이 예약의 원래 대화를 확인하지 못했습니다."
+
+
+def scheduled_signature(key, occurrence):
+    return hmac.new(key.encode(), ("crema-schedule:" + occurrence).encode(), hashlib.sha256).hexdigest()
+
+
+def is_scheduled_request(request, profile):
+    signature = request.headers.get(SCHEDULED_HEADER)
+    occurrence = request.headers.get("Idempotency-Key", "")
+    if not signature or not profile or not occurrence.startswith("crema-scheduled-"):
+        return False
+    from engine_keys import engine_key
+    return hmac.compare_digest(signature.encode(), scheduled_signature(engine_key(profile), occurrence).encode())
+
+
+def scheduled_turn():
+    return _scheduled_turn.get()
+
+
+def scheduled_pc_unavailable(reason):
+    turn = scheduled_turn()
+    if turn is not None:
+        turn.setdefault("pc_unavailable", reason)
+
+
+def missing_source(job):
+    origin = job.get("origin") or {}
+    return (job.get("paused_reason") in ("PC판 Crema 가져오기", MISSING_SOURCE)
+            or (origin.get("platform") in ("crema", "api_server")
+                and not (origin.get("session_id") or origin.get("chat_id"))))
+
+
+def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
+    """Submit a profile-bound occurrence through the same session run API as the browser."""
+    import httpx
+    from agent import crema_file_turns
+    from cron import jobs
+    from cron.occurrences import scheduled_instant
+    from engine_home import ProfileAPIError, prepare_profile, profile_api
+    from engine_keys import engine_key
+    from hermes_constants import get_hermes_home
+    from hermes_state import SessionDB
+    from gateway.platforms.api_server_run_idempotency import TERMINAL_STATUSES
+    from utils import atomic_json_write
+
+    home = get_hermes_home()
+    origin = job.get("origin") or {}
+    session = origin.get("session_id") or origin.get("chat_id")
+    name = job.get("name") or job["id"]
+
+    def result(status, text):
+        return status == "completed", f"# {name}\n\n{text}\n", text, None if status == "completed" else text
+
+    if not session or not session.startswith(crema_file_turns.CHAT_PREFIX) or origin.get("profile", home.name) != home.name:
+        jobs.pause_job(job["id"], MISSING_SOURCE)
+        return result("failed", MISSING_SOURCE)
+    from contextlib import closing
+    with closing(SessionDB(home / "state.db", read_only=True)) as db:
+        owned = db.get_session(db.resolve_resume_session_id(session))
+    if not owned:
+        jobs.pause_job(job["id"], MISSING_SOURCE)
+        return result("failed", MISSING_SOURCE)
+    identity = profile_api(home, "/api/engine-profile", timeout=5)
+    prepare_profile(home.name, identity)
+    from crema_startup import engine_input
+    from hermes_cli.config import load_config_readonly
+    config = load_config_readonly()
+    startup = engine_input(config)
+    if not startup or "crema_schedule" not in startup["tools"]["chat"]:
+        return result("failed", "이 계정은 개인 예약을 실행할 수 없습니다.")
+    when = scheduled_instant(job.get("_scheduled_instant") or job.get("next_run_at"))
+    if when is None:
+        return result("failed", "예약 발생 시각을 확인하지 못했습니다.")
+    occurrence = "crema-scheduled-" + hashlib.sha256(f"{job['id']}:{when}".encode()).hexdigest()
+    outbox = home / "cron" / "crema-results" / (occurrence + ".json")
+    if outbox.is_file():
+        payload = json.loads(outbox.read_text(encoding="utf-8"))
+    else:
+        key = engine_key(home.name)
+        body = {"session_id": session, "input": job["prompt"] + (f"\n\n{extra_prompt}" if extra_prompt else "")}
+        headers = {"Authorization": f"Bearer {key}", "Idempotency-Key": occurrence,
+                   SCHEDULED_HEADER: scheduled_signature(key, occurrence), "X-Crema-Theme": startup["themeId"]}
+        api = crema_file_turns._api
+        run_id = occurrence
+        status = "unavailable"
+        text = "예약을 시작할 수 없습니다."
+        if api is not None:
+            url = f"http://127.0.0.1:{api._port}/p/{home.name}/v1/runs"
+            with httpx.Client(headers=headers, timeout=15, trust_env=False) as client:
+                reply = client.post(url, json=body)
+                if reply.status_code == 202:
+                    run_id = reply.json()["run_id"]
+                    while True:
+                        if cancel_event is not None and cancel_event.is_set():
+                            client.post(f"{url}/{run_id}/stop")
+                            return result("failed", "예약 실행을 중단했습니다.")
+                        current = client.get(f"{url}/{run_id}")
+                        current.raise_for_status()
+                        run = current.json()
+                        if run.get("status") in TERMINAL_STATUSES:
+                            break
+                        time.sleep(0.5)
+                    if run.get("schedule_unavailable"):
+                        text = run["schedule_unavailable"] + ("\n\n" + run["output"] if run.get("output") else "")
+                    elif run.get("status") == "completed":
+                        status, text = "completed", run.get("output") or "예약이 끝났습니다."
+                    else:
+                        status, text = "failed", "예약 실행을 마치지 못했습니다."
+                elif reply.status_code == 404:
+                    jobs.pause_job(job["id"], MISSING_SOURCE)
+                    return result("failed", MISSING_SOURCE)
+                elif reply.status_code == 409:
+                    text = "프로젝트의 현재 폴더를 확인하지 못했거나 대화가 사용 중입니다. 예약을 맡지 못했습니다."
+        payload = {"jobId": job["id"], "scheduledAt": when, "sessionId": session, "runId": run_id,
+                   "status": status, "text": text}
+        outbox.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        atomic_json_write(outbox, payload, mode=0o600)
+    try:
+        post_scheduled_result(home, outbox, payload)
+    except ProfileAPIError as error:
+        if error.status == 404:
+            jobs.pause_job(job["id"], MISSING_SOURCE)
+            return result("failed", MISSING_SOURCE)
+        raise
+    return result(payload["status"], payload["text"])
+
+
+def post_scheduled_result(home, outbox, payload):
+    from engine_home import ProfileAPIError, profile_api
+
+    try:
+        answer = profile_api(home, "/api/scheduled-results", payload, timeout=5)
+        if not isinstance(answer, dict) or type(answer.get("posted")) is not bool:
+            raise ValueError("invalid scheduled result response")
+    except ProfileAPIError as error:
+        if error.status in (401, 403, 404):
+            outbox.unlink(missing_ok=True)
+        raise
+    outbox.unlink(missing_ok=True)
+
+
+def retry_scheduled_results():
+    from engine_home import HOME
+
+    for path in (HOME / "profiles").glob("*/cron/crema-results/*.json"):
+        home = path.parents[2]
+        if home.resolve().parent != (HOME / "profiles").resolve() or path.resolve() != path:
+            continue
+        try:
+            post_scheduled_result(home, path, json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
 
 
 def _view(job: dict) -> dict:
@@ -31,8 +190,12 @@ def crema_schedule(args: Dict[str, Any], session_id: str = "", **_: Any) -> str:
     action = args.get("action")
     try:
         if action == "create":
+            origin = {"platform": PLATFORM, "chat_id": chat}
+            if PLATFORM == "api_server":
+                from hermes_constants import get_hermes_home
+                origin.update(session_id=chat, profile=get_hermes_home().name)
             job = jobs.create_job(args.get("task"), str(args.get("when") or ""), name=args.get("name") or None,
-                                  deliver="local", origin={"platform": PLATFORM, "chat_id": chat})
+                                  deliver="local", origin=origin)
             return json.dumps({"created": _view(dict(job, _this_chat=True))}, ensure_ascii=False)
         if action == "list":
             mine = [dict(j, _this_chat=(j.get("origin") or {}).get("chat_id") == chat)
@@ -47,6 +210,8 @@ def crema_schedule(args: Dict[str, Any], session_id: str = "", **_: Any) -> str:
         elif action == "pause":
             job = jobs.pause_job(job_id)
         elif action == "resume":
+            if PLATFORM == "api_server" and (previous := jobs.get_job(job_id)) and missing_source(previous):
+                return tool_error(MISSING_SOURCE)
             job = jobs.resume_job(job_id)
         elif action == "remove":
             return json.dumps({"removed": jobs.remove_job(job_id)})

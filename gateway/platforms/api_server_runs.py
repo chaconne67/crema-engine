@@ -478,6 +478,7 @@ class _RunLaunch:
     browser_control_transport_family: Any
     turn_author: Optional[Dict[str, Any]] = None  # memory-attribution label only; grants nothing
     cwd: str = ""  # Crema: the folder this run works in ("" = the engine's TERMINAL_CWD)
+    scheduled: Optional[dict] = None
 
     @property
     def approval_session_key(self) -> str:
@@ -633,6 +634,11 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
     # Crema: the folder the run works in (the chat's project folder, else Crema's own). One that is not
     # there is refused: the run never falls back to another folder.
     cwd = body.get("cwd")
+    request_profile = _api_server._api_request_profile.get()
+    if request_profile and cwd is None and isinstance(project := body.get("crema_project"), dict):
+        path = project.get("path")
+        if isinstance(path, str) and not path.startswith("pc://"):
+            cwd = path
     if cwd is not None and not (isinstance(cwd, str) and os.path.isabs(cwd) and os.path.isdir(cwd)):
         return _json_error(
             _openai_error, "'cwd' must be an existing absolute folder", code="invalid_cwd", status=400)
@@ -671,7 +677,6 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
     if limited is not None:
         return limited
     run_id = f"run_{uuid.uuid4().hex}"
-    self._run_owners[run_id] = self._run_idempotency_scope(request)
     # Same precedence as /v1/responses: body session_id > response chain > X-Hermes-Session-Key
     # conversation > run_id (which would otherwise re-key every affinity surface per run).
     # An explicit or chained session owns its routing key and is never rebound to the header.
@@ -685,6 +690,30 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
     if selected_session_id:
         selected_session_id = await _resolve_live_session_id(self, str(selected_session_id))
     session_id = selected_session_id or run_id
+    from tools.crema_schedule_tool import is_scheduled_request
+    schedule = {} if is_scheduled_request(request, request_profile) else None
+    run_owner = self._run_idempotency_scope(request)
+    if schedule is not None:
+        if not selected_session_id:
+            return _json_error(_openai_error, "Scheduled conversation is required", status=404)
+        session, missing = await self._get_existing_session_or_404(session_id)
+        if missing is not None:
+            return missing
+        from engine_home import profile_has
+        from hermes_constants import get_hermes_home
+        if profile_has(get_hermes_home(), "model_choice"):
+            locked = self._runtime_request_from_persisted_session_lock(session, {})
+            if locked:
+                route = locked["route"]
+                requested = locked["requested"]
+                agent_overrides.update(requested_model=requested.get("model"),
+                                       requested_provider=requested.get("provider"),
+                                       model_options=locked["model_options"])
+            else:
+                stored = self._stored_session_model(session)
+                route = self._resolve_route(stored) if stored else None
+                if stored and route is None:
+                    agent_overrides["requested_model"] = stored
     # History loads for the session the request actually selected — including one resolved from
     # a declared X-Hermes-Session-Key, whose persisted delivery rows must reach the next
     # same-key run's context (#98619).  previous_response_id continuations keep their
@@ -696,11 +725,17 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
     session_history_delivery = not previous_response_id and not conversation_history
     if not conversation_history and selected_session_id and not previous_response_id:
         conversation_history = await self._conversation_history_for_session(str(selected_session_id))
+    for other_id, other in self._run_statuses.items():
+        if (other.get("session_id") == session_id and other.get("status") not in TERMINAL_STATUSES
+                and self._run_owners.get(other_id) == run_owner and (schedule is not None or other.get("scheduled"))):
+            return _json_error(_openai_error, "The conversation is already replying", code="conversation_busy", status=409)
+    self._run_owners[run_id] = run_owner
     q = self._run_streams[run_id] = asyncio.Queue()
     created_at = self._run_streams_created[run_id] = time.time()
     self._run_approval_sessions[run_id] = run_id  # approval session key (see _RunLaunch)
     initial_status = self._set_run_status(
-        run_id, "queued", created_at=created_at, session_id=session_id, model=body.get("model", self._model_name))
+        run_id, "queued", created_at=created_at, session_id=session_id, model=body.get("model", self._model_name),
+        **({"scheduled": True} if schedule is not None else {}))
     if idempotency_key:
         outcome, record = self._run_idempotency_store.reserve(
             idempotency_scope, idempotency_key, idempotency_fingerprint, run_id, initial_status,
@@ -720,10 +755,10 @@ async def _handle_runs(self, request: "web.Request", *, _api_server) -> "web.Res
             route=route, room_dispatch=room_dispatch, room_execution_policy=room_execution_policy,
             no_tools=no_tools,
             **{k: agent_overrides.get(k) for k in ("requested_model", "requested_provider", "model_options")}),
-        request_profile=_api_server._api_request_profile.get(),
+        request_profile=request_profile,
         browser_control_principal=_api_server._api_request_browser_control_principal.get(),
         browser_control_transport_family=_api_server._api_request_browser_control_transport_family.get(),
-        turn_author=turn_author, cwd=cwd or "")
+        turn_author=turn_author, cwd=cwd or "", scheduled=schedule)
     self._activate_admitted_request()
     # A canonical Bot Chat that a Desktop holds live is that Desktop's to run: executing here would
     # be a second writer beside its lease (#114959). The owner's mailbox takes the turn and its
@@ -791,12 +826,15 @@ def _run_agent_sync(self, run: _RunLaunch, agent, approval_notify, *, _api_serve
     # accumulate until the OS refuses new process spawns.
     from tools.approval import register_gateway_notify, unregister_gateway_notify
     from tools.approval_context import reset_current_session_key, set_current_session_key
+    from tools.crema_schedule_tool import _scheduled_turn
     session_id = run.session_id
     effective_task_id = session_id or run.run_id
     # (token, reset) pairs unwound in the finally block; bound only once each step succeeds.
     resets: list[tuple[Any, Callable]] = []
     with self._profile_scope(run.request_profile):
         try:
+            if run.scheduled is not None:
+                resets.append((_scheduled_turn.set(run.scheduled), _scheduled_turn.reset))
             # Contextvars, not process env: concurrent runs must not share identity.
             resets.append((set_current_session_key(run.approval_session_key), reset_current_session_key))
             # chat_id carries the raw session id like _run_agent() does; without it
@@ -829,7 +867,8 @@ def _run_agent_sync(self, run: _RunLaunch, agent, approval_notify, *, _api_serve
             if run.agent_kwargs["room_dispatch"] is not None:
                 policy = RoomExecutionPolicy.from_mapping(run.agent_kwargs["room_execution_policy"] or {})
                 resets.append((bind_room_execution_policy(policy), reset_room_execution_policy))
-            register_gateway_notify(run.approval_session_key, approval_notify)
+            if run.scheduled is None:
+                register_gateway_notify(run.approval_session_key, approval_notify)
             # /v1/runs owns its agent lifecycle (no TurnRunner): record process ownership
             # so stop/cancel reaps only the background processes this run created.
             _api_server._publish_turn_process_ownership(agent, effective_task_id)
@@ -981,6 +1020,16 @@ async def _execute_run_via_live_owner(self, run: _RunLaunch, home, record: Dict[
         _retire_live_run(self, run_id)
 
 
+def _run_reply(result, run):
+    output = result.get("final_response", "")
+    original = result.get("pre_transform_response")
+    if run.request_profile and run.scheduled is None and isinstance(original, str):
+        from crema_engine import SERVER_REPLY_MARKERS
+        if match := SERVER_REPLY_MARKERS.search(original):
+            return output + original[match.start():]
+    return output
+
+
 async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
     """Drive one admitted run, publish its terminal event/status, release live state."""
     _redact_api_error_text = _api_server._redact_api_error_text
@@ -1103,11 +1152,18 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
                 status_callback=_status_cb, **run.agent_kwargs)
         self._active_run_agents[run_id] = agent
         approval_notify = _make_approval_notify(self, run, _api_server=_api_server)
-        agent.clarify_callback = _make_clarify_callback(self, run, _api_server=_api_server)
-        result, usage, served_runtime = await _submit_api_worker(loop, _run_and_settle)
+        if run.scheduled is None:
+            agent.clarify_callback = _make_clarify_callback(self, run, _api_server=_api_server)
+        worker = _submit_api_worker(loop, _run_and_settle)
+        task = asyncio.current_task()
+        if task is not None:
+            task.crema_worker = worker
+        result, usage, served_runtime = await asyncio.shield(worker)
         if not isinstance(result, dict):
             result = {}
         status, fields = terminal_run_status(result)
+        if run.scheduled and run.scheduled.get("pc_unavailable"):
+            fields["schedule_unavailable"] = run.scheduled["pc_unavailable"]
         if status == "cancelled":
             _finish("cancelled", fields)
         elif result.get("failed"):
@@ -1121,7 +1177,7 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
                 runtime=served_runtime, requested_runtime=requested if any(requested.values()) else None,
                 route_source=("model_routes" if run.agent_kwargs.get("route")
                               else "raw_request" if any(requested.values()) else "global"))
-            _finish(status, fields, output=result.get("final_response", ""), usage=usage, runtime=served_runtime)
+            _finish(status, fields, output=_run_reply(result, run), usage=usage, runtime=served_runtime)
     except asyncio.CancelledError:
         _finish("cancelled")
         raise

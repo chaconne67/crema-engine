@@ -30,6 +30,14 @@ def test_codex_subscription_returns_windows(monkeypatch):
         {"label": "Weekly", "used_percent": 61.5, "reset_at": None}]}
 
 
+def test_gemini_subscription_returns_windows(monkeypatch):
+    monkeypatch.setattr(account_usage, "fetch_account_usage", lambda provider: _snapshot(
+        provider, [AccountUsageWindow("5시간 한도 · Gemini Models", 78.0, None)]))
+    body = _client().get("/api/analytics/account-usage?provider=gemini-agy").json()
+    assert body["subscription"] is True
+    assert body["windows"] == [{"label": "5시간 한도 · Gemini Models", "used_percent": 78.0, "reset_at": None}]
+
+
 def test_claude_oauth_is_subscription_with_extra_usage(monkeypatch):
     monkeypatch.setattr(anthropic_credentials, "resolve_anthropic_token", lambda: "oauth")
     monkeypatch.setattr(anthropic_credentials, "_is_oauth_token", lambda token: token == "oauth")

@@ -16,6 +16,7 @@ from utils import atomic_json_write
 
 
 _connection_lock = Lock()
+_USAGE_WINDOWS = {"5h": "5시간 한도", "weekly": "주간 한도"}
 
 
 class GeminiAGYProfile(ProviderProfile):
@@ -92,6 +93,33 @@ class GeminiAGYProfile(ProviderProfile):
         if not (command := self._executable()):
             raise RuntimeError("서버에 agy가 없습니다. main 서버에 agy를 설치하고 실행해 로그인해 주세요.")
         return GeminiACPClient(api_key=api_key, base_url=base_url, command=command, args=list(self.process_args))
+
+    def fetch_account_usage(self, *, base_url=None, api_key=None):
+        """The subscription's limits as agy's own ``/usage`` prints them; agy answers it without a model call."""
+        import subprocess
+        from datetime import datetime, timezone
+        from tempfile import TemporaryDirectory
+
+        from agent.account_usage import AccountUsageSnapshot, AccountUsageWindow
+        from agent.copilot_acp_client import _build_subprocess_env
+
+        if not self.external_process_allowed() or not (command := self._executable()):
+            return None
+        with TemporaryDirectory(prefix="crema-agy-") as cwd:
+            # agy takes about 5 s; the engine's hook deadline is 10 s.
+            done = subprocess.run(
+                [command, "-p", "/usage", "--output-format", "json"], cwd=cwd, stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, encoding="utf-8", timeout=9.0, check=True,
+                env=_build_subprocess_env(inherit_credentials=False))
+        windows = [
+            AccountUsageWindow(
+                label=f"{_USAGE_WINDOWS.get(bucket.get('window'), bucket['name'])} · {group['name']}",
+                used_percent=(1 - bucket["remaining_fraction"]) * 100,
+                reset_at=datetime.fromisoformat(bucket["reset_time"].replace("Z", "+00:00")))
+            for group in json.loads(done.stdout)["command"]["data"]["groups"] for bucket in group["buckets"]
+        ]
+        return AccountUsageSnapshot(provider=self.name, source="agy_usage_command",
+                                    fetched_at=datetime.now(timezone.utc), windows=tuple(windows))
 
     def build_api_kwargs_extras(self, *, session_id=None, ephemeral_system_prompt=None, **_):
         # Auxiliaries do not get the conversational route's Hermes session ID.

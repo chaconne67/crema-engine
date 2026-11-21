@@ -226,6 +226,49 @@ def test_subscription_catalog_is_profile_gated_and_loaded_only_after_probe(tmp_p
 
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Krema host-only subscription")
+def test_subscription_usage_reads_agy_usage_command(tmp_path, monkeypatch):
+    import json
+    import subprocess
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from agent.account_usage import fetch_account_usage
+    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+
+    answer = {"command": {"name": "usage", "data": {"groups": [
+        {"name": "Gemini Models", "buckets": [
+            {"name": "Weekly Limit Remaining", "window": "weekly", "remaining_fraction": 0.75,
+             "reset_time": "2026-11-28T09:59:45Z"},
+            {"name": "Five Hour Limit Remaining", "window": "5h", "remaining_fraction": 0.25,
+             "reset_time": "2026-11-21T14:59:45Z"}]},
+        {"name": "Gemini 4 Argon", "buckets": [
+            {"name": "Daily Limit", "window": "daily", "remaining_fraction": 1, "reset_time": "2026-11-22T00:00:00Z"}]},
+    ]}}}
+    ran = []
+
+    def run(command, **kwargs):
+        ran.append(command)
+        return SimpleNamespace(stdout=json.dumps(answer))
+
+    monkeypatch.setenv("HERMES_GEMINI_AGY_COMMAND", sys.executable)
+    monkeypatch.setattr(subprocess, "run", run)
+    token = set_hermes_home_override(str(tmp_path))
+    try:
+        assert fetch_account_usage("gemini-agy") is None  # not a Krema developer, not connected: agy is not run
+        assert ran == []
+        (tmp_path / ".service-config.yaml").write_text("crema_gemini_subscription: true\n")
+        (tmp_path / "gemini-agy-models.json").write_text('["gemini-4-neon"]')
+        windows = fetch_account_usage("gemini-agy").windows
+    finally:
+        reset_hermes_home_override(token)
+    assert ran == [[sys.executable, "-p", "/usage", "--output-format", "json"]]
+    assert [(w.label, round(w.used_percent), w.reset_at) for w in windows] == [
+        ("주간 한도 · Gemini Models", 25, datetime(2026, 11, 28, 9, 59, 45, tzinfo=timezone.utc)),
+        ("5시간 한도 · Gemini Models", 75, datetime(2026, 11, 21, 14, 59, 45, tzinfo=timezone.utc)),
+        ("Daily Limit · Gemini 4 Argon", 0, datetime(2026, 11, 22, tzinfo=timezone.utc)),
+    ]
+
+
 def test_expired_idle_entry_is_not_reused_before_timer_runs(transport, monkeypatch):
     calls, finished = transport
     initial = [{"role": "user", "content": "First"}]

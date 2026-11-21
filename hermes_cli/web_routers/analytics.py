@@ -154,8 +154,8 @@ async def get_usage_analytics(
 
 
 def _is_subscription(provider: str) -> bool:
-    """ChatGPT and Claude sign-ins are plans with the provider's own usage windows; API keys bill per token."""
-    if provider == "openai-codex":
+    """ChatGPT, Claude and Gemini sign-ins are plans with the provider's own usage windows; API keys bill per token."""
+    if provider in ("openai-codex", "gemini-agy"):
         return True
     if provider == "anthropic":
         from agent.anthropic_credentials import _is_oauth_token, resolve_anthropic_token
@@ -165,7 +165,7 @@ def _is_subscription(provider: str) -> bool:
 
 @router.get("/api/analytics/account-usage")
 async def get_account_usage(provider: str = Query(..., min_length=1)):
-    """A subscription's own usage windows, as Codex (5h/weekly) and Claude Code (session/week) show them.
+    """A subscription's own usage windows, as Codex (5h/weekly), Claude Code (session/week) and agy (5h/weekly per model group) show them.
 
     ``subscription`` false = a per-token route: its tokens and cost come from the session rows instead.
     Empty ``windows`` on a subscription = the provider's usage API did not answer."""

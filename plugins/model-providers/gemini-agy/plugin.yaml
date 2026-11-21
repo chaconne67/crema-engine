@@ -1,0 +1,4 @@
+name: gemini-agy-provider
+kind: model-provider
+version: 1.0.0
+description: Google Gemini via a Krema developer's Antigravity ACP session

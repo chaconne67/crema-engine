@@ -14,12 +14,12 @@
 
 1. 처음 열 때는 목록을 불러오는 데 20초쯤 걸린다.
 2. 검색 칸에 이름을 치거나 묶음에서 고른다.
-   - 많이 쓰는 AI: ChatGPT (OpenAI), Claude (Anthropic), Gemini (Google), Grok (xAI), GitHub Copilot, Meta AI
+   - 많이 쓰는 AI: OpenAI ChatGPT, Anthropic Claude, Google Gemini, xAI Grok, GitHub Copilot, Meta AI
    - 여러 AI를 한 곳에서: OpenRouter, AI Gateway, Kilo Code, OpenCode, Nous 등
    - 오픈소스 모델 서비스: Groq, Mistral, Hugging Face, Fireworks 등
    - 중국 AI: DeepSeek, Qwen, Kimi, GLM, MiniMax 등
    - 기타(개발자·기업용)
-3. 고르면 인증 방식과 그 단계가 나온다.
+3. **OpenAI ChatGPT 구독**, **Google Gemini API 키**처럼 AI 이름에 연결 방식이 붙는다. 원하는 줄을 고른다.
 
 | 방식 | 하는 법 |
 |---|---|
@@ -27,7 +27,8 @@
 | **구독 – 기기 코드** (ChatGPT, Grok, MiniMax, Nous 등) | **로그인 페이지 열기** → Crema가 보여 주는 코드를 그 페이지에 넣고 승인 → 저절로 끝난다 |
 | **구독 – 코드 붙여넣기** (Claude) | **로그인 페이지 열기** → 승인하면 나오는 코드를 Crema에 붙여넣고 **연결** |
 
-- 이미 연결한 AI는 "연결됨"으로 보이고 다시 누를 수 없다.
+- 연결한 방식에는 **연결됨**이 표시된다. 같은 AI의 다른 연결 방식은 따로 고를 수 있다.
+- Krema 개발자 계정에서만 **Google Gemini 구독**을 연결할 수 있다.
 - 목록에 없는 것
   - LM Studio(내 PC 모델), Claude Code 로그인
   - Amazon Bedrock, Google Vertex

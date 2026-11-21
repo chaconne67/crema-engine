@@ -194,6 +194,12 @@ class ProviderProfile:
         """
         return messages
 
+    def external_process_allowed(self) -> bool:
+        """Whether this profile may use its CLI's own login in the active Hermes home."""
+        from agent.credential_sources import adopt_external_logins_enabled
+
+        return adopt_external_logins_enabled()
+
     def build_extra_body(
         self, *, session_id: str | None = None, **context: Any
     ) -> dict[str, Any]:

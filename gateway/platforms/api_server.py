@@ -2290,6 +2290,12 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
             "memory_manager": self._memory_sessions.checkout(session_id)}
         if request_service_tier is not _REQUEST_OPTION_MISSING:
             agent_kwargs["service_tier"] = request_service_tier
+        if (runtime_kwargs.get("provider") == "gemini-agy" and session_id and model_options
+                and model_options.get("reset_acp_session") is True):
+            from agent.gemini_agy_client import reset_gemini_session
+            from hermes_constants import get_hermes_home
+
+            reset_gemini_session(str(get_hermes_home()), session_id)
         agent = AIAgent(**agent_kwargs)
         route_source = (
             "session_model_lock" if confirmed_runtime_lock

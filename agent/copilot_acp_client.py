@@ -1,7 +1,8 @@
 """OpenAI-compatible shim that forwards Hermes requests to `copilot --acp`.
 
 Each request starts a short-lived ACP session, sends the formatted conversation
-as one prompt, collects text chunks, and returns the minimal OpenAI-client shape.
+as one prompt, collects text chunks, and returns the minimal OpenAI-client shape. Gemini shares
+the wire and completion conversion with its own session lifetime.
 """
 
 from __future__ import annotations
@@ -117,13 +118,13 @@ def _resolve_home_dir() -> str:
         return tempfile.gettempdir()
 
 
-def _build_subprocess_env() -> dict[str, str]:
+def _build_subprocess_env(*, inherit_credentials: bool = True) -> dict[str, str]:
     from hermes_constants import apply_subprocess_home_env
 
     # Copilot ACP drives a model and needs LLM provider credentials; the central helper still
     # strips Tier-1 secrets (bot tokens, GitHub auth, infra).
     # See #29157.
-    env = hermes_subprocess_env(inherit_credentials=True)
+    env = hermes_subprocess_env(inherit_credentials=inherit_credentials)
     env["HOME"] = _resolve_home_dir()
     apply_subprocess_home_env(env)
     return env
@@ -275,6 +276,11 @@ class CopilotACPClient:
 
     # Declared for agent/auxiliary_client.py: this shim drives an ACP subprocess over stdio, so it is
     # already a complete client (never re-dispatch through a wire adapter) and async-safe as-is.
+    _label = "Copilot ACP"
+    _inherit_credentials = True
+    _initialize_params = _INITIALIZE_PARAMS
+    _file_access_unavailable = "File access is unavailable during model discovery."
+
     HERMES_SKIP_TRANSPORT_WRAP = True
     HERMES_SKIP_ASYNC_WRAP = True
 
@@ -305,6 +311,7 @@ class CopilotACPClient:
         except Exception:
             with contextlib.suppress(Exception):
                 proc.kill()
+                proc.wait(timeout=2)
 
     def _release_process(self, proc: subprocess.Popen[str]) -> None:
         """Reap one session's own child. ``is_closed`` flips only when the last live
@@ -329,15 +336,22 @@ class CopilotACPClient:
     ) -> Any:
         prompt_text = _format_messages_as_prompt(messages or [], model=model, tools=tools, tool_choice=tool_choice)
         response_text, reasoning = self._run_prompt(prompt_text, timeout_seconds=_effective_timeout(timeout), model=model)
+        return self._completion(response_text, reasoning, model or "copilot-acp", stream)
+
+    @staticmethod
+    def _completion(response_text, reasoning, model, stream, *, usage=None, finish_reason=None):
         tool_calls, cleaned_text = _extract_tool_calls_from_text(response_text)
         message = SimpleNamespace(
             content=cleaned_text, tool_calls=tool_calls, reasoning=reasoning or None, reasoning_content=reasoning or None,
             reasoning_details=None,
         )
         completion = SimpleNamespace(
-            choices=[SimpleNamespace(message=message, finish_reason="tool_calls" if tool_calls else "stop")],
-            usage=SimpleNamespace(prompt_tokens=0, completion_tokens=0, total_tokens=0, prompt_tokens_details=SimpleNamespace(cached_tokens=0)),
-            model=model or "copilot-acp",
+            choices=[SimpleNamespace(message=message, finish_reason=finish_reason or ("tool_calls" if tool_calls else "stop"))],
+            usage=usage if usage is not None else SimpleNamespace(
+                prompt_tokens=0, completion_tokens=0, total_tokens=0,
+                prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+            ),
+            model=model,
         )
         return _completion_to_stream_chunks(completion) if stream else completion
 
@@ -359,15 +373,18 @@ class CopilotACPClient:
             # pipes stay intact for the ACP wire.
             proc = subprocess.Popen(
                 [self._acp_command] + self._acp_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, encoding='utf-8', errors='replace', bufsize=1, cwd=self._acp_cwd, env=_build_subprocess_env(),
+                text=True, encoding='utf-8', errors='replace', bufsize=1, cwd=self._acp_cwd,
+                env=_build_subprocess_env(inherit_credentials=self._inherit_credentials),
                 creationflags=windows_hide_flags(),
             )
         except FileNotFoundError as exc:
+            if not self._inherit_credentials:
+                raise RuntimeError(f"Could not start {self._label} command {self._acp_command!r}.") from exc
             raise RuntimeError(f"Could not start Copilot ACP command '{self._acp_command}'. Install GitHub Copilot CLI or set "
                                "HERMES_COPILOT_ACP_COMMAND/COPILOT_CLI_PATH.") from exc
         if proc.stdin is None or proc.stdout is None:
             proc.kill()
-            raise RuntimeError("Copilot ACP process did not expose stdin/stdout pipes.")
+            raise RuntimeError(f"{self._label} process did not expose stdin/stdout pipes.")
         with self._active_process_lock:
             self._active_processes.add(proc)
             self.is_closed = False
@@ -400,11 +417,11 @@ class CopilotACPClient:
         session_deadline = time.monotonic() + timeout_seconds
 
         def _request(method: str, params: dict[str, Any], *, text_parts: list[str] | None = None,
-                     reasoning_parts: list[str] | None = None) -> Any:
+                     reasoning_parts: list[str] | None = None, deadline: float | None = None) -> Any:
             request_id = next(request_ids)
             proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}) + "\n")
             proc.stdin.flush()
-            deadline = session_deadline
+            deadline = session_deadline if deadline is None else deadline
             while time.monotonic() < deadline and proc.poll() is None:
                 try:
                     msg = inbox.get(timeout=0.1)
@@ -417,20 +434,20 @@ class CopilotACPClient:
                     continue
                 if "error" in msg:
                     err = msg.get("error") or {}
-                    raise RuntimeError(f"Copilot ACP {method} failed: {err.get('message') or err}")
+                    raise RuntimeError(f"{self._label} {method} failed: {err.get('message') or err}")
                 return msg.get("result")
             stderr_text = "\n".join(stderr_tail).strip()
             if proc.poll() is not None and stderr_text:
-                if _is_gh_copilot_deprecation_message(stderr_text):
+                if self._inherit_credentials and _is_gh_copilot_deprecation_message(stderr_text):
                     raise RuntimeError(_DEPRECATED_CLI_ERROR + stderr_text)
-                raise RuntimeError(f"Copilot ACP process exited early: {stderr_text}")
-            raise TimeoutError(f"Timed out waiting for Copilot ACP response to {method}.")
+                raise RuntimeError(f"{self._label} process exited early: {stderr_text}")
+            raise TimeoutError(f"Timed out waiting for {self._label} response to {method}.")
 
         try:
-            _request("initialize", _INITIALIZE_PARAMS)
+            _request("initialize", self._initialize_params)
             session = _request("session/new", {"cwd": self._acp_cwd, "mcpServers": []}) or {}
             if not str(session.get("sessionId") or "").strip():
-                raise RuntimeError("Copilot ACP did not return a sessionId.")
+                raise RuntimeError(f"{self._label} did not return a sessionId.")
             yield session, _request
         finally:
             self._release_process(proc)
@@ -483,7 +500,7 @@ class CopilotACPClient:
             response = _jsonrpc_result(message_id, {"outcome": {"outcome": "cancelled"}})
         elif method in _FS_HANDLERS:
             if not allow_file_requests:
-                response = _jsonrpc_error(message_id, -32601, "File access is unavailable during model discovery.")
+                response = _jsonrpc_error(message_id, -32601, self._file_access_unavailable)
             else:
                 try:
                     response = _jsonrpc_result(message_id, _FS_HANDLERS[method](msg.get("params") or {}, cwd))

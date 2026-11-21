@@ -1908,6 +1908,13 @@ def cached_provider_model_ids(
     normalized = _normalized_cache_slug(provider)
     if not normalized:
         return []
+    if normalized == "gemini-agy":
+        # Connection discovery already stores the active profile's local catalog.
+        # Read it directly so connect/disconnect is visible on every picker path.
+        from providers import get_provider_profile
+
+        profile = get_provider_profile(normalized)
+        return (profile.fetch_models() or []) if profile else []
     is_ollama = normalized == "ollama"
 
     cache = _load_provider_models_cache()

@@ -101,6 +101,34 @@ def test_run_instructions_do_not_restore_context_removed_before_send(transport):
     assert calls[0][2] is None
 
 
+def test_long_transcript_preserves_text_usage_and_session(transport):
+    calls, _ = transport
+    body = "기록🌳" * 22000
+    initial = [{"role": "user", "content": body},
+               {"role": "assistant", "content": "Earlier answer"},
+               {"role": "user", "content": "Latest question"}]
+    completion = complete(initial)
+
+    first_call = calls[0][1]
+    last_call = calls[-1][1]
+    assert len(calls) == 2
+    assert all(len(prompt.encode()) <= 190_000 for _, prompt, _ in calls)
+    transcript = first_call.split("\n\n", 1)[1] + last_call.split("\n\n", 1)[1]
+    assert transcript.endswith(f"User:\n{body}\n\nAssistant:\nEarlier answer\n\nUser:\nLatest question")
+    assert completion.choices[0].message.content == "ORCHARD"
+    assert not completion.choices[0].message.tool_calls
+    assert completion.usage.prompt_tokens == 70
+    assert completion.usage.prompt_tokens_details.cached_tokens == 50
+    assert completion.usage.completion_tokens == 16
+    assert completion.usage.initial_prompt_tokens == 35
+
+    complete([*initial, {"role": "assistant", "content": "ORCHARD"},
+              {"role": "user", "content": "Follow-up"}])
+    assert len(calls) == 3
+    assert len({session for session, _, _ in calls}) == 1
+    assert calls[-1][1] == "User:\nFollow-up"
+
+
 @pytest.mark.parametrize("change", ["previous_text", "model", "tools", "retry", "profile", "instruction_split"])
 def test_changed_conversation_contract_opens_a_new_session(transport, change, monkeypatch):
     calls, finished = transport

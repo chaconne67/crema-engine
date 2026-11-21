@@ -26,6 +26,16 @@ log = logging.getLogger(__name__)
 
 _MAX_SESSIONS = 8
 _IDLE_SECONDS = 300
+# agy 1.5.13–1.5.14 cut ACP text from the end after 191,582 UTF-8 bytes.
+_MAX_PROMPT_BYTES = 190_000
+_REPLAY_PART = (
+    "Hermes is sending a conversation transcript in parts. Use this part as context for the final part. "
+    "More transcript follows, so reply only with ACK and wait for it.\n\n"
+)
+_REPLAY_END = (
+    "This is the final part of the Hermes conversation transcript. "
+    "Read it together with the earlier parts and continue the conversation from the latest input.\n\n"
+)
 _PREAMBLE = (
     "Hermes is hosting this conversation and executes the tools listed here. "
     "When you need a tool, return a tool-call block as message text for Hermes to execute. "
@@ -73,22 +83,55 @@ def _transcript(messages):
     return "\n\n".join(entries)
 
 
-def _usage(result):
-    usage = result.get("usage")
-    if not isinstance(usage, dict):
-        raise RuntimeError("Google Gemini 구독이 호출 사용량을 돌려주지 않았습니다.")
-    uncached, cached, output, thoughts = (
-        usage.get("inputTokens"), usage.get("cachedReadTokens", 0),
-        usage.get("outputTokens"), usage.get("thoughtTokens", 0),
-    )
-    if any(type(value) is not int or value < 0 for value in (uncached, cached, output, thoughts)):
-        raise RuntimeError("Google Gemini 구독이 올바른 호출 사용량을 돌려주지 않았습니다.")
+def _prompt_parts(prompt):
+    prompt = _sanitize_surrogates(prompt)
+    payload = prompt.encode("utf-8")
+    if len(payload) <= _MAX_PROMPT_BYTES:
+        yield prompt, True
+        return
+
+    # Leave room for the replay instruction in each ACP user message.
+    budget = _MAX_PROMPT_BYTES - max(len(_REPLAY_PART), len(_REPLAY_END))
+    start = 0
+    while len(payload) - start > budget:
+        end = start + budget
+        # Prefer a line boundary close to the limit. For long lines, retain
+        # every code point by moving the cut back over UTF-8 continuation bytes.
+        newline = payload.rfind(b"\n", end - budget // 100, end)
+        if newline >= 0:
+            end = newline + 1
+        while payload[end] & 0xC0 == 0x80:
+            end -= 1
+        yield _REPLAY_PART + payload[start:end].decode("utf-8"), False
+        start = end
+    yield _REPLAY_END + payload[start:].decode("utf-8"), True
+
+
+def _usage(results):
+    uncached = cached = output = thoughts = 0
+    for result in results:
+        usage = result.get("usage")
+        if not isinstance(usage, dict):
+            raise RuntimeError("Google Gemini 구독이 호출 사용량을 돌려주지 않았습니다.")
+        part_input, part_cached, part_output, part_thoughts = (
+            usage.get("inputTokens"), usage.get("cachedReadTokens", 0),
+            usage.get("outputTokens"), usage.get("thoughtTokens", 0),
+        )
+        if any(type(value) is not int or value < 0 for value in (part_input, part_cached, part_output, part_thoughts)):
+            raise RuntimeError("Google Gemini 구독이 올바른 호출 사용량을 돌려주지 않았습니다.")
+        uncached += part_input
+        cached += part_cached
+        output += part_output
+        thoughts += part_thoughts
     # Antigravity includes thoughts in outputTokens. Hermes' prompt total includes cache reads.
     return SimpleNamespace(
         prompt_tokens=uncached + cached, completion_tokens=output,
         total_tokens=uncached + cached + output,
         prompt_tokens_details=SimpleNamespace(cached_tokens=cached),
         completion_tokens_details=SimpleNamespace(reasoning_tokens=thoughts),
+        # Hermes uses these fields for context pressure, separate from aggregate usage.
+        initial_prompt_tokens=part_input + part_cached if len(results) > 1 else None,
+        initial_cached_tokens=part_cached if len(results) > 1 else None,
     )
 
 
@@ -311,15 +354,18 @@ class GeminiACPClient(CopilotACPClient):
                 prompt = "\n\n".join([_PREAMBLE, *tool_sections, _transcript(prompt_messages)])
             else:
                 prompt = _transcript(messages[len(entry.prefix):])
-            text, reasoning = [], []
-            result = entry.request(
-                "session/prompt", {"sessionId": entry.session_id, "prompt": [{"type": "text", "text": prompt}]},
-                text_parts=text, reasoning_parts=reasoning, deadline=deadline,
-            )
-            stop = result.get("stopReason") if isinstance(result, dict) else None
-            if stop not in ("end_turn", "max_tokens"):
-                raise RuntimeError("Google Gemini 구독 응답이 끝나지 않았습니다.")
-            usage = _usage(result)
+            results = []
+            for part, final in _prompt_parts(prompt):
+                text, reasoning = [], []
+                result = entry.request(
+                    "session/prompt", {"sessionId": entry.session_id, "prompt": [{"type": "text", "text": part}]},
+                    text_parts=text, reasoning_parts=reasoning, deadline=deadline,
+                )
+                stop = result.get("stopReason") if isinstance(result, dict) else None
+                if stop != "end_turn" and not (final and stop == "max_tokens"):
+                    raise RuntimeError("Google Gemini 구독 응답이 끝나지 않았습니다.")
+                results.append(result)
+            usage = _usage(results)
             completion = self._completion("".join(text), "".join(reasoning), model, False, usage=usage,
                                           finish_reason="length" if stop == "max_tokens" else None)
             message = completion.choices[0].message

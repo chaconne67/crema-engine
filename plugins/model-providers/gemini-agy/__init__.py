@@ -93,9 +93,9 @@ class GeminiAGYProfile(ProviderProfile):
             raise RuntimeError("서버에 agy가 없습니다. main 서버에 agy를 설치하고 실행해 로그인해 주세요.")
         return GeminiACPClient(api_key=api_key, base_url=base_url, command=command, args=list(self.process_args))
 
-    def build_api_kwargs_extras(self, *, session_id=None, **_):
+    def build_api_kwargs_extras(self, *, session_id=None, ephemeral_system_prompt=None, **_):
         # Auxiliaries do not get the conversational route's Hermes session ID.
-        return {}, {"crema_session_id": session_id}
+        return {}, {"crema_session_id": session_id, "crema_run_instructions": ephemeral_system_prompt}
 
 
 register_provider(GeminiAGYProfile(

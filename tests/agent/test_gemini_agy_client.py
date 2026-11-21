@@ -22,9 +22,13 @@ def transport(monkeypatch):
 
     class Wire(agy._GeminiWire):
         @contextlib.contextmanager
-        def _session(self, timeout_seconds, *, allow_file_requests=True):
+        def _session(self, timeout_seconds, *, allow_file_requests=True, session_metadata=None):
             nonlocal serial
             assert allow_file_requests is False
+            metadata = session_metadata({"agentCapabilities": {
+                "_meta": {"antigravity": {"systemPrompt": {"append": True}}},
+            }}) if session_metadata else None
+            system_prompt = metadata["antigravity"]["systemPrompt"]["append"] if metadata else None
             serial += 1
             session_id = f"session-{serial}"
             self._active_processes.add(SimpleProcess())
@@ -33,7 +37,7 @@ def transport(monkeypatch):
                     if method != "session/prompt":
                         return {}
                     prompt = params["prompt"][0]["text"]
-                    calls.append((session_id, prompt))
+                    calls.append((session_id, prompt, system_prompt))
                     text_parts.append(TOOL_REPLY if len(calls) == 1 else "ORCHARD")
                     return {"stopReason": "end_turn", "usage": {
                         "inputTokens": 10, "cachedReadTokens": 25, "outputTokens": 8, "thoughtTokens": 3}}
@@ -66,15 +70,22 @@ def complete(messages, *, client=None, session="chat-1", **kwargs):
 
 def test_replays_only_tool_result_with_new_client_and_preserves_usage(transport):
     calls, _ = transport
-    initial = [{"role": "system", "content": "Fixture context"}, {"role": "user", "content": "Read the fixture."}]
-    reply = complete(initial).choices[0].message
+    instructions = "Run reference"
+    initial = [{"role": "system", "content": f"Fixture context\n\n{instructions}"},
+               {"role": "user", "content": "Read the fixture."}]
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+    reply = complete(initial, tools=tools, crema_run_instructions=instructions).choices[0].message
     assert reply.content == ""
     assert reply.tool_calls[0].id == "read-1"
+    assert calls[0][1].endswith("System:\nFixture context\n\nUser:\nRead the fixture.")
+    assert "Set arguments to a JSON object" in calls[0][1]
+    assert instructions not in calls[0][1]
+    assert calls[0][2] == instructions
     replay = {"role": "assistant", "content": "", "tool_calls": [{
         "id": "read-1", "type": "function", "function": {"name": "read_file", "arguments": '{"path":"fixture.txt"}'},
     }]}
     result = {"role": "tool", "tool_call_id": "read-1", "content": "ORCHARD"}
-    chunks = complete([*initial, replay, result], stream=True)
+    chunks = complete([*initial, replay, result], tools=tools, stream=True, crema_run_instructions=instructions)
     assert calls[0][0] == calls[1][0]
     assert calls[1][1] == "Tool (call read-1):\nORCHARD"
     usage = chunks[-1].usage
@@ -82,17 +93,26 @@ def test_replays_only_tool_result_with_new_client_and_preserves_usage(transport)
     assert usage.completion_tokens_details.reasoning_tokens == 3
 
 
-@pytest.mark.parametrize("change", ["previous_text", "model", "tools", "retry", "profile"])
+def test_run_instructions_do_not_restore_context_removed_before_send(transport):
+    calls, _ = transport
+    initial = [{"role": "system", "content": "Selected context"}, {"role": "user", "content": "First"}]
+    complete(initial, crema_run_instructions="Original run instructions")
+    assert calls[0][1].endswith("System:\nSelected context\n\nUser:\nFirst")
+    assert calls[0][2] is None
+
+
+@pytest.mark.parametrize("change", ["previous_text", "model", "tools", "retry", "profile", "instruction_split"])
 def test_changed_conversation_contract_opens_a_new_session(transport, change, monkeypatch):
     calls, finished = transport
-    initial = [{"role": "user", "content": "First"}]
+    initial = [{"role": "system", "content": "Base context\n\nRun instructions"},
+               {"role": "user", "content": "First"}]
     reply = complete(initial).choices[0].message
     replay = [*initial, {"role": "assistant", "content": reply.content, "tool_calls": [
         {"id": call.id, "type": call.type, "function": call.function.model_dump()} for call in reply.tool_calls
     ]}, {"role": "tool", "tool_call_id": "read-1", "content": "ORCHARD"}]
     kwargs = {}
     if change == "previous_text":
-        replay[0] = {"role": "user", "content": "Edited"}
+        replay[1] = {"role": "user", "content": "Edited"}
     elif change == "model":
         kwargs["model"] = "gemini-4-argon"
     elif change == "tools":
@@ -101,10 +121,40 @@ def test_changed_conversation_contract_opens_a_new_session(transport, change, mo
         agy.reset_gemini_session(str(agy.get_hermes_home()), "chat-1")
     elif change == "profile":
         monkeypatch.setattr(agy, "get_hermes_home", lambda: "/different/profile")
+    elif change == "instruction_split":
+        kwargs["crema_run_instructions"] = "Run instructions"
     complete(replay, **kwargs)
     assert calls[0][0] != calls[1][0]
+    assert "User:\n" in calls[1][1]
     assert "Hermes is hosting" in calls[1][1]
+    assert calls[1][2] == kwargs.get("crema_run_instructions")
     assert (calls[0][0] in finished) == (change != "profile")
+
+
+@pytest.mark.parametrize("change", ["reply_markers", "edited_body", "different_chat", "other_transform"])
+def test_crema_reply_markers_preserve_only_the_matching_session(transport, change, monkeypatch):
+    from crema_engine import drop_next_input
+
+    calls, _ = transport
+    original = "ORCHARD\n\nNEXT_INPUT: Continue"
+    monkeypatch.setitem(globals(), "TOOL_REPLY", original)
+    initial = [{"role": "user", "content": "First"}]
+    assert complete(initial).choices[0].message.content == original
+
+    session_id = "different" if change == "different_chat" else "chat-1"
+    output = f"Notice\n\n{original}" if change == "other_transform" else original
+    stored_reply = drop_next_input(response_text=output, session_id=session_id)
+    assert "NEXT_INPUT" not in stored_reply
+    if change == "edited_body":
+        stored_reply = "RIVER"
+    complete([*initial, {"role": "assistant", "content": stored_reply},
+              {"role": "user", "content": "Next"}])
+
+    if change == "reply_markers":
+        assert calls[0][0] == calls[1][0]
+        assert calls[1][1] == "User:\nNext"
+    else:
+        assert calls[0][0] != calls[1][0]
 
 
 def test_busy_session_is_not_reused_and_idle_oldest_is_evicted(monkeypatch, transport):

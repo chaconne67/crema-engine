@@ -106,6 +106,15 @@ def test_non_string_arguments_are_json_encoded_and_missing_ids_synthesised():
     assert calls[0].id == "acp_call_1"
 
 
+def test_object_arguments_preserve_shell_backslashes():
+    calls, cleaned = extract_tool_calls_from_text(
+        r'<tool_call>{"id":"c1","type":"function","function":'
+        r"""{"name":"terminal","arguments":{"command":"printf '%s\\n' '\\.txt$'"}}}</tool_call>"""
+    )
+    assert cleaned == ""
+    assert json.loads(calls[0].function.arguments) == {"command": r"printf '%s\n' '\.txt$'"}
+
+
 def test_bare_json_is_a_fallback_only_when_no_block_matched():
     bare = '{"id": "c9", "type": "function", "function": {"name": "memory", "arguments": "{}"}}'
     calls, cleaned = extract_tool_calls_from_text(f"before {bare} after")
@@ -198,6 +207,7 @@ def test_copilot_prompt_still_carries_the_contract_and_the_tools():
         [{"role": "user", "content": "hi"}], model="gpt-5", tools=_TOOLS,
     )
     assert "<tool_call>{...}</tool_call>" in prompt
+    assert "arguments must be a JSON string." in prompt
     assert '"name": "memory"' in prompt
     assert '"name": "read_file"' in prompt  # copilot forwards everything
     assert "hi" in prompt

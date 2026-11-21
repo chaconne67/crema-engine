@@ -392,7 +392,8 @@ class CopilotACPClient:
 
     @contextlib.contextmanager
     def _session(
-        self, timeout_seconds: float, *, allow_file_requests: bool = True
+        self, timeout_seconds: float, *, allow_file_requests: bool = True,
+        session_metadata: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> Iterator[tuple[dict[str, Any], Callable[..., Any]]]:
         """Start one ACP process and yield its ``session/new`` result plus request callable."""
         proc = self._spawn()
@@ -444,8 +445,11 @@ class CopilotACPClient:
             raise TimeoutError(f"Timed out waiting for {self._label} response to {method}.")
 
         try:
-            _request("initialize", self._initialize_params)
-            session = _request("session/new", {"cwd": self._acp_cwd, "mcpServers": []}) or {}
+            initialized = _request("initialize", self._initialize_params)
+            params: dict[str, Any] = {"cwd": self._acp_cwd, "mcpServers": []}
+            if session_metadata is not None:
+                params["_meta"] = session_metadata(initialized or {})
+            session = _request("session/new", params) or {}
             if not str(session.get("sessionId") or "").strip():
                 raise RuntimeError(f"{self._label} did not return a sessionId.")
             yield session, _request

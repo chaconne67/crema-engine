@@ -22,11 +22,12 @@ TOOL_CALL_JSON_RE = re.compile(
     r"\{\s*\"id\"\s*:\s*\"[^\"]+\"\s*,\s*\"type\"\s*:\s*\"function\"\s*,\s*\"function\"\s*:\s*\{.*?\}\s*\}", re.DOTALL
 )
 
-TOOL_CALL_CONTRACT = (
+_TOOL_CALL_SHAPE = (
     "Available tools (OpenAI function schema). "
     "When using a tool, emit ONLY <tool_call>{...}</tool_call> with one JSON object "
-    "containing id/type/function{name,arguments}. arguments must be a JSON string."
+    "containing id/type/function{name,arguments}."
 )
+TOOL_CALL_CONTRACT = _TOOL_CALL_SHAPE + " arguments must be a JSON string."
 
 __all__ = [
     "TOOL_CALL_BLOCK_RE", "TOOL_CALL_JSON_RE", "TOOL_CALL_CONTRACT", "StreamChunks", "build_openai_tool_call",
@@ -103,12 +104,17 @@ def tool_specs_from_openai_tools(
 
 def render_tool_bridge_sections(
     tools: list[dict[str, Any]] | None, tool_choice: Any = None, *, allowlist: Iterable[str] | None = None,
+    arguments_as_object: bool = False,
 ) -> list[str]:
     """Prompt sections carrying the forwarded tool schemas + choice hint (empty list when neither applies)."""
     specs = tool_specs_from_openai_tools(tools, allowlist=allowlist)
     sections: list[str] = []
     if specs:
-        sections.append(TOOL_CALL_CONTRACT + "\n" + json.dumps(specs, ensure_ascii=False))
+        contract = (
+            _TOOL_CALL_SHAPE + " Set arguments to a JSON object with the parameters for that tool."
+            if arguments_as_object else TOOL_CALL_CONTRACT
+        )
+        sections.append(contract + "\n" + json.dumps(specs, ensure_ascii=False))
     if tool_choice is not None:
         sections.append(f"Tool choice hint: {json.dumps(tool_choice, ensure_ascii=False)}")
     return sections

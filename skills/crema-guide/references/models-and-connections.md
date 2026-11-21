@@ -28,7 +28,7 @@
 | **구독 – 코드 붙여넣기** (Claude) | **로그인 페이지 열기** → 승인하면 나오는 코드를 Crema에 붙여넣고 **연결** |
 
 - 연결한 방식에는 **연결됨**이 표시된다. 같은 AI의 다른 연결 방식은 따로 고를 수 있다.
-- Krema 개발자 계정에서만 **Google Gemini 구독**을 연결할 수 있다.
+- Krema 개발자 계정에서만 **Google Gemini 구독**을 연결할 수 있다. 같은 대화의 기록이 이어지면 먼저 연 Gemini 세션을 재사용한다. 캐시 읽기 토큰 수는 Gemini가 보고한 사용량이다.
 - 목록에 없는 것
   - LM Studio(내 PC 모델), Claude Code 로그인
   - Amazon Bedrock, Google Vertex

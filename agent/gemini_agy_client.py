@@ -19,6 +19,7 @@ from agent.copilot_acp_client import (
     CopilotACPClient, _effective_timeout, _model_selection_request, _render_message_content,
     _session_model_ids, _INITIALIZE_PARAMS, _ROLE_LABELS,
 )
+from agent.message_sanitization import _sanitize_surrogates
 from hermes_constants import get_hermes_home
 
 log = logging.getLogger(__name__)
@@ -26,9 +27,11 @@ log = logging.getLogger(__name__)
 _MAX_SESSIONS = 8
 _IDLE_SECONDS = 300
 _PREAMBLE = (
-    "Hermes is hosting this conversation and executes its tools. Request actions through "
-    "the tool-call format below. Hermes sends each result in a Tool message with the call ID. "
-    "Answer normally when no tool is needed."
+    "Hermes is hosting this conversation and executes the tools listed here. "
+    "When you need a tool, return a tool-call block as message text for Hermes to execute. "
+    "The built-in Antigravity tools cannot perform actions in this conversation. "
+    "Hermes sends each result in a Tool message with the call ID. "
+    "When no tool is needed, return your answer as message text."
 )
 
 
@@ -145,6 +148,18 @@ def reset_gemini_session(profile, session_id=None):
                 _sessions.remove(entry)
 
 
+def record_gemini_display_trim(session_id: str, original: str, stored: str) -> None:
+    """Match the display-trimmed reply that Crema will replay for this ACP turn."""
+    conversation = (str(get_hermes_home()), session_id)
+    original_digest = _fingerprint({"role": "assistant", "content": original})
+    with _lock:
+        for entry in _sessions:
+            if (entry.conversation == conversation and entry.timer is not None
+                    and entry.prefix[-1:] == (original_digest,)):
+                entry.prefix = (*entry.prefix[:-1], _fingerprint({"role": "assistant", "content": stored}))
+                break
+
+
 def _lease(conversation, descriptor, messages):
     with _lock:
         if conversation is not None:
@@ -200,11 +215,18 @@ class _GeminiWire(CopilotACPClient):
     _file_access_unavailable = "Hermes executes its own tools."
 
 
-def _open_wire(entry, command, args, timeout):
+def _open_wire(entry, command, args, timeout, *, system_prompt=None):
+    def session_metadata(initialized):
+        capabilities = initialized.get("agentCapabilities", {}).get("_meta", {}).get("antigravity", {})
+        if capabilities.get("systemPrompt", {}).get("append") is not True:
+            raise RuntimeError("Antigravity ACP does not support systemPrompt.append")
+        return {"antigravity": {"systemPrompt": {"append": system_prompt}}}
+
     cwd = entry.stack.enter_context(TemporaryDirectory(prefix="crema-agy-"))
     entry.wire = _GeminiWire(command=command, args=args, acp_cwd=cwd)
     session, entry.request = entry.stack.enter_context(
-        entry.wire._session(min(timeout, 15.0), allow_file_requests=False))
+        entry.wire._session(min(timeout, 15.0), allow_file_requests=False,
+                            session_metadata=session_metadata if system_prompt else None))
     entry.session_id = session["sessionId"]
     # An agy installation may have accept-edits as a default. Keep ACP approvals
     # explicit so the bridge's permission denial applies.
@@ -241,12 +263,14 @@ class GeminiACPClient(CopilotACPClient):
 
     def _create_chat_completion(
         self, *, model=None, messages=None, timeout=None, tools=None, tool_choice=None,
-        stream=False, crema_session_id=None, **_,
+        stream=False, crema_session_id=None, crema_run_instructions=None, **_,
     ):
         messages = messages or []
         fingerprints = tuple(_fingerprint(message) for message in messages)
         conversation = (str(get_hermes_home()), crema_session_id) if crema_session_id else None
-        descriptor = (self._acp_command, tuple(self._acp_args), model, _json([tools, tool_choice]))
+        instructions = _sanitize_surrogates((crema_run_instructions or "").rstrip())
+        instructions_digest = hashlib.sha256(instructions.encode()).digest()
+        descriptor = (self._acp_command, tuple(self._acp_args), model, _json([tools, tool_choice]), instructions_digest)
         entry = _lease(conversation, descriptor, fingerprints)
         new_prefix = ()
         timeout_seconds = _effective_timeout(timeout)
@@ -257,14 +281,34 @@ class GeminiACPClient(CopilotACPClient):
                     raise RuntimeError("Google Gemini 구독 요청이 닫혔습니다.")
                 self._requests.add(entry)
             if entry.request is None:
-                session = _open_wire(entry, self._acp_command, self._acp_args, timeout_seconds)
+                prompt_messages = messages
+                if instructions:
+                    # The main loop appends run instructions to the system row.
+                    # Sending the entire Hermes system row as ACP metadata can
+                    # trigger an upstream 429, so move only the instructions.
+                    first = messages[0] if messages else {}
+                    content = first.get("content") if first.get("role") == "system" else None
+                    suffix = "\n\n" + instructions
+                    if content == instructions.lstrip():
+                        prompt_messages = messages[1:]
+                        instructions = instructions.lstrip()
+                    elif isinstance(content, str) and content.endswith(suffix):
+                        prompt_messages = [
+                            {**first, "content": content.removesuffix(suffix).rstrip()}, *messages[1:]
+                        ]
+                    else:
+                        # A context engine can replace the outgoing system row.
+                        # Forward only the context it selected for this call.
+                        instructions = ""
+                tool_sections = render_tool_bridge_sections(tools, tool_choice, arguments_as_object=True)
+                session = _open_wire(entry, self._acp_command, self._acp_args, timeout_seconds,
+                                     system_prompt=instructions)
                 if self.is_closed:
                     raise RuntimeError("Google Gemini 구독 요청이 닫혔습니다.")
                 if (selection := _model_selection_request(session, model)) is None:
                     raise RuntimeError(f"Google Gemini 구독에서 {model} 모델을 사용할 수 없습니다.")
                 entry.request(*selection, deadline=deadline)
-                prompt = "\n\n".join([_PREAMBLE, *render_tool_bridge_sections(tools, tool_choice),
-                                       _transcript(messages)])
+                prompt = "\n\n".join([_PREAMBLE, *tool_sections, _transcript(prompt_messages)])
             else:
                 prompt = _transcript(messages[len(entry.prefix):])
             text, reasoning = [], []

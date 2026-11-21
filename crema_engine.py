@@ -450,7 +450,13 @@ def drop_next_input(response_text: str = "", session_id: str = "", **_) -> str |
     end = re.search(r"NEXT_INPUT:([^\n]*)", (response_text or "")[len(text):])
     kind = "missing" if not end else "none" if end.group(1).strip(" *_`") in ("", "-") else "given"
     logging.getLogger(__name__).info("next input: session=%s %s", session_id, kind)
-    return text if text and text != (response_text or "").rstrip() else None
+    if text and text != response_text.rstrip():
+        if session_id:
+            from agent.gemini_agy_client import record_gemini_display_trim
+
+            record_gemini_display_trim(session_id, response_text, text)
+        return text
+    return None
 
 
 def _change_principles_options(config):

@@ -4,8 +4,15 @@ This branch (`crema`) is the engine bundled inside the Crema desktop app: a prun
 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) (MIT, see `LICENSE`).
 Files keep their upstream paths and names so upstream changes can be compared and taken file by file.
 
-- Upstream base: `a25cf4d77d46733767b91d5a410e701f4596541e` (hermes-agent 0.21.4)
+- Upstream base: the commit pointed to by the `hermes-upstream` branch.
 - Crema app: https://github.com/chaconne67/crema
+
+## Rules for the Crema branch
+
+- Keep only Hermes commits on `hermes-upstream` so Git can identify Crema's changes reliably.
+- Keep upstream files in Git. Exclude unused files from the bundle or disable their features to avoid deletion conflicts when merging Hermes updates.
+- When modifying an upstream file or adding a file, record what changed and why in `CREMA_CHANGES.tsv` and run `python scripts/check_crema_changes.py`. The record gives the next merge a reason to keep or reconsider each change.
+- Add Crema features in new files wherever practical to reduce overlap with future Hermes changes.
 
 ## How Crema runs it
 
@@ -157,6 +164,8 @@ Both bind 127.0.0.1 only.
    it as the session's terminal/file-tool cwd (`register_task_env_overrides`), so concurrent chats keep their own;
    tests in `tests/gateway/test_api_server_run_work_folder.py`
 
+Item 13 will be updated when the deleted upstream files are restored in step ②.
+
 Kept code still mentions many removed features (browser, memory, delegation, …) through imports that
 are either lazy or guarded; those modules stay until the code that names them is gone.
 
@@ -165,12 +174,14 @@ Anthropic adapter imports `agent/bedrock_adapter.py`, which asks for boto3, and 
 
 ## Adding a feature back
 
-1. Restore the upstream files at the same paths: `git checkout a25cf4d77d -- <path>` (or from a newer
-   upstream commit after comparing with `git diff a25cf4d77d upstream/main -- <path>`).
+1. Restore the upstream files at the same paths: `git checkout hermes-upstream -- <path>` (or from a newer
+   upstream commit after comparing with `git diff hermes-upstream upstream/main -- <path>`).
 2. Turn it on where it is chosen (table above).
 3. Add a Crema CI check for it and list the change here.
 
 ## Updating from upstream
 
-Compare only the kept paths: `git diff a25cf4d77d <new upstream commit> -- $(git ls-files)`,
-take the security and bug fixes that touch them, move the base commit above, and run the tests.
+This section will be updated when Crema moves to an official Hermes release in step ③.
+
+Compare only the kept paths: `git diff hermes-upstream <new upstream commit> -- $(git ls-files)`,
+take the security and bug fixes that touch them, advance `hermes-upstream`, and run the tests.

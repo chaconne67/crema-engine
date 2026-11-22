@@ -85,7 +85,6 @@ docker/entrypoint.sh text eol=lf
 
 # crema-feature exclude-standalone
 /batch_runner.py export-ignore
-/constraints-termux.txt export-ignore
 
 # crema-feature exclude-development
 /contributors export-ignore
@@ -102,8 +101,6 @@ docker/entrypoint.sh text eol=lf
 # crema-feature exclude-standalone
 /flake.lock export-ignore
 /flake.nix export-ignore
-/mcp_serve.py export-ignore
-/mini_swe_runner.py export-ignore
 /nix export-ignore
 
 # crema-feature exclude-catalog
@@ -113,7 +110,6 @@ docker/entrypoint.sh text eol=lf
 /optional-skills export-ignore
 
 # crema-feature exclude-development
-/package-lock.json export-ignore
 /package.json export-ignore
 
 # crema-feature exclude-catalog
@@ -142,19 +138,12 @@ docker/entrypoint.sh text eol=lf
 
 # crema-feature exclude-memory
 /plugins/memory/byterover export-ignore
-/plugins/memory/holographic export-ignore
-/plugins/memory/honcho export-ignore
-/plugins/memory/mem0 export-ignore
-/plugins/memory/openviking export-ignore
 /plugins/memory/retaindb export-ignore
-/plugins/memory/supermemory export-ignore
 
 # crema-feature exclude-cloud-models
 /plugins/model-providers/bedrock export-ignore
 /plugins/model-providers/vertex export-ignore
 
-# crema-feature exclude-observability
-/plugins/observability export-ignore
 
 # crema-feature exclude-messaging
 /plugins/platforms export-ignore
@@ -162,8 +151,6 @@ docker/entrypoint.sh text eol=lf
 # crema-feature exclude-maintenance
 /plugins/security-guidance export-ignore
 
-# crema-feature exclude-spotify
-/plugins/spotify export-ignore
 
 # crema-feature exclude-meetings
 /plugins/teams_pipeline export-ignore
@@ -185,13 +172,13 @@ docker/entrypoint.sh text eol=lf
 /scripts/capture-cage-terminal.sh export-ignore
 /scripts/check-case-collisions.py export-ignore
 /scripts/check-windows-footguns.py export-ignore
-/scripts/check_compat_pointers.py export-ignore
 /scripts/check_config_yaml_writers.py export-ignore
 /scripts/check_no_tmp_literals.py export-ignore
 /scripts/check_profile_scope_patterns.py export-ignore
 /scripts/check_subprocess_stdin.py export-ignore
-/scripts/ci export-ignore
+/scripts/ci/** export-ignore
 /scripts/contributor_audit.py export-ignore
+/scripts/ci/list_os_marked_tests.py -export-ignore
 
 # crema-feature exclude-desktop
 /scripts/desktop-update export-ignore
@@ -222,7 +209,6 @@ docker/entrypoint.sh text eol=lf
 /scripts/install.cmd export-ignore
 /scripts/install.ps1 export-ignore
 /scripts/install.sh export-ignore
-/scripts/install_psutil_android.py export-ignore
 
 # crema-feature exclude-development
 /scripts/iso-certify.py export-ignore
@@ -230,8 +216,6 @@ docker/entrypoint.sh text eol=lf
 /scripts/kill_modal.sh export-ignore
 /scripts/launch_capture_probe.sh export-ignore
 
-# crema-feature exclude-standalone
-/scripts/lib export-ignore
 
 # crema-feature exclude-development
 /scripts/lint_diff.py export-ignore
@@ -249,7 +233,6 @@ docker/entrypoint.sh text eol=lf
 # crema-feature exclude-development
 /scripts/release.py export-ignore
 /scripts/run_tests.sh export-ignore
-/scripts/sample_and_compress.py export-ignore
 /scripts/sandbox export-ignore
 /scripts/smoke_nemo_relay_shared_metrics.py export-ignore
 /scripts/tests export-ignore
@@ -403,7 +386,6 @@ docker/entrypoint.sh text eol=lf
 /tests/gateway/test_google_chat_oauth_dependencies.py export-ignore
 /tests/gateway/test_heartbeat_acceptance.py export-ignore
 /tests/gateway/test_heartbeat_execution_ownership.py export-ignore
-/tests/gateway/test_homeassistant.py export-ignore
 /tests/gateway/test_irc_adapter.py export-ignore
 
 # crema-feature exclude-kanban
@@ -584,30 +566,6 @@ docker/entrypoint.sh text eol=lf
 # crema-feature exclude-meetings
 /tests/hermes_cli/test_teams_pipeline_plugin_cli.py export-ignore
 
-# crema-feature exclude-memory
-/tests/hermes_cli/test_web_memory_providers_honcho_write.py export-ignore
-/tests/honcho_plugin/test_a2a_sessions.py export-ignore
-/tests/honcho_plugin/test_async_memory.py export-ignore
-/tests/honcho_plugin/test_auth_recovery.py export-ignore
-/tests/honcho_plugin/test_cli.py export-ignore
-/tests/honcho_plugin/test_client.py export-ignore
-/tests/honcho_plugin/test_client_identity_isolation.py export-ignore
-/tests/honcho_plugin/test_empty_profile_hint.py export-ignore
-/tests/honcho_plugin/test_identity_signature.py export-ignore
-/tests/honcho_plugin/test_network_isolation.py export-ignore
-/tests/honcho_plugin/test_oauth.py export-ignore
-/tests/honcho_plugin/test_oauth_flow.py export-ignore
-/tests/honcho_plugin/test_peers_map.py export-ignore
-/tests/honcho_plugin/test_pin_peer_name.py export-ignore
-/tests/honcho_plugin/test_query_rewrite.py export-ignore
-/tests/honcho_plugin/test_recall_sync.py export-ignore
-/tests/honcho_plugin/test_save_messages.py export-ignore
-/tests/honcho_plugin/test_session.py export-ignore
-/tests/honcho_plugin/test_session_ai_peer_prefix.py export-ignore
-/tests/honcho_plugin/test_session_routing_integration.py export-ignore
-/tests/honcho_plugin/test_shutdown.py export-ignore
-/tests/honcho_plugin/test_turn_author_peers.py export-ignore
-/tests/openviking_plugin export-ignore
 
 # crema-feature exclude-media
 /tests/plugins/image_gen/test_deepinfra_provider.py export-ignore
@@ -620,27 +578,9 @@ docker/entrypoint.sh text eol=lf
 /tests/plugins/memory/test_byterover_multiplex_child_env.py export-ignore
 /tests/plugins/memory/test_byterover_provider.py export-ignore
 /tests/plugins/memory/test_discovery_sources.py export-ignore
-/tests/plugins/memory/test_holographic_auto_extract.py export-ignore
-/tests/plugins/memory/test_holographic_profile_db_path.py export-ignore
-/tests/plugins/memory/test_holographic_retrieval.py export-ignore
-/tests/plugins/memory/test_holographic_save_config.py export-ignore
-/tests/plugins/memory/test_holographic_shutdown_closes_db.py export-ignore
-/tests/plugins/memory/test_holographic_store.py export-ignore
-/tests/plugins/memory/test_honcho_cli_peers.py export-ignore
-/tests/plugins/memory/test_honcho_config_schema.py export-ignore
-/tests/plugins/memory/test_mem0_backend.py export-ignore
-/tests/plugins/memory/test_mem0_providers.py export-ignore
-/tests/plugins/memory/test_mem0_setup.py export-ignore
-/tests/plugins/memory/test_mem0_v3.py export-ignore
-/tests/plugins/memory/test_memory_lazy_install.py export-ignore
 /tests/plugins/memory/test_multiplex_memory_identity_scope.py export-ignore
-/tests/plugins/memory/test_openviking_endpoint_always_blocked.py export-ignore
-/tests/plugins/memory/test_openviking_optional_peer.py export-ignore
-/tests/plugins/memory/test_openviking_provider.py export-ignore
-/tests/plugins/memory/test_openviking_shutdown.py export-ignore
 /tests/plugins/memory/test_provider_threads_inherit_profile.py export-ignore
 /tests/plugins/memory/test_retaindb_provider.py export-ignore
-/tests/plugins/memory/test_supermemory_provider.py export-ignore
 
 # crema-feature exclude-messaging
 /tests/plugins/platforms export-ignore
@@ -667,14 +607,6 @@ docker/entrypoint.sh text eol=lf
 /tests/plugins/test_google_meet_plugin.py export-ignore
 /tests/plugins/test_google_meet_realtime.py export-ignore
 
-# crema-feature exclude-memory
-/tests/plugins/test_holographic_vector_storage.py export-ignore
-/tests/plugins/test_honcho_client_concurrency.py export-ignore
-/tests/plugins/test_honcho_client_config.py export-ignore
-/tests/plugins/test_honcho_session_cache_bounds.py export-ignore
-/tests/plugins/test_honcho_session_context.py export-ignore
-/tests/plugins/test_honcho_startup_fail_open.py export-ignore
-/tests/plugins/test_honcho_summary_sanitize.py export-ignore
 
 # crema-feature exclude-kanban
 /tests/plugins/test_kanban_attachments.py export-ignore
@@ -689,9 +621,6 @@ docker/entrypoint.sh text eol=lf
 /tests/plugins/test_kanban_read_admission.py export-ignore
 /tests/plugins/test_kanban_ws_idle_disconnect.py export-ignore
 
-# crema-feature exclude-observability
-/tests/plugins/test_langfuse_max_depth.py export-ignore
-/tests/plugins/test_langfuse_plugin.py export-ignore
 
 # crema-feature non-feature 검증 전용 시험 파일이라 제외해도 사용자 실행 경로는 바뀌지 않는다.
 /tests/plugins/test_plugin_paths_follow_profile.py export-ignore
@@ -723,42 +652,22 @@ docker/entrypoint.sh text eol=lf
 /tests/scripts/desktop_update/test_desktop_update_shim_profile_cleanup.py export-ignore
 /tests/scripts/desktop_update/test_desktop_update_shim_progress.py export-ignore
 /tests/scripts/desktop_update/test_desktop_update_tcc_heal.py export-ignore
-/tests/scripts/desktop_update/test_desktop_update_windows_gateway_flag.py export-ignore
 
 # crema-feature exclude-standalone
-/tests/scripts/install/test_install_autostash_conflict_recovery.py export-ignore
-/tests/scripts/install/test_install_commit_pin_rollback.py export-ignore
-/tests/scripts/install/test_install_lockfile_churn.py export-ignore
-/tests/scripts/install/test_install_macos_launcher.py export-ignore
-/tests/scripts/install/test_install_no_initial_commit.py export-ignore
-/tests/scripts/install/test_install_ps1_ascii_only.py export-ignore
-/tests/scripts/install/test_install_sh_bootstrap_marker.py export-ignore
-/tests/scripts/install/test_install_sh_browser_install.py export-ignore
-/tests/scripts/install/test_install_sh_node_deps_failure.py export-ignore
-/tests/scripts/install/test_install_sh_node_deps_workspaces.py export-ignore
-/tests/scripts/install/test_install_sh_node_prerelease.py export-ignore
-/tests/scripts/install/test_install_sh_node_probe.py export-ignore
 /tests/scripts/install/test_install_sh_node_tarball_without_xz.py export-ignore
 /tests/scripts/install/test_install_sh_reuse_supported_python.py export-ignore
-/tests/scripts/install/test_install_sh_symlink_stomp.py export-ignore
-/tests/scripts/install/test_install_sh_system_package_probe.py export-ignore
-/tests/scripts/install/test_install_sh_termux_python_bounds.py export-ignore
-/tests/scripts/install/test_install_sh_uv_lock_config.py export-ignore
-/tests/scripts/install/test_install_unmerged_index.py export-ignore
 
 # crema-feature exclude-skills
 /tests/scripts/test_build_skills_index_health.py export-ignore
 
 # crema-feature exclude-development
 /tests/scripts/test_case_collision_check.py export-ignore
-/tests/scripts/test_check_compat_pointers.py export-ignore
 /tests/scripts/test_check_no_tmp_literals.py export-ignore
 /tests/scripts/test_check_profile_archive_boundary.py export-ignore
 /tests/scripts/test_check_profile_scope_patterns.py export-ignore
 /tests/scripts/test_check_public_surface.py export-ignore
 /tests/scripts/test_contributor_map.py export-ignore
 /tests/scripts/test_footgun_subprocess_encoding.py export-ignore
-/tests/scripts/test_release_bootstrap_installer_version.py export-ignore
 /tests/scripts/test_smoke_nemo_relay_shared_metrics.py export-ignore
 
 # crema-feature exclude-catalog
@@ -781,8 +690,6 @@ docker/entrypoint.sh text eol=lf
 /tests/skills/test_live_dashboard_skill.py export-ignore
 /tests/skills/test_mcp_oauth_remote_gateway_skill.py export-ignore
 /tests/skills/test_memento_cards.py export-ignore
-/tests/skills/test_openclaw_migration.py export-ignore
-/tests/skills/test_openclaw_migration_hardening.py export-ignore
 /tests/skills/test_property_listings_skill.py export-ignore
 /tests/skills/test_reddit_reading_skill.py export-ignore
 /tests/skills/test_rss_feeds_skill.py export-ignore
@@ -801,8 +708,6 @@ docker/entrypoint.sh text eol=lf
 /tests/test_engines_satisfiable.py export-ignore
 
 # crema-feature exclude-standalone
-/tests/test_mcp_serve.py export-ignore
-/tests/test_mini_swe_runner.py export-ignore
 /tests/test_trajectory_compressor.py export-ignore
 /tests/test_trajectory_compressor_async.py export-ignore
 
@@ -823,14 +728,8 @@ docker/entrypoint.sh text eol=lf
 
 # crema-feature exclude-messaging
 /tests/tools/test_send_message_missing_platforms.py export-ignore
-/tests/tools/test_send_message_react.py export-ignore
-/tests/tools/test_send_message_slack.py export-ignore
-/tests/tools/test_send_message_telegram_proxy.py export-ignore
-/tests/tools/test_send_message_tool.py export-ignore
 /tests/tools/test_slack_send_message_media.py export-ignore
 
-# crema-feature exclude-spotify
-/tests/tools/test_spotify_client.py export-ignore
 
 # crema-feature non-feature 검증 전용 시험 파일이라 제외해도 사용자 실행 경로는 바뀌지 않는다.
 /tests/tools/test_subprocess_stdin_guard.py export-ignore
@@ -885,7 +784,6 @@ docker/entrypoint.sh text eol=lf
 /website/i18n export-ignore
 /website/package-lock.json export-ignore
 /website/package.json export-ignore
-/website/plugins export-ignore
 /website/scripts export-ignore
 /website/sidebars.ts export-ignore
 /website/src export-ignore
@@ -893,3 +791,741 @@ docker/entrypoint.sh text eol=lf
 /website/static/img export-ignore
 /website/static/oauth export-ignore
 /website/tsconfig.json export-ignore
+
+# Additional exclusions reviewed against Hermes v0.23.3.
+
+# crema-feature exclude-catalog
+/tests/hermes_cli/test_plugin_catalog_known_issues.py export-ignore
+/tests/hermes_cli/test_plugin_validate_core_mutation.py export-ignore
+/tests/hermes_cli/test_plugin_validate_core_override_scope.py export-ignore
+/tests/hermes_cli/test_plugin_validate_credentialed_url.py export-ignore
+/tests/hermes_cli/test_plugin_validate_locales.py export-ignore
+/tests/hermes_cli/test_plugin_validate_private_imports.py export-ignore
+
+# crema-feature exclude-dashboard
+/plugins/dashboard_auth/session_token export-ignore
+/tests/docker/test_webapp_bundle.py export-ignore
+/tests/gateway/test_webapp_browser_credential.py export-ignore
+/tests/gateway/test_webapp_bundle.py export-ignore
+/tests/gateway/test_webapp_cookie_writes.py export-ignore
+/tests/gateway/test_webapp_gated_sign_out.py export-ignore
+/tests/gateway/test_webapp_listener.py export-ignore
+/tests/gateway/test_webapp_listener_fallback.py export-ignore
+/tests/gateway/test_webapp_owner_identity.py export-ignore
+/tests/gateway/test_webapp_public_url.py export-ignore
+/tests/gateway/test_webapp_settings.py export-ignore
+/tests/gateway/test_webapp_ws_originless_remote_ticket.py export-ignore
+/tests/hermes_cli/test_dashboard_auth_session_token_gate.py export-ignore
+/tests/hermes_cli/test_dashboard_auth_session_token_header.py export-ignore
+/tests/hermes_cli/test_web_host_terminal.py export-ignore
+/tests/hermes_cli/test_web_host_terminal_drain_pool.py export-ignore
+/tests/hermes_cli/test_web_host_terminal_lifespan.py export-ignore
+/tests/hermes_cli/test_web_host_terminal_locale.py export-ignore
+/tests/hermes_cli/test_web_host_terminal_persistence.py export-ignore
+/tests/hermes_cli/test_webapp_access.py export-ignore
+/tests/hermes_cli/test_webapp_access_ports.py export-ignore
+/tests/hermes_cli/test_webapp_access_restart_failure.py export-ignore
+/tests/hermes_cli/test_webapp_access_start_progress.py export-ignore
+/tests/hermes_cli/test_webapp_access_start_record.py export-ignore
+/tests/hermes_cli/test_webapp_access_status_lock.py export-ignore
+/tests/hermes_cli/test_webapp_deployment_session_token.py export-ignore
+/tests/hermes_cli/test_webapp_desktop_plugin_halves.py export-ignore
+/tests/hermes_cli/test_webapp_desktop_plugins.py export-ignore
+/tests/hermes_cli/test_webapp_file_urls.py export-ignore
+/tests/hermes_cli/test_webapp_gated_sign_out.py export-ignore
+/tests/hermes_cli/test_webapp_gateway_ticket.py export-ignore
+/tests/hermes_cli/test_webapp_launch.py export-ignore
+/tests/hermes_cli/test_webapp_launcher.py export-ignore
+/tests/hermes_cli/test_webapp_launcher_reasons.py export-ignore
+/tests/hermes_cli/test_webapp_page_csp.py export-ignore
+/tests/hermes_cli/test_webapp_page_previews.py export-ignore
+/tests/hermes_cli/test_webapp_preview_documents.py export-ignore
+/tests/hermes_cli/test_webapp_private_bootstrap.py export-ignore
+/tests/hermes_cli/test_webapp_private_launch.py export-ignore
+/tests/hermes_cli/test_webapp_relay_fetch_site.py export-ignore
+/tests/hermes_cli/test_webapp_relay_proxy.py export-ignore
+/tests/hermes_cli/test_webapp_relay_target.py export-ignore
+/tests/hermes_cli/test_webapp_renderer_build.py export-ignore
+/tests/hermes_cli/test_webapp_sign_out_sockets.py export-ignore
+/tests/hermes_cli/test_webapp_socket_profile_scope.py export-ignore
+/tests/hermes_cli/test_webapp_socket_tickets.py export-ignore
+/tests/hermes_cli/test_webapp_ssh_terminal.py export-ignore
+/tests/hermes_cli/test_webapp_status_signed_out.py export-ignore
+/tests/hermes_cli/test_webapp_ticket_profile.py export-ignore
+/tests/hermes_cli/test_webapp_upload_limit.py export-ignore
+/tests/hermes_cli/test_webapp_upload_security.py export-ignore
+/tests/hermes_cli/test_webapp_uploads.py export-ignore
+/tests/hermes_cli/test_webapp_voice_relay.py export-ignore
+/tests/hermes_cli/test_webapp_window_handoff.py export-ignore
+/tests/scripts/test_webapp_renderer_freshness.py export-ignore
+/tests/website/test_catalog_rules_mirror.py export-ignore
+
+# crema-feature exclude-desktop
+/tests/desktop export-ignore
+/tests/fixtures/legacy_desktop export-ignore
+/tests/gateway/test_desktop_process_verbs.py export-ignore
+/tests/hermes_cli/test_desktop_apparmor_install_non_linux.py export-ignore
+/tests/hermes_cli/test_desktop_apparmor_sandbox.py export-ignore
+/tests/hermes_cli/test_desktop_build_git_windows.py export-ignore
+/tests/hermes_cli/test_desktop_build_lock.py export-ignore
+/tests/hermes_cli/test_desktop_build_reuse.py export-ignore
+/tests/hermes_cli/test_desktop_cron_ticker_gateway_standdown.py export-ignore
+/tests/hermes_cli/test_desktop_esbuild_ignore_scripts.py export-ignore
+/tests/hermes_cli/test_desktop_native_deps_stale.py export-ignore
+/tests/hermes_cli/test_desktop_plugin_halves_host_fs.py export-ignore
+/tests/hermes_cli/test_desktop_plugin_halves_linked.py export-ignore
+/tests/hermes_cli/test_desktop_plugin_halves_tree.py export-ignore
+/tests/hermes_cli/test_desktop_plugin_install.py export-ignore
+/tests/hermes_cli/test_desktop_plugin_install_origin.py export-ignore
+/tests/hermes_cli/test_desktop_profile_launch.py export-ignore
+/tests/hermes_cli/test_desktop_release_holder_windows_live.py export-ignore
+/tests/hermes_cli/test_desktop_release_holders.py export-ignore
+/tests/hermes_cli/test_desktop_repo_discovery_config.py export-ignore
+/tests/hermes_cli/test_desktop_signin_long_poll.py export-ignore
+/tests/hermes_cli/test_desktop_socket_tmpdir.py export-ignore
+/tests/hermes_cli/test_desktop_source_build.py export-ignore
+/tests/hermes_cli/test_desktop_source_electron_missing.py export-ignore
+/tests/hermes_cli/test_desktop_swap_crash_recovery.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_linux_gate_arm.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_mac_swap_interrupt.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_macos_no_browser.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_marker_gnu_date.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_posix_handoff_protocol.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_posix_marker.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_posix_marker_corpus.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_posix_marker_locale.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_relaunch_proxy_env.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_runtime_unicode.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_windows_child_stage.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_windows_commit_outcome.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_windows_handoff_lineage.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_windows_log_concurrency.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_windows_log_exit_flush.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_windows_marker.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_windows_marker_corpus.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_windows_marker_lock.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_windows_marker_ops.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_windows_python_handoff.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_windows_relaunch_cwd.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_windows_release_holders.py export-ignore
+/tests/scripts/desktop_update/test_desktop_update_windows_timestamp.py export-ignore
+/tests/scripts/install/test_windows_appinstaller_loopback.py export-ignore
+/tests/scripts/test_desktop_build_cache.py export-ignore
+/tests/scripts/test_desktop_bundle_frontends.py export-ignore
+/tests/scripts/test_desktop_cli_wrapper.py export-ignore
+/tests/scripts/test_desktop_preparation.py export-ignore
+/tests/scripts/test_desktop_toolchain.py export-ignore
+/tests/scripts/test_desktop_update_target.py export-ignore
+/tests/tools/test_bot_desktop_idle_self_stop.py export-ignore
+/tests/tools/test_bot_desktop_placement.py export-ignore
+/tests/tools/test_bot_desktop_published_env.py export-ignore
+/tests/tools/test_bot_desktop_sandbox_chromium.py export-ignore
+/tests/tui_gateway/test_desktop_session_row_git_meta.py export-ignore
+/tests/tui_gateway/test_desktop_session_workspace_persistence.py export-ignore
+
+# crema-feature exclude-development
+/.github/CODEOWNERS export-ignore
+/.github/actions/check-clean-worktree/action.yml export-ignore
+/.github/actions/desktop-build-cache/action.yml export-ignore
+/.github/actions/setup-pm/README.md export-ignore
+/.github/actions/setup-pm/action.yml export-ignore
+/.github/actions/setup-pm/prune/action.yml export-ignore
+/.github/actions/setup-pm/prune/index.mjs export-ignore
+/.github/actions/setup-windows-build-deps/action.yml export-ignore
+/.github/blob-size-allowlist.txt export-ignore
+/.github/workflows/README.md export-ignore
+/.github/workflows/archive-inputs.yml export-ignore
+/.github/workflows/bootstrap-installer-build.yml export-ignore
+/.github/workflows/bootstrap-installer.yml export-ignore
+/.github/workflows/canary-e2e.yml export-ignore
+/.github/workflows/canary-release.yml export-ignore
+/.github/workflows/catalog-dead-repos.yml export-ignore
+/.github/workflows/catalog-tests.yml export-ignore
+/.github/workflows/desktop-bundle-smoke.yml export-ignore
+/.github/workflows/desktop-bundled-release.yml export-ignore
+/.github/workflows/docs-search-monitor.yml export-ignore
+/.github/workflows/e2e-desktop-update.yml export-ignore
+/.github/workflows/install-e2e-red.yml export-ignore
+/.github/workflows/pm-bundle.yml export-ignore
+/.github/workflows/remote-backends.yml export-ignore
+/.github/workflows/repo-guards.yml export-ignore
+/.github/workflows/sandbox-image.yml export-ignore
+/.github/workflows/stable-release-publication.yml export-ignore
+/.github/workflows/stable-release.yml export-ignore
+/.github/workflows/termux-verify.yml export-ignore
+/.github/workflows/windows-bundle-sdk.yml export-ignore
+/.github/workflows/windows-desktop-attach-e2e.yml export-ignore
+/.github/workflows/windows-install-update-e2e.yml export-ignore
+/hermes_platform/AGENTS.md export-ignore
+/justfile export-ignore
+/lefthook.yml export-ignore
+/pm/AGENTS.md export-ignore
+/pnpm-lock.yaml export-ignore
+/pnpm-workspace.yaml export-ignore
+/ruff.toml export-ignore
+/scripts/audit-old-updater-imports.py export-ignore
+/scripts/boundary_lint.py export-ignore
+/scripts/boundary_lint_baseline.json export-ignore
+/scripts/build-bundle.ps1 export-ignore
+/scripts/build-bundle.sh export-ignore
+/scripts/build/README.md export-ignore
+/scripts/build/agent.py export-ignore
+/scripts/build/desktop-reuse.mjs export-ignore
+/scripts/build/desktop.mjs export-ignore
+/scripts/build/electron-runtime.mjs export-ignore
+/scripts/build/freshness.mjs export-ignore
+/scripts/build/frontend-common.mjs export-ignore
+/scripts/build/icon_environment.py export-ignore
+/scripts/build/inputs.py export-ignore
+/scripts/build/launcher_wrapper.py export-ignore
+/scripts/build/launchers.py export-ignore
+/scripts/build/mint_launchers.py export-ignore
+/scripts/build/node-deps-heartbeat.mjs export-ignore
+/scripts/build/node-deps-lock.mjs export-ignore
+/scripts/build/node-deps-relay.mjs export-ignore
+/scripts/build/node-deps-watcher.mjs export-ignore
+/scripts/build/node-deps.mjs export-ignore
+/scripts/build/pnpm-lock.mjs export-ignore
+/scripts/build/python.mjs export-ignore
+/scripts/build/tui.mjs export-ignore
+/scripts/build/web.mjs export-ignore
+/scripts/build/webapp.mjs export-ignore
+/scripts/build/windows-deps.ps1 export-ignore
+/scripts/bundle-store-msixbundle.mjs export-ignore
+/scripts/bundles/appimage_checks.py export-ignore
+/scripts/bundles/bytecode.py export-ignore
+/scripts/bundles/channel_artifacts.py export-ignore
+/scripts/bundles/desktop.py export-ignore
+/scripts/bundles/desktop_inputs.py export-ignore
+/scripts/bundles/desktop_prepare.py export-ignore
+/scripts/bundles/desktop_toolchain.py export-ignore
+/scripts/bundles/dmgbuild_diagnostics.py export-ignore
+/scripts/bundles/glibc_floor.py export-ignore
+/scripts/bundles/msix_names.py export-ignore
+/scripts/bundles/native.py export-ignore
+/scripts/bundles/native_build.py export-ignore
+/scripts/bundles/native_prepared.py export-ignore
+/scripts/bundles/payload.py export-ignore
+/scripts/bundles/release_artifacts.py export-ignore
+/scripts/bundles/set_dmg_volume_icon.sh export-ignore
+/scripts/bundles/stage.py export-ignore
+/scripts/bundles/stage_x64_gpu.py export-ignore
+/scripts/check export-ignore
+/scripts/check_bash_shebangs.py export-ignore
+/scripts/check_config_yaml_readers.py export-ignore
+/scripts/check_detached_spawns.py export-ignore
+/scripts/check_packaged_imports.py export-ignore
+/scripts/check_profile_create_entry.py export-ignore
+/scripts/check_tool_discovery.py export-ignore
+/scripts/code_health/__init__.py export-ignore
+/scripts/code_health/__main__.py export-ignore
+/scripts/code_health/cli.py export-ignore
+/scripts/code_health/compare.py export-ignore
+/scripts/code_health/config.py export-ignore
+/scripts/code_health/gitio.py export-ignore
+/scripts/code_health/measure.py export-ignore
+/scripts/code_health/model.py export-ignore
+/scripts/code_health/py_ast.py export-ignore
+/scripts/code_health/py_rules.py export-ignore
+/scripts/code_health/py_rules_error_predicate.py export-ignore
+/scripts/code_health/py_rules_log_content.py export-ignore
+/scripts/code_health/py_rules_sleep.py export-ignore
+/scripts/code_health/py_rules_sqlite.py export-ignore
+/scripts/code_health/py_structure.py export-ignore
+/scripts/code_health/replay.py export-ignore
+/scripts/code_health/report.py export-ignore
+/scripts/code_health/ruff_runner.py export-ignore
+/scripts/code_health/ts_measure.py export-ignore
+/scripts/code_health/ts_units.mjs export-ignore
+/scripts/dev-minimal-sandbox.sh export-ignore
+/scripts/gen-bootstrap-pins.py export-ignore
+/scripts/gen_gateway_command_parity.py export-ignore
+/scripts/gen_plugin_api_docs.py export-ignore
+/scripts/gen_serve_handler_ledger.py export-ignore
+/scripts/generate-icons.mjs export-ignore
+/scripts/generate_icons.py export-ignore
+/scripts/hermes-python export-ignore
+/scripts/hook-just export-ignore
+/scripts/install_root_lint.py export-ignore
+/scripts/install_root_lint_baseline.json export-ignore
+/scripts/move/build_chunk.py export-ignore
+/scripts/move/exclusions.py export-ignore
+/scripts/move/generate_shims.py export-ignore
+/scripts/move/migrate_branch.py export-ignore
+/scripts/move/pieces.py export-ignore
+/scripts/move/renames.py export-ignore
+/scripts/move/rewrite_docs.py export-ignore
+/scripts/move/rewrite_imports.py export-ignore
+/scripts/move/rewrite_toml.py export-ignore
+/scripts/move/sinks.py export-ignore
+/scripts/msix-shared.mjs export-ignore
+/scripts/release-content-types.json export-ignore
+/scripts/releases/authors.py export-ignore
+/scripts/releases/authors_legacy.py export-ignore
+/scripts/releases/bundle_env.py export-ignore
+/scripts/releases/channel_build.py export-ignore
+/scripts/releases/channel_disposable.py export-ignore
+/scripts/releases/channel_publish.py export-ignore
+/scripts/releases/channel_releases.py export-ignore
+/scripts/releases/channels.py export-ignore
+/scripts/releases/commit_build.py export-ignore
+/scripts/releases/darwin.py export-ignore
+/scripts/releases/desktop_targets.py export-ignore
+/scripts/releases/dispatch_log.py export-ignore
+/scripts/releases/distance.py export-ignore
+/scripts/releases/docker.py export-ignore
+/scripts/releases/draft_warning.py export-ignore
+/scripts/releases/entrypoint.py export-ignore
+/scripts/releases/handoff.py export-ignore
+/scripts/releases/job_groups.py export-ignore
+/scripts/releases/lanes.py export-ignore
+/scripts/releases/pick_tags.py export-ignore
+/scripts/releases/progress.py export-ignore
+/scripts/releases/r2.py export-ignore
+/scripts/releases/r2_multipart.py export-ignore
+/scripts/releases/r2_scope.py export-ignore
+/scripts/releases/semver.py export-ignore
+/scripts/releases/sequencer.py export-ignore
+/scripts/releases/stable.py export-ignore
+/scripts/releases/stamping.py export-ignore
+/scripts/releases/store.py export-ignore
+/scripts/releases/upload_summary.py export-ignore
+/scripts/releases/versioning.py export-ignore
+/scripts/relock.sh export-ignore
+/scripts/render-builds-table.py export-ignore
+/scripts/run-in-hermes-env export-ignore
+/scripts/run-lefthook export-ignore
+/scripts/scan_plugin_payloads.py export-ignore
+/scripts/smoke-payload.sh export-ignore
+/scripts/stage-msixbundle.mjs export-ignore
+/scripts/termux/assembly_permissions.sh export-ignore
+/scripts/termux/build.py export-ignore
+/scripts/termux/build_builder_image.sh export-ignore
+/scripts/termux/build_config.sh export-ignore
+/scripts/termux/build_cpython.sh export-ignore
+/scripts/termux/build_deb.sh export-ignore
+/scripts/termux/build_environment.py export-ignore
+/scripts/termux/build_node.sh export-ignore
+/scripts/termux/build_uv.sh export-ignore
+/scripts/termux/build_wheels.py export-ignore
+/scripts/termux/check_apt.sh export-ignore
+/scripts/termux/check_deb.sh export-ignore
+/scripts/termux/deb_version.py export-ignore
+/scripts/termux/launchers.py export-ignore
+/scripts/termux/payload_facts.py export-ignore
+/scripts/termux/python_linkage.py export-ignore
+/scripts/termux/retag_wheel.py export-ignore
+/scripts/termux/stage_apt_repo.py export-ignore
+/scripts/termux/stage_payload.sh export-ignore
+/scripts/termux/stage_runtime_libs.py export-ignore
+/scripts/termux/termux-builder.Dockerfile export-ignore
+/scripts/termux/termux_build.sh export-ignore
+/scripts/termux/termux_pkg_build.sh export-ignore
+/scripts/termux/validate_installed.py export-ignore
+/scripts/termux/wheelhouse_cache.py export-ignore
+/scripts/tool_store_pins.py export-ignore
+/scripts/update-test/HANDOFF.md export-ignore
+/scripts/update-test/hermes-update-rehearsal.ps1 export-ignore
+/scripts/update-test/hermes-update-rehearsal.sh export-ignore
+/scripts/update-test/smoke-test.ps1 export-ignore
+/scripts/update-test/smoke-test.sh export-ignore
+/scripts/verify-bootstrap-version-stamp.py export-ignore
+/scripts/windows-build-deps.ps1 export-ignore
+/scripts/write_install_stamp.py export-ignore
+/tests/AGENTS.md export-ignore
+/tests/evals/test_core_tool_deferral_sandbox.py export-ignore
+/tests/fixtures/pnpm_lock export-ignore
+/tests/fixtures/prompt_surface export-ignore
+/tests/scripts/desktop_update/legacy_desktop_reader.py export-ignore
+/tests/scripts/desktop_update/lineage_rule_cases.py export-ignore
+/tests/scripts/desktop_update/test_handoff_delegate_publication.py export-ignore
+/tests/scripts/desktop_update/test_handoff_result_identity.py export-ignore
+/tests/scripts/desktop_update/test_posix_handoff_pid_export.py export-ignore
+/tests/scripts/desktop_update/windows_handoff_support.py export-ignore
+/tests/scripts/install/conftest.py export-ignore
+/tests/scripts/install/test_dmg_install_driver.py export-ignore
+/tests/scripts/install/test_install_clone_throttle_fallback.py export-ignore
+/tests/scripts/install/test_install_desktop_product_present.py export-ignore
+/tests/scripts/install/test_install_diverged_rescue_ref.py export-ignore
+/tests/scripts/install/test_install_ps1_execution_policy.py export-ignore
+/tests/scripts/install/test_install_ps1_iex_failure.py export-ignore
+/tests/scripts/install/test_install_ps1_json_failure_frame.py export-ignore
+/tests/scripts/install/test_install_ps1_native_calls.py export-ignore
+/tests/scripts/install/test_install_ps1_pinned_git_extract.py export-ignore
+/tests/scripts/install/test_install_ps1_script_suites.py export-ignore
+/tests/scripts/install/test_install_ps1_skipsetup_alias.py export-ignore
+/tests/scripts/install/test_install_ps1_staged_git.py export-ignore
+/tests/scripts/install/test_mac_backend_health.py export-ignore
+/tests/scripts/install/test_mac_update_evidence.py export-ignore
+/tests/scripts/install/test_pm_desktop_launch_capture.py export-ignore
+/tests/scripts/install/test_uv_bootstrap_tarball_ownership.py export-ignore
+/tests/scripts/install/test_windows_uia_buttons.py export-ignore
+/tests/scripts/install/test_windows_update_evidence.py export-ignore
+/tests/scripts/test_activation_guard.py export-ignore
+/tests/scripts/test_agent_build.py export-ignore
+/tests/scripts/test_appinstaller.py export-ignore
+/tests/scripts/test_archive_inputs.py export-ignore
+/tests/scripts/test_baked_bytecode.py export-ignore
+/tests/scripts/test_bash_shebangs.py export-ignore
+/tests/scripts/test_bootstrap_mirror.py export-ignore
+/tests/scripts/test_bootstrap_pins_fragment.py export-ignore
+/tests/scripts/test_boundary_lint.py export-ignore
+/tests/scripts/test_build_skills_index_resolve.py export-ignore
+/tests/scripts/test_bundle_glibc_floor.py export-ignore
+/tests/scripts/test_bundle_msix_names.py export-ignore
+/tests/scripts/test_bundle_native.py export-ignore
+/tests/scripts/test_bundle_payload.py export-ignore
+/tests/scripts/test_bundle_pnpm.py export-ignore
+/tests/scripts/test_channel_build_versions.py export-ignore
+/tests/scripts/test_check_agents_md_size.py export-ignore
+/tests/scripts/test_check_backend_imports.py export-ignore
+/tests/scripts/test_check_detached_spawns.py export-ignore
+/tests/scripts/test_check_packaged_imports.py export-ignore
+/tests/scripts/test_check_tool_discovery.py export-ignore
+/tests/scripts/test_code_health.py export-ignore
+/tests/scripts/test_code_health_cli.py export-ignore
+/tests/scripts/test_code_health_error_predicate_rule.py export-ignore
+/tests/scripts/test_code_health_identity.py export-ignore
+/tests/scripts/test_code_health_log_content_rule.py export-ignore
+/tests/scripts/test_code_health_profile_setter_rule.py export-ignore
+/tests/scripts/test_code_health_rules.py export-ignore
+/tests/scripts/test_code_health_sleep_rule.py export-ignore
+/tests/scripts/test_code_health_sqlite_rule.py export-ignore
+/tests/scripts/test_commit_bundle_entrypoints.py export-ignore
+/tests/scripts/test_commit_stamp_identity.py export-ignore
+/tests/scripts/test_dev_sandbox.py export-ignore
+/tests/scripts/test_dispatch_log.py export-ignore
+/tests/scripts/test_dmgbuild_diagnostics.py export-ignore
+/tests/scripts/test_footgun_encoding_direction.py export-ignore
+/tests/scripts/test_fresh_source_install.py export-ignore
+/tests/scripts/test_generate_shims.py export-ignore
+/tests/scripts/test_hermes_python.py export-ignore
+/tests/scripts/test_icon_flavors.py export-ignore
+/tests/scripts/test_icon_generation_exit.py export-ignore
+/tests/scripts/test_install_ps1_chosen_channel.py export-ignore
+/tests/scripts/test_install_ps1_desktop_stage.py export-ignore
+/tests/scripts/test_install_ps1_stable_default.py export-ignore
+/tests/scripts/test_install_root_lint.py export-ignore
+/tests/scripts/test_install_stage_frames.py export-ignore
+/tests/scripts/test_job_groups.py export-ignore
+/tests/scripts/test_linux_appimage_acceptance.py export-ignore
+/tests/scripts/test_macos_channel_artifact_record.py export-ignore
+/tests/scripts/test_mint_launchers.py export-ignore
+/tests/scripts/test_move_build_chunk.py export-ignore
+/tests/scripts/test_move_partial_folder.py export-ignore
+/tests/scripts/test_move_rewrite_docs.py export-ignore
+/tests/scripts/test_native_build.py export-ignore
+/tests/scripts/test_payload_digests.py export-ignore
+/tests/scripts/test_pick_release_tags.py export-ignore
+/tests/scripts/test_pm_build_consumers.py export-ignore
+/tests/scripts/test_pm_runtime_bundle.py export-ignore
+/tests/scripts/test_powershell_script_syntax.py export-ignore
+/tests/scripts/test_release_artifacts.py export-ignore
+/tests/scripts/test_release_build_commit.py export-ignore
+/tests/scripts/test_release_canary_git.py export-ignore
+/tests/scripts/test_release_changelog.py export-ignore
+/tests/scripts/test_release_channel_build.py export-ignore
+/tests/scripts/test_release_channels.py export-ignore
+/tests/scripts/test_release_darwin.py export-ignore
+/tests/scripts/test_release_docker_cli.py export-ignore
+/tests/scripts/test_release_entrypoint.py export-ignore
+/tests/scripts/test_release_handoff.py export-ignore
+/tests/scripts/test_release_lanes.py export-ignore
+/tests/scripts/test_release_progress.py export-ignore
+/tests/scripts/test_release_r2.py export-ignore
+/tests/scripts/test_release_revision_anchor.py export-ignore
+/tests/scripts/test_release_sequencer.py export-ignore
+/tests/scripts/test_release_store.py export-ignore
+/tests/scripts/test_release_tag_sampling.py export-ignore
+/tests/scripts/test_release_tags.py export-ignore
+/tests/scripts/test_release_version_from_ref.py export-ignore
+/tests/scripts/test_render_builds_binding.py export-ignore
+/tests/scripts/test_render_builds_publication.py export-ignore
+/tests/scripts/test_ruff_runner_cli.py export-ignore
+/tests/scripts/test_run_in_hermes_env.py export-ignore
+/tests/scripts/test_run_lefthook.py export-ignore
+/tests/scripts/test_scan_plugin_payloads.py export-ignore
+/tests/scripts/test_setup_toolchain.py export-ignore
+/tests/scripts/test_source_driver.py export-ignore
+/tests/scripts/test_source_update_command.py export-ignore
+/tests/scripts/test_stable_admission.py export-ignore
+/tests/scripts/test_stable_release.py export-ignore
+/tests/scripts/test_stage_apt_repo.py export-ignore
+/tests/scripts/test_termux_agent_assembly.py export-ignore
+/tests/scripts/test_termux_assembly_permissions.py export-ignore
+/tests/scripts/test_termux_build_driver.py export-ignore
+/tests/scripts/test_termux_build_wheels.py export-ignore
+/tests/scripts/test_termux_commit_identity.py export-ignore
+/tests/scripts/test_termux_deb_version.py export-ignore
+/tests/scripts/test_termux_launchers.py export-ignore
+/tests/scripts/test_termux_python_linkage.py export-ignore
+/tests/scripts/test_termux_retag_wheel.py export-ignore
+/tests/scripts/test_termux_runtime_libs.py export-ignore
+/tests/scripts/test_termux_update_refusal.py export-ignore
+/tests/scripts/test_termux_wheelhouse_cache.py export-ignore
+/tests/scripts/test_tool_store_pins.py export-ignore
+/tests/scripts/test_tree_guard_missing_roots.py export-ignore
+/tests/scripts/test_upload_summary.py export-ignore
+/tests/scripts/test_verify_bootstrap_version_stamp.py export-ignore
+/tests/scripts/test_verify_plugin_preservation.py export-ignore
+/tests/scripts/test_verify_user_state.py export-ignore
+/tests/scripts/test_version_stamping.py export-ignore
+/tests/scripts/test_write_install_stamp.py export-ignore
+/tests/scripts/test_x64_gpu_staging.py export-ignore
+/tests/test_audit_old_updater_imports.py export-ignore
+/tests/test_platforms_marker.py export-ignore
+
+# crema-feature exclude-kanban
+/tests/gateway/test_session_kanban.py export-ignore
+/tests/gateway/test_session_kanban_run_off_loop.py export-ignore
+/tests/gateway/test_session_kanban_turn_recovery.py export-ignore
+/tests/hermes_cli/test_kanban_notify_subscribe_caller.py export-ignore
+/tests/hermes_cli/test_kanban_notify_subscribe_thread.py export-ignore
+/tests/hermes_cli/test_kanban_owner_receipt_reclaim.py export-ignore
+/tests/hermes_cli/test_kanban_worker_admission_wait.py export-ignore
+/tests/hermes_cli/test_kanban_worker_env.py export-ignore
+/tests/hermes_cli/test_kanban_worker_log_mode.py export-ignore
+/tests/hermes_cli/test_kanban_worker_log_shared_owner.py export-ignore
+/tests/hermes_cli/test_kanban_worker_owner_wait.py export-ignore
+/tests/hermes_cli/test_kanban_worker_restart_wait.py export-ignore
+/tests/hermes_cli/test_kanban_worker_socket_recovery.py export-ignore
+/tests/hermes_cli/test_kanban_workflow.py export-ignore
+/tests/plugins/test_kanban_workflow_matrix.py export-ignore
+
+# crema-feature exclude-local-lmstudio
+/plugins/model-providers/lmstudio export-ignore
+
+# crema-feature exclude-messaging
+/tests/gateway/outbound/test_send_message_slack.py export-ignore
+/tests/gateway/outbound/test_send_message_tool.py export-ignore
+/tests/gateway/test_bluebubbles_plugin.py export-ignore
+/tests/gateway/test_dingtalk_reconnect_circuit_breaker.py export-ignore
+/tests/gateway/test_discord_approval_lifecycle.py export-ignore
+/tests/gateway/test_discord_audio_delivery.py export-ignore
+/tests/gateway/test_discord_auto_thread_prompt_parity.py export-ignore
+/tests/gateway/test_discord_auto_thread_rename_pin.py export-ignore
+/tests/gateway/test_discord_channel_context_name_tag.py export-ignore
+/tests/gateway/test_discord_command_scopes.py export-ignore
+/tests/gateway/test_discord_config_allowlist_multiplex.py export-ignore
+/tests/gateway/test_discord_connect_username_access.py export-ignore
+/tests/gateway/test_discord_turn_prompt_parity.py export-ignore
+/tests/gateway/test_discord_vault_code_modal.py export-ignore
+/tests/gateway/test_discord_voice_rekey.py export-ignore
+/tests/gateway/test_discord_voice_role_grant.py export-ignore
+/tests/gateway/test_discord_voice_stale_binding.py export-ignore
+/tests/gateway/test_email_redelivery_timestamp.py export-ignore
+/tests/gateway/test_email_sender_identity.py export-ignore
+/tests/gateway/test_feishu_audio_delivery.py export-ignore
+/tests/gateway/test_feishu_card_action_gateway_authz.py export-ignore
+/tests/gateway/test_feishu_clarify_choice_cards.py export-ignore
+/tests/gateway/test_feishu_webhook_quota.py export-ignore
+/tests/gateway/test_google_chat_download_uri_proxy.py export-ignore
+/tests/gateway/test_google_chat_proxy_traceback.py export-ignore
+/tests/gateway/test_google_chat_setup_files_authz.py export-ignore
+/tests/gateway/test_matrix_deps_rebind.py export-ignore
+/tests/gateway/test_matrix_encrypted_drop_warning.py export-ignore
+/tests/gateway/test_matrix_media_download_cap.py export-ignore
+/tests/gateway/test_matrix_socks_fallback_proxy_secret.py export-ignore
+/tests/gateway/test_mattermost_inbound_attachments.py export-ignore
+/tests/gateway/test_mattermost_native_admission.py export-ignore
+/tests/gateway/test_qqbot_approval_request_binding.py export-ignore
+/tests/gateway/test_signal_inbound_attachments.py export-ignore
+/tests/gateway/test_signal_plugin.py export-ignore
+/tests/gateway/test_simplex_inbound_files.py export-ignore
+/tests/gateway/test_slack_agent_sessions_api.py export-ignore
+/tests/gateway/test_slack_connect_external_users.py export-ignore
+/tests/gateway/test_slack_forwarded_messages.py export-ignore
+/tests/gateway/test_slack_reaction_context.py export-ignore
+/tests/gateway/test_slack_replay_display_name.py export-ignore
+/tests/gateway/test_slack_reply_expected.py export-ignore
+/tests/gateway/test_slack_standalone_media_proxy_secret.py export-ignore
+/tests/gateway/test_slack_thread_context_allowlist.py export-ignore
+/tests/gateway/test_slack_thread_watermark_off_loop.py export-ignore
+/tests/gateway/test_slack_vault_code_modal.py export-ignore
+/tests/gateway/test_telegram_allow_from_groups_multiplex.py export-ignore
+/tests/gateway/test_telegram_approval_refusal_expired_query.py export-ignore
+/tests/gateway/test_telegram_callback_ack.py export-ignore
+/tests/gateway/test_telegram_chat_type_sites.py export-ignore
+/tests/gateway/test_telegram_clarify_multiselect.py export-ignore
+/tests/gateway/test_telegram_command_botname.py export-ignore
+/tests/gateway/test_telegram_conflict_reconnect.py export-ignore
+/tests/gateway/test_telegram_contact_observe.py export-ignore
+/tests/gateway/test_telegram_dice.py export-ignore
+/tests/gateway/test_telegram_dm_threads_shared.py export-ignore
+/tests/gateway/test_telegram_dm_threads_shared_review.py export-ignore
+/tests/gateway/test_telegram_dm_topic_auto_transfer.py export-ignore
+/tests/gateway/test_telegram_doh_body_cap.py export-ignore
+/tests/gateway/test_telegram_doh_proxy_secret.py export-ignore
+/tests/gateway/test_telegram_draft_delete_flood_window.py export-ignore
+/tests/gateway/test_telegram_fallback_connect_budget.py export-ignore
+/tests/gateway/test_telegram_fifo_grace.py export-ignore
+/tests/gateway/test_telegram_flood_cooldown_restart.py export-ignore
+/tests/gateway/test_telegram_flood_window_delete_waits.py export-ignore
+/tests/gateway/test_telegram_getupdates_keepalive.py export-ignore
+/tests/gateway/test_telegram_held_inbound_order.py export-ignore
+/tests/gateway/test_telegram_idless_send_ledger.py export-ignore
+/tests/gateway/test_telegram_intake_allowlist_union.py export-ignore
+/tests/gateway/test_telegram_leading_bot_mentions.py export-ignore
+/tests/gateway/test_telegram_live_location.py export-ignore
+/tests/gateway/test_telegram_local_bot_api_files.py export-ignore
+/tests/gateway/test_telegram_media_flood.py export-ignore
+/tests/gateway/test_telegram_media_upload_retry.py export-ignore
+/tests/gateway/test_telegram_native_draft_budget.py export-ignore
+/tests/gateway/test_telegram_new_topic_opener.py export-ignore
+/tests/gateway/test_telegram_observe_batch_actor.py export-ignore
+/tests/gateway/test_telegram_observe_command_route.py export-ignore
+/tests/gateway/test_telegram_observe_resume_ownership.py export-ignore
+/tests/gateway/test_telegram_picker_message_binding.py export-ignore
+/tests/gateway/test_telegram_preview_parse_mode.py export-ignore
+/tests/gateway/test_telegram_proxy_error_text_kept.py export-ignore
+/tests/gateway/test_telegram_rich_oversized_parts.py export-ignore
+/tests/gateway/test_telegram_root_dm_lobby_split.py export-ignore
+/tests/gateway/test_telegram_send_audio.py export-ignore
+/tests/gateway/test_telegram_send_path_recovery_sweep.py export-ignore
+/tests/gateway/test_telegram_sent_text_index_finals.py export-ignore
+/tests/gateway/test_telegram_split_entities.py export-ignore
+/tests/gateway/test_telegram_stale_callback.py export-ignore
+/tests/gateway/test_telegram_status_description_restore.py export-ignore
+/tests/gateway/test_telegram_stop_read_receipt.py export-ignore
+/tests/gateway/test_telegram_topic_handoff_move.py export-ignore
+/tests/gateway/test_telegram_topic_handoff_reset.py export-ignore
+/tests/gateway/test_telegram_topic_session_switch.py export-ignore
+/tests/gateway/test_telegram_typing_opt_out.py export-ignore
+/tests/gateway/test_telegram_username_home_live_error.py export-ignore
+/tests/gateway/test_telegram_vault_code_reply.py export-ignore
+/tests/gateway/test_whatsapp_bridge_auth.py export-ignore
+/tests/gateway/test_whatsapp_bridge_auth_listeners.py export-ignore
+/tests/gateway/test_whatsapp_bridge_env_scrub.py export-ignore
+/tests/gateway/test_whatsapp_bridge_log_rotation.py export-ignore
+/tests/gateway/test_whatsapp_bridge_port_release.py export-ignore
+/tests/gateway/test_whatsapp_delivery_status_log.py export-ignore
+/tests/gateway/test_whatsapp_multiplex.py export-ignore
+/tests/gateway/test_whatsapp_session_permissions.py export-ignore
+/tests/hermes_cli/test_mattermost_user_id_setup.py export-ignore
+/tests/hermes_cli/test_whatsapp_customer_facing_warning.py export-ignore
+/tests/hermes_cli/test_whatsapp_dashboard_repair.py export-ignore
+/tests/hermes_cli/test_whatsapp_dependency_refresh.py export-ignore
+/tests/hermes_cli/test_whatsapp_missing_runtime.py export-ignore
+/tests/hermes_cli/test_whatsapp_pairing_env_scrub.py export-ignore
+/tests/hermes_cli/test_whatsapp_passkey_pairing.py export-ignore
+/tests/plugins/test_irc_inbound_identity.py export-ignore
+/tests/plugins/test_telegram_clarify_multi_ptb.py export-ignore
+
+# crema-feature exclude-remote-config
+/plugins/config_backends export-ignore
+/tests/plugins/config_backends export-ignore
+
+# crema-feature exclude-setup-beat
+/tests/agent/test_setup_beat_card_round.py export-ignore
+/tests/tools/test_setup_beat_plugin_skills.py export-ignore
+/tests/tools/test_setup_beat_tool.py export-ignore
+/tools/setup_beat_tool.py export-ignore
+
+# crema-feature exclude-solstice
+/plugins/model-providers/solstice export-ignore
+/tests/plugins/model_providers/test_solstice_profile.py export-ignore
+
+# crema-feature exclude-standalone
+/activate export-ignore
+/activate.fish export-ignore
+/activate.ps1 export-ignore
+/setup-hermes.ps1 export-ignore
+/tests/docker/test_image_payload.py export-ignore
+/tests/docker/test_interactive_logging.py export-ignore
+/tests/docker/test_login_shell_path.py export-ignore
+/tests/docker/test_root_registration_symlink_races.py export-ignore
+/tests/docker/test_s6_gateway_planned_stop.py export-ignore
+/tests/docker/test_tui_gateway_startup.py export-ignore
+/tests/hermes_cli/test_source_build.py export-ignore
+/tests/hermes_cli/test_source_build_npmrc_bridge.py export-ignore
+/tests/install/BUNDLED_UPDATES.md export-ignore
+/tests/install/e2e-assets/bundle-inputs.mjs export-ignore
+/tests/install/e2e-assets/bundle-manifest.cjs export-ignore
+/tests/install/e2e-assets/bundle-plan.mjs export-ignore
+/tests/install/e2e-assets/bundle-smoke-metadata.mjs export-ignore
+/tests/install/e2e-assets/desktop-smoke-windows.ps1 export-ignore
+/tests/install/e2e-assets/desktop-smoke.ts export-ignore
+/tests/install/e2e-assets/installer-common.sh export-ignore
+/tests/install/e2e-assets/launch-capture/pm-launch.py export-ignore
+/tests/install/e2e-assets/mac-backend-health.sh export-ignore
+/tests/install/e2e-assets/mac-bundled-feed.mjs export-ignore
+/tests/install/e2e-assets/mac-bundled-manifest.cjs export-ignore
+/tests/install/e2e-assets/mac-bundled-relaunch-watch.cjs export-ignore
+/tests/install/e2e-assets/mac-bundled-serve.mjs export-ignore
+/tests/install/e2e-assets/mac-bundled-update-driver.mjs export-ignore
+/tests/install/e2e-assets/mac-bundled-verify.mjs export-ignore
+/tests/install/e2e-assets/mac-update-evidence.sh export-ignore
+/tests/install/e2e-assets/preserve-plugins.sh export-ignore
+/tests/install/e2e-assets/preserve-user-state.sh export-ignore
+/tests/install/e2e-assets/pty-run.py export-ignore
+/tests/install/e2e-assets/red-tracker.mjs export-ignore
+/tests/install/e2e-assets/smoke-env.d.mts export-ignore
+/tests/install/e2e-assets/smoke-env.mjs export-ignore
+/tests/install/e2e-assets/source-branch-probe.cjs export-ignore
+/tests/install/e2e-assets/source-build-env.ps1 export-ignore
+/tests/install/e2e-assets/source-build-env.sh export-ignore
+/tests/install/e2e-assets/source-desktop-smoke.mjs export-ignore
+/tests/install/e2e-assets/source-driver.ps1 export-ignore
+/tests/install/e2e-assets/source-driver.sh export-ignore
+/tests/install/e2e-assets/source-runtime-settle.d.mts export-ignore
+/tests/install/e2e-assets/source-runtime-settle.mjs export-ignore
+/tests/install/e2e-assets/source-update-command.sh export-ignore
+/tests/install/e2e-assets/source-update-observer.mjs export-ignore
+/tests/install/e2e-assets/source_driver.py export-ignore
+/tests/install/e2e-assets/update-ui.cjs export-ignore
+/tests/install/e2e-assets/update-window-chat.d.mts export-ignore
+/tests/install/e2e-assets/update-window-chat.mjs export-ignore
+/tests/install/e2e-assets/user-state-actions.sh export-ignore
+/tests/install/e2e-assets/verify-plugin-preservation.py export-ignore
+/tests/install/e2e-assets/verify-user-state.py export-ignore
+/tests/install/e2e-assets/windows-appinstaller-loopback.ps1 export-ignore
+/tests/install/e2e-assets/windows-bundle-metadata.ps1 export-ignore
+/tests/install/e2e-assets/windows-bundle-metadata.test.ps1 export-ignore
+/tests/install/e2e-assets/windows-bundle-plugin-smoke.ps1 export-ignore
+/tests/install/e2e-assets/windows-bundled-drive-update.ps1 export-ignore
+/tests/install/e2e-assets/windows-bundled-helpers.mjs export-ignore
+/tests/install/e2e-assets/windows-bundled-helpers.test.mjs export-ignore
+/tests/install/e2e-assets/windows-bundled-processes.test.ps1 export-ignore
+/tests/install/e2e-assets/windows-uia-buttons.ps1 export-ignore
+/tests/install/e2e-assets/windows-update-evidence.ps1 export-ignore
+/tests/install/macos-bundle-smoke.sh export-ignore
+/tests/install/macos-bundled-e2e.sh export-ignore
+/tests/install/windows-bundle-smoke.ps1 export-ignore
+/tests/install/windows-bundled-e2e.ps1 export-ignore
+/tests/installation export-ignore
+/tests/scripts/install/test_install_sh_existing_destination.py export-ignore
+/tests/scripts/install/test_install_sh_git_prerequisite.py export-ignore
+/tests/scripts/install/test_install_sh_musl_uv_bootstrap.py export-ignore
+/tests/scripts/install/test_install_sh_output.py export-ignore
+/tests/scripts/install/test_install_sh_repository_stage.py export-ignore
+/tests/scripts/install/test_install_sh_shell_path.py export-ignore
+/tests/scripts/install/test_install_sh_termux_refusal.py export-ignore
+/tests/scripts/test_install_sh_chosen_channel.py export-ignore
+/tests/scripts/test_install_sh_launch_handoff.py export-ignore
+/tests/scripts/test_install_sh_python_pin_indent.py export-ignore
+/tests/scripts/test_install_sh_stable_default.py export-ignore
+/tests/scripts/test_install_stamp_distance.py export-ignore
+/tests/scripts/test_source_build_env.py export-ignore
+/tests/test_batch_runner_trajectory_redaction.py export-ignore
+/tests/test_docker_poll_stalled_exec.py export-ignore
+/tests/test_old_updater_compat_surface.py export-ignore
+
+# crema-feature exclude-tencent-tokenhub
+/plugins/model-providers/tencent-tokenhub export-ignore
+
+# crema-feature exclude-terminal-ui
+/tests/gateway/fixtures/tui_desktop_routes_peer.py export-ignore
+/tests/gateway/test_tui_busy_default.py export-ignore
+/tests/gateway/test_tui_context_breakdown_scope.py export-ignore
+/tests/gateway/test_tui_context_prompt_cache.py export-ignore
+/tests/gateway/test_tui_detach_end_stamp.py export-ignore
+/tests/gateway/test_tui_session_reads.py export-ignore
+/tests/hermes_cli/test_tui_exit_summary_short_id.py export-ignore
+/tests/hermes_cli/test_tui_first_run_routing.py export-ignore
+/tests/hermes_cli/test_tui_worktree_clean_quit.py export-ignore
+/tests/hermes_cli/test_tui_worktree_resume_recreate.py export-ignore
+/tests/tui_gateway/test_tui_turn_limit_default.py export-ignore
+
+# crema-feature exclude-spotify
+/plugin-catalog/spotify-desktop.yaml export-ignore
+/plugin-catalog/spotify.yaml export-ignore

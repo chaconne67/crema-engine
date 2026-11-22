@@ -1,6 +1,6 @@
 # Crema engine
 
-This branch (`crema`) is a fork of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
+The Crema engine is a fork of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
 (MIT, see `LICENSE`). Crema bundles the engine source exported by Git.
 Files keep their upstream paths and names so upstream changes can be compared and taken file by file.
 
@@ -31,7 +31,7 @@ paths. It does not execute the feature checks.
 
 ## How Crema runs it
 
-`python crema_engine.py` with `HERMES_HOME` (Crema's own engine folder, never the user's own Hermes)
+`python crema_engine.py` with the assembled `CREMA_ENGINE_INPUT`, `HERMES_HOME` (Crema's own engine folder, never the user's own Hermes)
 and `HERMES_DASHBOARD_SESSION_TOKEN` in the environment. It prints one line, `{"api": port, "settings": port}`:
 
 - `api`: the Hermes run API (`gateway/platforms/api_server.py`) without the gateway — `/health`,
@@ -46,7 +46,10 @@ and `HERMES_DASHBOARD_SESSION_TOKEN` in the environment. It prints one line, `{"
   `POST /api/crema/distill` (a quiet chat's lessons into the notebook).
   Auth: `X-Hermes-Session-Token: <token>`.
 
-Both bind 127.0.0.1 only.
+Both PC listeners bind 127.0.0.1. Krema and Jabis run `hermes gateway run` with their own
+assembled engine input. The app repository assembles the theme definitions in
+`services/{crema,dev,fc}/service.yaml`. Krema selects its developer or staff settings for each
+profile. The assembled input supplies chat and scheduled toolsets, plugins and hook order.
 
 ## What Crema offers
 
@@ -55,7 +58,7 @@ Both bind 127.0.0.1 only.
 | Tools | files, terminal/process, todo, web search/extract, image understanding, memory, past-chat search, skills (the agent writes and improves them), a keyless backup ("백업해 줘"); image and video generation when the app's 부가 기능 연동 connects them | `hermes-api-server` in `toolsets.py`; the app adds `image_gen`/`video_gen` to `platform_toolsets.api_server` |
 | Knowledge notebook | pages of what the agent learned working with the user, searched before work and written after (the method of GBrain, below); a quiet chat is distilled into it, and once a day while Crema is quiet the notebook is tidied | `knowledge` in `toolsets.py` (a direct surface in `tools/tool_search.py`, so never deferred); `knowledge.search_mode` light/balanced/thorough, `knowledge.nightly` |
 | Past-chat search in Korean/CJK | the SQLite store uses its trigram index and a short-term SQL search for one- and two-character CJK terms; startup prepares the index for chats saved by older releases | `crema_engine.py::index_past_chats`, `persistence/sqlite/conversation/_store/search.py` |
-| Providers | every upstream provider that needs no extra package (Bedrock needs boto3 and Vertex google-auth, so both are left out) | provider plugins kept below; the Crema app hides only `moa` and `claude-code` |
+| Providers | the previous Crema provider set, with the new Hermes modules required by existing connections | provider profiles are discovered from the bundled paths and filtered by the application's connection settings |
 | Logins | only those made in Crema: other programs' logins (Claude Code, Codex CLI, GitHub CLI) are never borrowed | `auth.adopt_external_logins` default |
 | Shared files | chats that change the same file take turns: an order on the kanban board, a hand-over when the other chat is quiet and committed, else one judge call (the chat's model or `auxiliary.crema_turns`); a refused write waits for nothing, and the app starts the chat again | `agent/crema_file_turns.py`, `/api/crema/turns` |
 | Approval words | the approval box explains held commands in Korean. The event translates recognized descriptions and shows a general warning for unknown ones. The original approval identifier stays in `pattern_key`. | `agent/crema_approval_words.py`, `gateway/platforms/api_server.py::_approval_request_event` |
@@ -73,7 +76,7 @@ Both bind 127.0.0.1 only.
 5. `pyproject.toml` — the `crema` extra (see below).
 6. `persistence/` — the settings reader uses the same Korean search as the writer, including prefixes
    such as `세금*`. Crema uses the storage interface for chat history, context estimates and scheduled chats.
-7. `agent/learning_mutations.py` — a user's memory edit or delete holds the memory tool's file lock.
+7. `agent/learning_mutations.py` — Hermes now provides the shared lock for memory edits and deletes. Crema keeps a regression test for concurrent writes.
 8. `hermes_cli/backup.py`, `hermes_cli/subcommands/backup.py` — `--no-secrets` leaves out `.env`,
    `auth.json` and the credential vault. `tools/crema_backup_tool.py` (new, `backup` toolset in `hermes-api-server`)
    makes that backup when the user asks in the chat, in Documents\Crema 백업.
@@ -144,12 +147,20 @@ Both bind 127.0.0.1 only.
      Docker/Nix/npm/lint files, translated READMEs, `batch_runner.py mini_swe_runner.py mcp_serve.py
      toolset_distributions.py trajectory_compressor.py setup-hermes.sh`
    - `tools/`: `xai_video_tools.py`
-   - `plugins/`: `disk-cleanup google_meet hermes-achievements kanban security-guidance spotify observability
+   - `plugins/`: `disk-cleanup google_meet hermes-achievements kanban security-guidance observability
      teams_pipeline platforms cron_providers`, the memory providers under `plugins/memory/`,
      and the model providers `bedrock vertex` (they need packages the bundle does not carry; the other
      providers were cut at first and restored on 2026-09-26)
-   - Hermes scripts other than `scripts/run_tests_parallel.py`, upstream's runner for per-file
-     test isolation. Run bundled tests with `python scripts/run_tests_parallel.py`.
+   - Hermes release, install and development scripts. The bundled per-file runner
+     `scripts/run_tests_parallel.py` retains its launch helpers and
+     `scripts/ci/list_os_marked_tests.py` so the bundle can run its own test files.
+   - Hermes v0.23.3's remote configuration plugin, standalone dashboard session-token
+     provider, LM Studio, Solstice and Tencent TokenHub providers, and its `setup_beat`
+     onboarding card tool. The Windows computer-use driver plugin and default delegation
+     backend stay in the bundle because Hermes moved existing backends there.
+   - Core modules imported by the Crema API, gateway or tool runtime stay in the bundle.
+     This includes `tui_gateway` Python helpers used by settings routes and shared tool code.
+     The theme input controls the tools sent to the model.
    - test files for excluded features, and files whose tests all failed only in Crema.
      Retained tests that still check an excluded feature are listed in the
      Crema repo's `scripts/engine-tests/known-pruned-failures.txt`, which the engine test comparison
@@ -209,6 +220,8 @@ Anthropic adapter imports `agent/bedrock_adapter.py`, which asks for boto3, and 
 ## Updating from upstream
 
 The merge for Hermes v0.23.3 uses upstream commit `caafe5389ae585ef77387a962aee05b1bcf17029`
-as its second parent. Compare the merge with that parent when validating the two Crema inventories
-on the update branch. Compare both parents' changes and run the linked feature tests before accepting
-a new upstream base.
+as its second parent. While the shared `hermes-upstream` branch still marks the old release,
+point the local branch of that name at the new upstream commit in a separate shared clone.
+Check out the update commit there and run `python3 scripts/check_crema_changes.py`.
+Compare clean `git archive` bundles under the same theme inputs and run the linked feature
+tests before accepting a new upstream base.

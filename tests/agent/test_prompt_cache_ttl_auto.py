@@ -40,3 +40,22 @@ def test_real_agent_resolves_auto_from_its_platform(tmp_path, monkeypatch):
             close = getattr(a, "close", None)
             if callable(close):
                 close()
+
+
+def test_crema_keeps_cache_markers_enabled_without_refresh_requests(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from agent.agent_init import _init_prompt_cache_config
+    from agent.prompt_cache_lifecycle.warmer import start_prompt_cache_warming
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    agent = SimpleNamespace(platform="api_server", api_mode="chat_completions", _anthropic_prompt_cache_policy=lambda: (True, True))
+    _init_prompt_cache_config(agent)
+    client_factory = Mock(side_effect=AssertionError("must not prepare a cache keep-alive"))
+    monkeypatch.setattr("agent.prompt_cache_lifecycle.warmer.guaranteed_window", client_factory)
+    start_prompt_cache_warming(agent, {"messages": []}, {})
+    assert agent._use_prompt_caching
+    assert agent._cache_ttl == "5m"
+    assert agent._skip_prompt_cache_warming
+    client_factory.assert_not_called()

@@ -562,17 +562,19 @@ def _init_prompt_cache_config(agent):
         agent._anthropic_prompt_cache_policy()
     )
     agent._cache_disabled = False
-    # cache_ttl: "auto" (default) picks 1h when a person paces the session and 5m when a machine does;
+    # Crema does not send extra provider requests just to keep a cache alive.
+    agent._skip_prompt_cache_warming = True
+    # cache_ttl: "auto" picks 1h when a person paces the session and 5m when a machine does;
     # "5m"/"1h" pin a tier (1h writes cost 2x vs 1.25x and only pay off across >5-minute pauses, #14971);
     # unknown values keep "5m". A falsy/off value disables caching entirely (OAuth plans billing cache
     # writes against "extra usage", proxies injecting their own cache_control, #13477); the disable
-    # survives /model switches and fallback re-derivation. An unreadable config falls back to "auto".
+    # survives /model switches and fallback re-derivation. Crema defaults to "5m" even if config cannot be read.
     from agent.agent_runtime_helpers import cache_ttl_means_disabled
     from agent.prompt_caching import AUTO_CACHE_TTL, auto_start_cache_ttl
-    ttl = AUTO_CACHE_TTL
+    ttl = "5m"
     try:
         from hermes_cli.config import load_config_readonly as _load_pc_cfg
-        ttl = (_load_pc_cfg().get("prompt_caching", {}) or {}).get("cache_ttl", AUTO_CACHE_TTL)
+        ttl = (_load_pc_cfg().get("prompt_caching", {}) or {}).get("cache_ttl", ttl)
     except Exception as exc:  # health: allow BLE001 -- init must survive any config failure; the class is logged
         # Config values and traceback frames may contain credentials.
         logger.warning(

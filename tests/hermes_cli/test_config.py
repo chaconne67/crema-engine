@@ -2035,3 +2035,30 @@ class TestCompatibleProvidersMalformedLegacyKey:
 
         assert names == ["legacy"]
         assert not [r for r in caplog.records if "custom_providers is a" in r.getMessage()]
+
+
+def test_crema_defaults_preserve_quiet_review_and_api_display():
+    from hermes_cli.config_defaults import DEFAULT_CONFIG
+
+    assert DEFAULT_CONFIG["memory"]["nudge_interval"] == 0
+    assert DEFAULT_CONFIG["prompt_caching"]["cache_ttl"] == "5m"
+    hint = DEFAULT_CONFIG["platform_hints"]["api_server"]["replace"]
+    assert "Crema" in hint and "MEDIA:<absolute local path>" in hint
+
+
+def test_default_config_has_no_repeated_literal_dictionary_keys():
+    import ast
+    from pathlib import Path
+
+    from hermes_cli import config_defaults
+
+    # Runtime loading alone cannot see values that Python quietly overwrites.
+    syntax = ast.parse(Path(config_defaults.__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(syntax):
+        if not isinstance(node, ast.Dict):
+            continue
+        seen = set()
+        for key in node.keys:
+            if isinstance(key, ast.Constant):
+                assert key.value not in seen, f"Repeated key {key.value!r} at line {key.lineno}"
+                seen.add(key.value)

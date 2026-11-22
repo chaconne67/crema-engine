@@ -576,3 +576,20 @@ def test_tool_defs_cache_key_sees_config_replacement_with_pinned_mtime(tmp_path)
         shutil.copy2(other, cfg)
         os.utime(cfg, ns=(st.st_atime_ns, st.st_mtime_ns))
         assert _tool_defs_cache_key(None, None, False) != before
+
+
+def test_restricted_browser_keeps_dialog_and_vault_with_available_tool_hints(monkeypatch):
+    from model_tools import _apply_dynamic_schemas
+
+    monkeypatch.setattr("tools.browser_tool_cloud._restrict_local_chromium", lambda: True)
+    defs = TestBrowserRetrievalHints._defs(
+        "terminal", "browser_exec", "browser_cdp", "browser_navigate", "browser_type",
+        "browser_dialog", "browser_vault", "web_search",
+    )
+    rendered = {row["function"]["name"]: row["function"]["description"]
+                for row in _apply_dynamic_schemas(defs)}
+    assert {"browser_exec", "browser_cdp"}.isdisjoint(rendered)
+    assert {"browser_dialog", "browser_vault"} <= rendered.keys()
+    assert "web_search" in rendered["browser_navigate"]
+    assert "web_extract" not in rendered["browser_navigate"]
+    assert "browser_vault" in rendered["browser_type"]

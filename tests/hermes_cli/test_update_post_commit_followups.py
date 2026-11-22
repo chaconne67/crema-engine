@@ -139,7 +139,6 @@ def test_failed_config_migration_is_owed_and_later_maintenance_runs(tmp_path, mo
                  "_print_bundled_skills_sync_report", "_sync_profiles_after_update"):
         monkeypatch.setattr(maint, name, lambda name=name: calls.append(name))
     monkeypatch.setattr("hermes_cli.gitlock.fetch_full_commit_graph", lambda *a, **kw: False)
-    monkeypatch.setattr("hermes_cli.model_catalog.seed_cache_from_checkout", lambda root: False)
 
     def broken_graph_refresh(root):
         calls.append(("commit_graph", root))
@@ -220,6 +219,8 @@ def test_followup_line_is_the_one_both_desktop_handoffs_parse(tmp_path, monkeypa
     update_receipt.record_followup("windows_resume", "Windows gateway recovery failed: 'quoted' reason")
     out = capsys.readouterr().out
     scripts = Path(__file__).resolve().parents[2] / "scripts/desktop-update"
+    if not scripts.is_dir():
+        pytest.skip("exclude-desktop: the desktop handoff scripts are omitted")
     posix = (scripts / "posix.sh").read_text(encoding="utf-8")
     function = re.search(r"^owed_followup_steps\(\) \{.*?^\}", posix, re.DOTALL | re.MULTILINE).group(0)
     steps = subprocess.run(["bash", "-c", f"{function}\nowed_followup_steps"], env={**os.environ, "OUT": out},

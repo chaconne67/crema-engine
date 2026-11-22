@@ -6,6 +6,8 @@ re-wrote the skills index on every first call. These tests pin where the breakpo
 that the request still carries the same bytes.
 """
 
+import pytest
+
 from agent.prompt_caching import apply_anthropic_cache_control, strip_anthropic_cache_control
 
 STATIC = "You are Hermes.\n"
@@ -82,6 +84,7 @@ def test_real_agent_keeps_one_split_and_marks_the_session_prompt_on_the_first_ca
 
     from persistence_assembly import open_persistence, profile_scope
     from run_agent import AIAgent
+    pytest.importorskip("tests.e2e.core.history._helpers", reason="exclude-development: full-tree history fixtures")
     from tests.agent.test_prompt_cache_prefix_contract import _prefix_breaks
     from tests.e2e.core.history._helpers import NO_BACKGROUND_REVIEW, OFFLINE_CONFIG
     from tests.fakes.fake_llm_provider import FakeLLMServer, Text, ToolCall, write_hermes_home

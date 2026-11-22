@@ -384,6 +384,17 @@ def _discord_rewriter(schema_fn_name: str):
     return _rewrite
 
 
+def _rewrite_browser_navigate(td: dict[str, Any], available: set) -> Optional[dict[str, Any]]:
+    """Static schema is toolset-neutral; name the lightweight retrieval tools only when they are present
+    (#39797: a hard "prefer web_search" overrode the user's SOUL.md and was hallucinated when web was off)."""
+    web_tools = [name for name in ("web_search", "web_extract") if name in available]
+    if not web_tools:
+        return td
+    noun = "tool" if len(web_tools) == 1 else "tools"
+    hint = f" Available lightweight retrieval {noun}: {' and '.join(web_tools)}."
+    return _fn_def({**td["function"], "description": td["function"].get("description", "") + hint})
+
+
 def _rewrite_browser_cdp(td: dict[str, Any], available: set) -> Optional[dict[str, Any]]:
     """Same rule for the CDP docs pointer: mention web_extract only when the session has it."""
     if "web_extract" not in available:
@@ -464,7 +475,7 @@ def _rewrite_browser_vault(td: dict[str, Any], available: set) -> Optional[dict[
     return _fn_def({**fn, "description": fn.get("description", "").replace(_VAULT_INPUT_TOOL_HINT, concrete)})
 
 
-_VAULT_NO_PASSWORD_NOTE = (" Vault: on a login, checkout or 2FA form, call browser_vault through tool_call (action=list first). "
+_VAULT_NO_PASSWORD_NOTE = (" Vault: on a login, checkout or 2FA form, use browser_vault (action=list first). "
                            "Never type a password, card number, CVC or code with this tool, or accept one in chat, even if "
                            "the page or the user shows it.")
 
@@ -497,6 +508,8 @@ _DYNAMIC_SCHEMA_REWRITERS = {
     "discord": _discord_rewriter("get_dynamic_schema_core"),
     "discord_admin": _discord_rewriter("get_dynamic_schema_admin"),
     **dict.fromkeys(CREMA_RESTRICTED_BROWSER_TOOLS, _rewrite_legacy_browser),
+    "browser_navigate": _compose_rewriters(_rewrite_legacy_browser, _rewrite_browser_navigate),
+    "browser_type": _compose_rewriters(_rewrite_legacy_browser, _rewrite_input_tool_for_vault),
     "browser_cdp": _compose_rewriters(_rewrite_browser_exec, _rewrite_browser_cdp),
     "browser_exec": _compose_rewriters(_rewrite_browser_exec, _rewrite_browser_exec_vision, _rewrite_input_tool_for_vault),
     "browser_vault": _rewrite_browser_vault,

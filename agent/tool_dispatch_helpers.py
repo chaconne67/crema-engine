@@ -318,22 +318,6 @@ def _paths_overlap(left: Path, right: Path) -> bool:
     return left_parts[:common_len] == right_parts[:common_len]
 
 
-def _append_subdir_hint_to_multimodal(value: dict[str, Any], hint: str) -> None:
-    """Append a subdir hint to the envelope's first text part (and ``text_summary``) in place."""
-    if not _is_multimodal_tool_result(value):
-        return
-    parts = value.get("content") or []
-    for p in parts:
-        if _is_text_part(p):
-            p["text"] = str(p.get("text", "")) + hint
-            break
-    else:
-        parts.insert(0, {"type": "text", "text": hint})
-        value["content"] = parts
-    if isinstance(value.get("text_summary"), str):
-        value["text_summary"] = value["text_summary"] + hint
-
-
 # ``\s*`` (not ``\s+``) after ``***`` matches patch_parser / file_tools, which
 # accept ``***Update File:`` with no space.
 _V4A_FILE_HEADER = re.compile(r'^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+)$', re.MULTILINE)
@@ -596,7 +580,6 @@ __all__ = [
     "_PATH_SCOPED_TOOLS",
     "_PATH_SCOPED_WRITERS",
     "_REDIRECT_OVERWRITE",
-    "_append_subdir_hint_to_multimodal",
     "_canonical_path",
     "_context_pruned_argument_paths",
     "_detect_upstream_elision",

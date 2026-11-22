@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from hermes_cli._subprocess_compat import windows_hide_flags
-from hermes_constants import get_hermes_home
+from hermes_constants import find_node_executable, get_hermes_home
 from utils import atomic_write_text
 from tools.browser_tool_origin import origin as _bt
 from tools import browser_tool_cdp as _cdp
@@ -112,14 +112,14 @@ def _format_browser_timeout_error(
 def _agent_browser_argv(browser_cmd: str) -> list:
     """Command prefix to invoke agent-browser (concrete binary, or the npx sentinel expanded).
 
-    npx is resolved through the same PATH cascade as ``_find_agent_browser`` (a bare
-    ``which("npx")`` would let a broken system npx shadow a healthy managed one); if
-    absent the bare name gives a readable ``FileNotFoundError``. ``--ignore-scripts``:
-    the spec is a floating range — a compromised future patch must not run install scripts.
+    Resolve npx from the same managed npm install as browser discovery. Keep
+    package install scripts disabled when running the pinned range.
     """
     if _install._is_npx_agent_browser_sentinel(browser_cmd):
-        _npx_bin = _install._resolve_npx_bin() or "npx"
-        return [_npx_bin, "--ignore-scripts", "--prefer-offline", "-y", _bt.AGENT_BROWSER_NPX_SPEC]
+        npx_bin = find_node_executable("npx")
+        if npx_bin is None:
+            raise FileNotFoundError("Managed npx is unavailable for agent-browser")
+        return [npx_bin, "--ignore-scripts", "--prefer-offline", "-y", _bt.AGENT_BROWSER_NPX_SPEC]
     return [browser_cmd]
 
 

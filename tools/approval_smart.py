@@ -88,12 +88,6 @@ def _has_heredoc(text: str, comments: list[tuple[int, int]]) -> bool:
     return False
 
 
-def _strip_line_comment(line: str) -> str:
-    """Strip a comment only at an unquoted shell word boundary (single-line form)."""
-    start = _next_comment(line)
-    return line if start is None else line[:start]
-
-
 def _strip_shell_comments(command: str) -> str:
     """Strip shell comments before LLM assessment.
 

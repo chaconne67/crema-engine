@@ -132,6 +132,18 @@ def _build_adapter_secret_env() -> frozenset:
     # tests/gateway/test_platform_env_overrides.py pins that every such secret is listed here.
     names: set[str] = {"MSGRAPH_CLIENT_SECRET", "MSGRAPH_WEBHOOK_CLIENT_STATE", "QQ_STT_API_KEY",
                        "FEISHU_ENCRYPT_KEY", "FEISHU_VERIFICATION_TOKEN", "YUANBAO_APP_KEY"}
+    # Crema's archive omits plugins/platforms. Keep their declared secret names in the
+    # child-process policy without shipping or registering the adapters.
+    names.update({
+        "A2A_BEARER_TOKEN", "A2A_PEER_TOKENS", "A2A_PUSH_SECRET", "BUZZ_PRIVATE_KEY",
+        "DINGTALK_CLIENT_SECRET", "EMAIL_PASSWORD", "FEISHU_APP_SECRET",
+        "GOOGLE_CHAT_SERVICE_ACCOUNT_JSON", "LINE_CHANNEL_ACCESS_TOKEN", "LINE_CHANNEL_SECRET",
+        "MATRIX_PASSWORD", "NTFY_TOKEN", "PHOTON_PROJECT_SECRET", "PHOTON_SIDECAR_TOKEN",
+        "TEAMS_CLIENT_SECRET", "TEAMS_GRAPH_ACCESS_TOKEN", "TEAMS_INCOMING_WEBHOOK_URL",
+        "TELEGRAM_WEBHOOK_SECRET", "TWILIO_AUTH_TOKEN", "WECOM_CALLBACK_CORP_SECRET",
+        "WECOM_CALLBACK_ENCODING_AES_KEY", "WECOM_CALLBACK_TOKEN", "WECOM_SECRET", "WEIXIN_TOKEN",
+        "WHATSAPP_CLOUD_ACCESS_TOKEN", "WHATSAPP_CLOUD_APP_SECRET", "WHATSAPP_CLOUD_VERIFY_TOKEN",
+    })
     names.update(name.upper() for name, meta in OPTIONAL_ENV_VARS.items()
                  if name in CORE_DECLARED_ENV_NAMES
                  and meta.get("category") == "messaging" and meta.get("password"))

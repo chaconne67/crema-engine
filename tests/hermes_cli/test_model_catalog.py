@@ -327,6 +327,8 @@ class TestManifestMatchesInRepoLists:
         # Build expected catalog using the same script CI would.
         import importlib.util
         script_path = repo_root / "scripts" / "build_model_catalog.py"
+        if not script_path.is_file():
+            pytest.skip("exclude-development: the catalog generator is omitted")
         spec = importlib.util.spec_from_file_location("_build_model_catalog", script_path)
         mod = importlib.util.module_from_spec(spec)
         assert spec.loader is not None

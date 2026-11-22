@@ -165,7 +165,7 @@ class TestReadClaudeCodeCredentials:
             lambda: None,
         )
 
-    def test_reads_valid_credentials(self, tmp_path, monkeypatch):
+    def test_does_not_read_valid_external_credentials(self, tmp_path, monkeypatch):
         cred_file = tmp_path / ".claude" / ".credentials.json"
         cred_file.parent.mkdir(parents=True)
         cred_file.write_text(json.dumps({
@@ -177,10 +177,7 @@ class TestReadClaudeCodeCredentials:
         }))
         monkeypatch.setattr("agent.anthropic_credentials.Path.home", lambda: tmp_path)
         creds = read_claude_code_credentials()
-        assert creds is not None
-        assert creds["accessToken"] == "sk-ant-oat01-token"
-        assert creds["refreshToken"] == "sk-ant-oat01-refresh"
-        assert creds["source"] == "claude_code_credentials_file"
+        assert creds is None
 
     def test_ignores_primary_api_key_for_native_anthropic_resolution(self, tmp_path, monkeypatch):
         claude_json = tmp_path / ".claude.json"
@@ -262,7 +259,7 @@ class TestResolveAnthropicToken:
 
         assert resolve_anthropic_token() == "sk-ant...ykey"
 
-    def test_falls_back_to_claude_code_credentials(self, monkeypatch, tmp_path):
+    def test_does_not_fall_back_to_claude_code_credentials(self, monkeypatch, tmp_path):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("ANTHROPIC_TOKEN", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
@@ -276,7 +273,7 @@ class TestResolveAnthropicToken:
             }
         }))
         monkeypatch.setattr("agent.anthropic_credentials.Path.home", lambda: tmp_path)
-        assert resolve_anthropic_token() == "cc-auto-token"
+        assert resolve_anthropic_token() is None
 
     def test_falls_back_to_anthropic_credential_pool_oauth(self, monkeypatch, tmp_path):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -382,7 +379,7 @@ class TestResolveAnthropicToken:
         assert resolve_anthropic_token() == "pool-oauth-token"
         assert captured == {"clear_expired": False, "refresh": False}
 
-    def test_prefers_refreshable_claude_code_credentials_over_static_anthropic_token(self, monkeypatch, tmp_path):
+    def test_keeps_static_token_when_external_login_is_available(self, monkeypatch, tmp_path):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.setenv("ANTHROPIC_TOKEN", "sk-ant-oat01-static-token")
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
@@ -397,7 +394,7 @@ class TestResolveAnthropicToken:
         }))
         monkeypatch.setattr("agent.anthropic_credentials.Path.home", lambda: tmp_path)
 
-        assert resolve_anthropic_token() == "cc-auto-token"
+        assert resolve_anthropic_token() == "sk-ant-oat01-static-token"
 
 
 class TestRefreshOauthToken:
@@ -505,8 +502,8 @@ class TestWriteClaudeCodeCredentials:
 
 
 class TestResolveWithRefresh:
-    def test_auto_refresh_on_expired_creds(self, monkeypatch, tmp_path):
-        """When cred file has expired token + refresh token, auto-refresh is attempted."""
+    def test_does_not_refresh_expired_external_credentials(self, monkeypatch, tmp_path):
+        """An expired external login does not trigger a refresh in Crema."""
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("ANTHROPIC_TOKEN", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
@@ -524,12 +521,13 @@ class TestResolveWithRefresh:
         monkeypatch.setattr("agent.anthropic_credentials.Path.home", lambda: tmp_path)
 
         # Mock refresh to succeed
-        with patch("agent.anthropic_credentials._refresh_oauth_token", return_value="refreshed-token"):
+        with patch("agent.anthropic_credentials._refresh_oauth_token", return_value="refreshed-token") as refresh:
             result = resolve_anthropic_token()
 
-        assert result == "refreshed-token"
+        refresh.assert_not_called()
+        assert result is None
 
-    def test_static_env_oauth_token_does_not_block_refreshable_claude_creds(self, monkeypatch, tmp_path):
+    def test_static_env_oauth_token_is_used_without_refreshing_external_credentials(self, monkeypatch, tmp_path):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.setenv("ANTHROPIC_TOKEN", "sk-ant-oat01-expired-env-token")
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
@@ -545,16 +543,17 @@ class TestResolveWithRefresh:
         }))
         monkeypatch.setattr("agent.anthropic_credentials.Path.home", lambda: tmp_path)
 
-        with patch("agent.anthropic_credentials._refresh_oauth_token", return_value="refreshed-token"):
+        with patch("agent.anthropic_credentials._refresh_oauth_token", return_value="refreshed-token") as refresh:
             result = resolve_anthropic_token()
 
-        assert result == "refreshed-token"
+        refresh.assert_not_called()
+        assert result == "sk-ant-oat01-expired-env-token"
 
 
 class TestRunOauthSetupToken:
 
-    def test_returns_token_from_credential_files(self, monkeypatch, tmp_path):
-        """After subprocess completes, reads credentials from Claude Code files."""
+    def test_setup_does_not_import_external_credential_files(self, monkeypatch, tmp_path):
+        """Setup does not import an existing Claude Code login from disk."""
         monkeypatch.setattr("agent.anthropic_adapter.find_claude_code_cli", lambda _: "/usr/bin/claude")
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
         monkeypatch.delenv("ANTHROPIC_TOKEN", raising=False)
@@ -575,13 +574,7 @@ class TestRunOauthSetupToken:
             mock_run.return_value = MagicMock(returncode=0)
             token = run_oauth_setup_token()
 
-        assert token == "from-cred-file"
-        # Don't assert exact call count — the contract is "credentials flow
-        # through", not "exactly one subprocess call". Cross-test pollution
-        # (other tests shimming subprocess via plugins) has flaked
-        # assert_called_once() in CI.
-        assert mock_run.called
-
+        assert token is None
 
     def test_returns_none_when_no_creds_found(self, monkeypatch, tmp_path):
         """Returns None when subprocess completes but no credentials are found."""

@@ -996,3 +996,12 @@ def test_turn_exit_log_carries_fork_origin_tag():
     assert len(records) == 2
     assert "origin=" not in records[0], records[0]
     assert "origin=background_review" in records[1], records[1]
+
+
+def test_review_prompts_protect_crema_skills():
+    from agent.background_review import _COMBINED_REVIEW_PROMPT, _SKILL_REVIEW_PROMPT
+
+    for prompt in (_SKILL_REVIEW_PROMPT, _COMBINED_REVIEW_PROMPT):
+        for protected in ("crema-guide", "Hub-installed", "external", "pinned", "locked", "user-owned"):
+            assert protected in prompt
+        assert "hermes curator" not in prompt

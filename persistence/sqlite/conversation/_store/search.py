@@ -709,6 +709,8 @@ def _search_messages_impl(
     query = _sanitize_fts5_query(query)
     if not query:
         return []
+    short_term = _strip_cjk_wildcards(query).strip('"').strip()
+    short_query = 0 < len(short_term) <= 2
     filters = dict(include_inactive=include_inactive, source_filter=source_filter,
                    exclude_sources=exclude_sources, role_filter=role_filter,
                    after_ts=after_ts, before_ts=before_ts)
@@ -717,6 +719,8 @@ def _search_messages_impl(
     if role_filter and "tool" in role_filter:
         matches = _search_messages_like_fallback(holder, query, limit=limit, offset=offset, sort=sort, **filters)
         return _finalize_search_matches(holder, matches, result_fields=result_fields)
+    if short_query and not role_filter:
+        filters["role_filter"] = ["user", "assistant", "system"]
     _refresh_fts_stale_state(holder)
     if holder._fts_stale:
         return _search_messages_stale(holder, query, limit, offset, sort, filters, result_fields)
@@ -767,6 +771,8 @@ def _search_messages_impl(
         fb_query = _quote_fts_tokens(query.strip('"').strip())
         if holder._trigram_available and _trigram_eligible_tokens(query):
             matches = _match_rows(holder, "messages_fts_trigram", fb_query, fail_open="Trigram", **route) or matches
+        elif short_query and re.fullmatch(r"[a-zA-Z]{1,2}", short_term):
+            matches = _search_messages_like_fallback(holder, query, limit=limit, offset=offset, sort=sort, **filters)
 
     # OR-relaxed retry: the implicit AND between terms means a paraphrased multi-word query
     # misses a stored sentence that lacks even ONE word ("when does Sarah like her standup

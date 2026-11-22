@@ -31,10 +31,7 @@ def _managed_setup(tmp_path, monkeypatch, *, profile_body: str):
         "tools.environments.local._resolve_shell_init_files", lambda: [str(profile)]
     )
     monkeypatch.setattr(
-        "tools.environments.local._resolve_hermes_bin_dir", lambda: str(managed)
-    )
-    monkeypatch.setattr(
-        "tools.environments.local._managed_runtime_path_entries", list
+        "tools.environments.local._managed_runtime_path_entries", lambda: [str(managed)]
     )
     return managed
 

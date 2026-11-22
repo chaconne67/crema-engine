@@ -324,12 +324,15 @@ def test_manifest_scan_follows_plugin_discovery_and_sees_mtime_preserving_edits(
     assert platform_manifest_stamp(tmp_path) != before
 
 
-def test_unreadable_bundled_manifest_fails_the_policy_instead_of_dropping_it(monkeypatch):
+def test_unreadable_bundled_manifest_fails_the_policy_instead_of_dropping_it(tmp_path, monkeypatch):
     """The import-time read keeps the bundled secret set only when every bundled manifest was
     read; otherwise the policy's strict re-read raises rather than building without them."""
     import builtins
     import hermes_cli.config as cfg
-    target = next(path for _name, path, _kind, _st in cfg._platform_manifest_paths(source="bundled") if path)
+    target = tmp_path / "plugin.yaml"
+    target.write_text("name: fixture\nkind: platform\noptional_env: [FIXTURE_TOKEN]\n", encoding="utf-8")
+    manifest = ("fixture", target, False, target.stat())
+    monkeypatch.setattr(cfg, "_platform_manifest_paths", lambda *args: iter([manifest]))
     real_open = builtins.open
 
     def denying_open(file, *args, **kwargs):

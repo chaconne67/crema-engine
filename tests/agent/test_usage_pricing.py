@@ -369,6 +369,8 @@ def test_vertex_default_model_estimates_cached_usage(monkeypatch):
         lambda *_args, **_kwargs: {},
     )
     vertex = get_provider_profile("vertex")
+    if vertex is None:
+        pytest.skip("exclude-cloud-models: Vertex profile is omitted")
     result = estimate_usage_cost(
         vertex.default_aux_model,
         CanonicalUsage(input_tokens=100, output_tokens=100, cache_read_tokens=100),

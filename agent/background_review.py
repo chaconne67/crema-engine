@@ -530,6 +530,13 @@ _DO_NOT_CAPTURE_BLOCK = (
     "work' as a standalone constraint.\n\n"
 )
 
+_CREMA_REVIEW_SKILL_SCOPE = (
+    "Protect bundled skills (including crema-guide, which Crema restores at startup), "
+    "Hub-installed, external, pinned, locked, and user-owned skills. Only update skills "
+    "created by the review agent. If a lesson belongs to a protected skill, describe the "
+    "suggested change in your summary so the owner can decide. Do not copy the skill.\n\n"
+)
+
 _SKILL_REVIEW_PROMPT = (
     "Review the conversation above and update the skill library. Be ACTIVE — most sessions produce "
     "at least one skill update, even if small. A pass that does nothing is a missed learning "
@@ -555,11 +562,7 @@ _SKILL_REVIEW_PROMPT = (
     "  1. UPDATE A CURRENTLY-LOADED SKILL. Look back through the conversation for skills the user "
     "loaded via /skill-name or you read via skill_view. If any of them covers the territory of the "
     "new learning, PATCH that one first (re-load it with skill_view during this review — see "
-    "Read-before-write below). It is the skill that was in play, so it's the right one to extend — "
-    "whoever wrote it: hand-written, installed, bundled, and pinned skills are all yours to "
-    "improve. The one exception is a skill the user LOCKED (`hermes curator lock`): skill_manage "
-    "refuses it — do not retry and do not recreate it under another name; put the suggested "
-    "change in your summary instead.\n"
+    "Read-before-write below). Start with an eligible skill that was in play.\n"
     "  2. UPDATE AN EXISTING UMBRELLA (via skills_list + skill_view). If no loaded skill fits but "
     "an existing class-level skill does, patch it. Add a subsection, a pitfall, or broaden a "
     "trigger.\n"
@@ -582,6 +585,7 @@ _SKILL_REVIEW_PROMPT = (
     "feature codename, library-alone name, or 'fix-X / debug-Y / audit-Z-today' session artifact. "
     "If the proposed name only makes sense for today's task, it's wrong — fall back to (1), (2), "
     "or (3).\n\n"
+    + _CREMA_REVIEW_SKILL_SCOPE +
     "Read-before-write (ENFORCED — skill_manage refuses otherwise): before you patch or edit an "
     "existing skill's SKILL.md, call skill_view(name) for that skill during this review. Before "
     "you overwrite or remove an EXISTING supporting file, call skill_view(name, file_path=...) for "
@@ -623,8 +627,7 @@ _COMBINED_REVIEW_PROMPT = (
     "Preference order for skills — pick the earliest that fits:\n"
     "  1. UPDATE A CURRENTLY-LOADED SKILL. Check what skills were loaded via /skill-name or "
     "skill_view in the conversation. If one of them covers the learning, PATCH it first (re-load "
-    "it with skill_view during this review — see Read-before-write below). It was in play; it's "
-    "the right place, whoever wrote it.\n"
+    "it with skill_view during this review — see Read-before-write below), if eligible.\n"
     "  2. UPDATE AN EXISTING UMBRELLA (skills_list + skill_view to find the right one). Patch it.\n"
     "  3. ADD A SUPPORT FILE under an existing umbrella via skill_manage action=write_file. Three "
     "kinds: `references/<topic>.md` for topical depth (decision tables, recipes, quirks, condensed "
@@ -635,6 +638,7 @@ _COMBINED_REVIEW_PROMPT = (
     "  4. CREATE A NEW CLASS-LEVEL UMBRELLA when nothing exists. Name at the class level — NOT a "
     "PR number, error string, codename, library-alone name, or 'fix-X / debug-Y' session artifact. "
     "If the name only fits today's task, fall back to (1), (2), or (3).\n\n"
+    + _CREMA_REVIEW_SKILL_SCOPE +
     "Read-before-write (ENFORCED — skill_manage refuses otherwise): before patching or editing an "
     "existing skill's SKILL.md, call skill_view(name) during this review; before overwriting or "
     "removing an EXISTING supporting file, call skill_view(name, file_path=...) for that exact "

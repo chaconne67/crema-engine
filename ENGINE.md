@@ -75,7 +75,8 @@ profile. The assembled input supplies chat and scheduled toolsets, plugins and h
    `auth.adopt_external_logins`. Copilot ACP uses the same setting through its provider profile.
 5. `pyproject.toml` — the `crema` extra (see below).
 6. `persistence/` — the settings reader uses the same Korean search as the writer, including prefixes
-   such as `세금*`. Crema uses the storage interface for chat history, context estimates and scheduled chats.
+   such as `세금*`. Short Latin terms such as `AI` also find a word joined to Korean when the
+   word index misses. Default one- and two-character searches omit tool output. Crema uses the storage interface for chat history, context estimates and scheduled chats.
 7. `agent/learning_mutations.py` — Hermes now provides the shared lock for memory edits and deletes. Crema keeps a regression test for concurrent writes.
 8. `hermes_cli/backup.py`, `hermes_cli/subcommands/backup.py` — `--no-secrets` leaves out `.env`,
    `auth.json` and the credential vault. `tools/crema_backup_tool.py` (new, `backup` toolset in `hermes-api-server`)
@@ -184,8 +185,9 @@ profile. The assembled input supplies chat and scheduled toolsets, plugins and h
 
 16. Review prompts without Hermes' CLI (Crema plan `Crema-기본-설명서-스킬-계획-2026-10-11.md`):
    `agent/background_review.py`'s skill and combined review prompts name `crema-guide` as the bundled
-   skill and no longer tell the reviewer to recommend `hermes skills install` / `hermes curator pin|adopt`,
-   commands a Crema user has no way to run
+   skill and reserve edits for agent-owned skills. Hub-installed, external, pinned, locked, and
+   user-owned skills are protected by the review instructions. The skill tool blocks background
+   writes to `crema-guide` even after the reviewer reads it.
 
 17. Each run works in the folder Crema names: `POST /v1/runs` takes `cwd` (the chat's project folder, else the app's
    `Documents\Crema`; one that is not an existing absolute folder is a 400 `invalid_cwd`, never a fallback).
@@ -193,6 +195,15 @@ profile. The assembled input supplies chat and scheduled toolsets, plugins and h
    in `gateway/platforms/api_server.py`, read by the system prompt's "Current working directory") and registers
    it as the session's terminal/file-tool cwd (`register_task_env_overrides`), so concurrent chats keep their own;
    tests in `tests/gateway/test_api_server_run_work_folder.py`
+
+The prompt-cache duration defaults to five minutes. Marker caching stays enabled on supported
+routes, and Crema skips extra model calls that would keep the cache warm. The new Hermes request
+planner may split a system prompt with per-request instructions into three blocks on some routes.
+
+Messaging adapters remain outside the archive. Their declared secret environment variable names
+stay in the child-process scrub policy. Tests that need an omitted Telegram plugin, Vertex
+profile, catalog generator, evaluation parser, or Desktop handoff run when the corresponding
+files are available.
 
 Running or testing the engine directly from a full Git checkout can discover components absent from
 the bundle. Use an empty directory and run `git archive HEAD | tar -x -C <empty-directory>` to

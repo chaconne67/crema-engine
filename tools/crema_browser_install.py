@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from hermes_cli._subprocess_compat import windows_hide_flags
-from hermes_constants import _is_executable_file, _version_probe_ok, get_hermes_home, is_termux as _is_termux_environment, node_tool_runnable
+from hermes_constants import _is_executable_file, _version_probe_ok, find_node_executable, get_hermes_home, is_termux as _is_termux_environment
 from tools.browser_tool_origin import origin_module as _origin
 from tools import browser_tool_cdp as _cdp
 from tools import browser_tool_cloud as _cloud
@@ -87,20 +87,6 @@ def _agent_browser_candidate_present(path: str | None) -> bool:
     return os.path.exists(path) and (os.name == "nt" or os.access(path, os.X_OK))
 
 
-def _resolve_npx_bin() -> Optional[str]:
-    """Resolve a runnable npx, extended (Hermes-managed/Homebrew) PATH first.
-
-    Bare PATH first would let a broken system npx shadow a healthy managed one,
-    so every candidate is validated with ``node_tool_runnable`` before use.
-    """
-    extended_path = _merge_browser_path("")
-    for path in ([extended_path] if extended_path else []) + [None]:
-        npx = shutil.which("npx", path=path)
-        if npx and node_tool_runnable(npx):
-            return npx
-    return None
-
-
 def _agent_browser_candidates(extended_path: str):
     """Yield agent-browser lookup candidates lazily: ambient PATH → extended PATH → repo-local node_modules/.bin.
 
@@ -128,7 +114,7 @@ def _find_agent_browser(*, validate: bool = True) -> str:
 
     def _not_found(cached: bool) -> FileNotFoundError:
         return FileNotFoundError(f"agent-browser CLI not found{' (cached)' if cached else ''}. Install it with: "
-                                 f"{_browser_install_hint()}\nOr ensure npx is available in your PATH.")
+                                 f"{_browser_install_hint()}\nOr ensure Hermes has a managed npm runtime.")
 
     def _accept(candidate: str) -> str:
         # Set resolved at each accept site (not before the search) so a concurrent reader never sees
@@ -147,8 +133,8 @@ def _find_agent_browser(*, validate: bool = True) -> str:
     for candidate in _agent_browser_candidates(extended_path):
         if candidate and ok(candidate):
             return _accept(candidate)
-    # npx fallback (also searches the extended PATH)
-    if _resolve_npx_bin():
+    # npx fallback uses the selected npm runtime.
+    if find_node_executable("npx"):
         return _accept(_bt.NPX_AGENT_BROWSER_SENTINEL)
     if not validate:
         raise FileNotFoundError("agent-browser CLI not found")
@@ -183,7 +169,7 @@ def warm_agent_browser_npx_cache(timeout: float = 60.0) -> bool:
     graph.
     """
     _bt = _origin()
-    npx_bin = _resolve_npx_bin()
+    npx_bin = find_node_executable("npx")
     if not npx_bin:
         return False
     env = _bt._build_browser_env()
@@ -273,7 +259,10 @@ def _maybe_autoinstall_chromium() -> bool:
         return False
     install_cmd = [browser_cmd, "install"]
     if _is_npx_agent_browser_sentinel(browser_cmd):
-        install_cmd = [_resolve_npx_bin() or "npx", "--ignore-scripts", "-y", _bt.AGENT_BROWSER_NPX_SPEC, "install"]
+        npx_bin = find_node_executable("npx")
+        if npx_bin is None:
+            return False
+        install_cmd = [npx_bin, "--ignore-scripts", "-y", _bt.AGENT_BROWSER_NPX_SPEC, "install"]
 
     _bt.logger.info("browser: Chromium missing — auto-installing the browser binary (one-time ~170MB; disable via security.allow_lazy_installs)")
     try:

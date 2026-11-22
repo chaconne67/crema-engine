@@ -219,7 +219,7 @@ class TestRuntimeProviderResolution:
         assert result["provider"] == "kimi-coding"
         assert result["api_key"] == "auto-kimi-key"
 
-    def test_runtime_external_process_provider_uses_process_runtime(self, monkeypatch, tmp_path):
+    def test_runtime_external_process_provider_requires_opt_in(self, monkeypatch, tmp_path):
         import providers
         from hermes_cli import auth
         from providers.base import ProviderProfile
@@ -240,14 +240,9 @@ class TestRuntimeProviderResolution:
 
         from hermes_cli.runtime_provider import resolve_runtime_provider
 
-        result = resolve_runtime_provider(requested="acme-acp")
-
-        assert result["provider"] == "acme-acp"
-        assert result["api_mode"] == "chat_completions"
-        assert result["api_key"] == "acme-acp"
-        assert result["base_url"] == "acp://acme"
-        assert os.path.samefile(result["command"], cli)
-        assert result["args"] == ["--acp", "--stdio", "--debug"]
+        with pytest.raises(auth.AuthError) as failure:
+            resolve_runtime_provider(requested="acme-acp")
+        assert failure.value.code == "external_logins_not_adopted"
 
 
 # =============================================================================

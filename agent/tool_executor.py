@@ -49,7 +49,7 @@ from agent.inline_tool_executors import (
 from agent.message_metadata import stamp_data_use
 from agent.session_persistence import sync_rewritten_tool_rows
 from agent.tool_dispatch_helpers import (
-    _NEVER_PARALLEL_TOOLS, _is_destructive_command, _append_subdir_hint_to_multimodal,
+    _NEVER_PARALLEL_TOOLS, _is_destructive_command,
     _context_pruned_argument_paths, _plan_tool_batch_segments, make_tool_result_message,
 )
 from session_rules.turns import _is_multimodal_tool_result, _multimodal_text_summary

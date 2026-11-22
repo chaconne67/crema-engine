@@ -397,6 +397,8 @@ def _locate_for_write(name: str, action: str, not_found_suffix: str = ""):
     if not existing:
         return None, _err(_skill_not_found_error(name, not_found_suffix))
     skill_dir = existing["path"]
+    if _is_background_review() and skill_dir.name == "crema-guide":
+        return None, _err("Crema restores crema-guide at startup. Suggest the change in the review summary.")
     guard = _background_review_delete_guard(name, skill_dir) if action == "delete" else None
     return (None, guard) if guard else (skill_dir, None)
 

@@ -570,6 +570,10 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
     assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:4])
 
 
+@pytest.mark.skipif(
+    not (Path(__file__).resolve().parents[2] / "plugins/platforms/telegram/plugin.yaml").is_file(),
+    reason="exclude-messaging: Telegram plugin is omitted from the Crema archive",
+)
 class TestTelegramRichMessagesHint:
     """Verify that TELEGRAM_RICH_MESSAGES_HINT is conditionally included."""
 

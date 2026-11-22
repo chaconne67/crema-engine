@@ -5,11 +5,6 @@
     "kind": "known_path_table"
   },
   {
-    "path": "agent/anthropic_adapter.py",
-    "symbol": "_claude_code_candidates",
-    "kind": "bare_which"
-  },
-  {
     "path": "agent/lsp/cli.py",
     "symbol": "_backend_warnings",
     "kind": "bare_which"
@@ -490,11 +485,6 @@
     "kind": "bare_which"
   },
   {
-    "path": "tools/environments/local.py",
-    "symbol": "_resolve_hermes_bin_dir",
-    "kind": "bare_which"
-  },
-  {
     "path": "tools/environments/ssh.py",
     "symbol": "_ensure_ssh_available",
     "kind": "bare_which"
@@ -655,5 +645,35 @@
     "symbol": "_installed_git",
     "kind": "bare_which",
     "reason": "only asks whether the caller's bare git is on PATH; when it is not (Desktop on a Windows install whose only git is install.ps1's PM-staged copy) it defers to update_pause_record._git_executable, the updater's own resolution"
+  },
+  {
+    "path": "crema_change_principles/scripts/reviewer.py",
+    "symbol": "program",
+    "kind": "bare_which"
+  },
+  {
+    "path": "tools/crema_browser_install.py",
+    "symbol": "_agent_browser_candidates",
+    "kind": "bare_which"
+  },
+  {
+    "path": "tools/crema_browser_install.py",
+    "symbol": "_chromium_installed",
+    "kind": "bare_which"
+  },
+  {
+    "path": "tools/crema_browser_install.py",
+    "symbol": "_find_agent_browser",
+    "kind": "bare_which"
+  },
+  {
+    "path": "tools/crema_ego.py",
+    "symbol": "cli",
+    "kind": "bare_which"
+  },
+  {
+    "path": "tools/environments/local_gitbash_probe.py",
+    "symbol": "_mandatory_aslr_enabled",
+    "kind": "bare_which"
   }
 ]

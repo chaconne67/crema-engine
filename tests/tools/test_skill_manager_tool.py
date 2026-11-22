@@ -1551,3 +1551,20 @@ class TestLockedGuard:
         assert autonomous["success"] is False, autonomous
         assert "could not be verified" in autonomous["error"], autonomous
         assert foreground["success"] is True, foreground
+
+
+def test_background_review_cannot_patch_crema_guide(tmp_path):
+    from tools.skill_manager_guards import mark_background_review_skill_read
+
+    with _skill_dir(tmp_path):
+        _create_skill("crema-guide", VALID_SKILL_CONTENT)
+        guide = tmp_path / "crema-guide" / "SKILL.md"
+        before = guide.read_text(encoding="utf-8")
+        with _background_origin():
+            mark_background_review_skill_read(guide)
+            result = json.loads(skill_manage(
+                action="patch", name="crema-guide", old_string="Do the thing.", new_string="Do the new thing."
+            ))
+        assert result["success"] is False
+        assert "crema-guide" in result["error"]
+        assert guide.read_text(encoding="utf-8") == before

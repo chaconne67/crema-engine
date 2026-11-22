@@ -285,9 +285,14 @@ def _resolution_sites() -> set[tuple[str, str, str]]:
     return sites
 
 
+# The Crema archive drops Hermes Desktop, including this one runner fixture.
+_DESKTOP_FIXTURE = "apps/desktop/electron/fixtures/source-backend.py"
+
+
 def _resolution_allowlist() -> set[tuple[str, str, str]]:
     rows = json.loads(_RESOLUTION_ALLOWLIST_PATH.read_text(encoding="utf-8"))
-    return {(row["path"], row["symbol"], row["kind"]) for row in rows}
+    return {(row["path"], row["symbol"], row["kind"]) for row in rows
+            if row["path"] != _DESKTOP_FIXTURE or (REPO_ROOT / _DESKTOP_FIXTURE).is_file()}
 
 
 def _format_resolution_sites(sites: set[tuple[str, str, str]]) -> str:
@@ -343,7 +348,9 @@ def test_no_unreviewed_bare_managed_runtime_lookups():
 def test_allowlist_has_no_stale_entries():
     """A fixed call site must be dropped from the allow-list, not left to rot."""
     live = {(rel, cmd) for rel, cmd, _lineno in _findings()}
-    stale = sorted(set(_ALLOWED) - live)
+    allowed = {(path, cmd) for path, cmd in _ALLOWED
+               if path != _DESKTOP_FIXTURE or (REPO_ROOT / _DESKTOP_FIXTURE).is_file()}
+    stale = sorted(allowed - live)
 
     assert not stale, (
         "Allow-list entries no longer match any source line — the call site was "

@@ -133,8 +133,6 @@ def retire_expired_oneshot(d: Any) -> bool:
         return False
     if (d.job.get("origin") or {}).get("platform") == "crema":
         return False
-    if (d.job.get("origin") or {}).get("platform") == "crema":
-        return False
     # Due while a gateway drain held dispatch: its grace counts from the end of the hold. A claimed
     # one-shot already fired once, so it never gets the extension (that would re-dispatch it).
     claimed = d.job.get("run_claim") or d.job.get("fire_claim")

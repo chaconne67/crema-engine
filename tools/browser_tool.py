@@ -60,7 +60,7 @@ def _build_browser_env() -> dict:
     # The Browser Use harness dials the resolved local CDP URL over ``websockets``; without a
     # loopback NO_PROXY a macOS system proxy captures that dial (#110565).
     # Headed Chromium opens on this profile's Bot Desktop when one is running (human can take it over). Pure: this
-    # builder also serves the npx cache warmer, the Chromium auto-installer and the Lightpanda engine, none of which
+    # builder also serves the Chromium auto-installer and the Lightpanda engine, neither of which
     # may bring a screen up — the auto-start hook lives at the headed Chromium spawn sites (browser_tool_session).
     from tools.bot_desktop.runtime import desktop_env as _bot_desktop_env
     env = add_loopback_no_proxy(_bot_desktop_env(env))
@@ -97,16 +97,11 @@ except ImportError:
     # with only ``get_provider``; no mutable registry → constant generation.
     def _browser_registry_generation(*, scope=None):
         return (0, 0)
-# Optional backends: Camofox (CAMOFOX_URL routes everything through its REST API)
-# and the Browser Use CLI.
+# Optional Camofox backend (CAMOFOX_URL routes through its REST API).
 try:
     from tools.browser_camofox import is_camofox_mode as _is_camofox_mode
 except ImportError:
     _is_camofox_mode = lambda: False  # noqa: E731
-try:
-    from tools.browser_use_cli import is_browser_use_cli_mode as _is_browser_use_cli_mode
-except ImportError:
-    _is_browser_use_cli_mode = lambda: False  # noqa: E731
 
 logger = logging.getLogger(__name__)
 
@@ -926,15 +921,16 @@ def browser_type(ref: str, text: str, task_id: Optional[str] = None) -> str:
         return blocked
     ref = _at_ref(ref)
     result = _session._run_browser_command(effective_task_id, "fill", [ref, text])
-    from agent.display import redact_browser_typed_text_for_display, redact_tool_args_for_display
-    # Typed text goes through the secret-pattern redactor so API keys / tokens don't
-    # leak into tool progress or chat history (the raw value already went to the browser).
-    display_text = (redact_tool_args_for_display("browser_type", {"text": text}) or {})["text"]
+    from agent.display import redact_tool_args_for_display
+    display_text = redact_tool_args_for_display("browser_type", {"text": text})["text"]
     if result.get("success"):
         response = {"success": True, "typed": display_text, "element": ref}
     else:
         response = _err(result.get("error", f"Failed to type into {ref}"))
-    return _dumps(redact_browser_typed_text_for_display(_lp._copy_fallback_warning(response, result), text))
+    _lp._copy_fallback_warning(response, result)
+    if display_text != text:
+        response = _snapshot._redact_browser_output(response, typed_replacement=(text, display_text))
+    return _dumps(response)
 
 
 def browser_scroll(direction: str, task_id: Optional[str] = None) -> str:
@@ -1378,10 +1374,13 @@ for _name, _emoji, _check_fn, _defaults, *_extra in _BROWSER_TOOL_TABLE:
                       check_fn=_check_fn, emoji=_emoji)
 
 
-# ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----
-# Names external plugins imported from this module before the Sep 2026 decomposition.
-# Internal code MUST NOT use these (scripts/check_compat_pointers.py fails CI if it does).
-# The whole block is removed by reverting the commit that added it.
+def warm_agent_browser_npx_cache(timeout: float = 60.0) -> bool:
+    """Frozen old-updater entry point. Runtime discovery handles its own npx calls."""
+    return False
+
+
+# ---- BEGIN PLUGIN-COMPAT ----
+# Legacy browser exports retained by Crema.
 from typing import List  # noqa: F401,E402
 from typing import Tuple  # noqa: F401,E402
 import contextlib  # noqa: F401,E402
@@ -1413,7 +1412,6 @@ _PLUGIN_COMPAT_LAZY = {
     'normalize_browser_cloud_provider': ('tools.tool_backend_helpers', 'normalize_browser_cloud_provider'),
     'reset_hermes_home_override': ('hermes_constants', 'reset_hermes_home_override'),
     'set_hermes_home_override': ('hermes_constants', 'set_hermes_home_override'),
-    'warm_agent_browser_npx_cache': ('tools.crema_browser_install', 'warm_agent_browser_npx_cache'),
     'windows_hide_flags': ('hermes_cli._subprocess_compat', 'windows_hide_flags'),
 }
 
@@ -1423,7 +1421,5 @@ def __getattr__(name):  # PEP 562 — lazy so no import cycles
     if target is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     import importlib
-    from hermes_cli.plugin_compat import warn_once
-    warn_once(__name__, name, *target)
     return getattr(importlib.import_module(target[0]), target[1])
 # ---- END PLUGIN-COMPAT ----

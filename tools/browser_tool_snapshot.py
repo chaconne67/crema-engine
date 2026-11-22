@@ -108,18 +108,26 @@ def _truncate_snapshot(snapshot_text: str, max_chars: Optional[int] = None) -> s
     return '\n'.join(result)
 
 
-def _redact_browser_output(value: Any) -> Any:
+def _redact_browser_output(value: Any, *, typed_replacement: Optional[tuple[str, str]] = None) -> Any:
     """Force-redact secrets in browser-originated data (snapshots, console, eval
     results can carry page-rendered keys/cookies/tokens). Tool output is a model
-    boundary, so this applies even when global log redaction is disabled."""
+    boundary, so this applies even when global log redaction is disabled. A
+    known typed secret is replaced verbatim so backend errors cannot reveal
+    it by changing its surrounding text."""
     from agent.redact import redact_sensitive_text
 
     if isinstance(value, str):
+        if typed_replacement is not None:
+            return value.replace(*typed_replacement)
         return redact_sensitive_text(value, force=True)
     if isinstance(value, list):
-        return [_redact_browser_output(item) for item in value]
+        return [_redact_browser_output(item, typed_replacement=typed_replacement) for item in value]
     if isinstance(value, tuple):
-        return tuple(_redact_browser_output(item) for item in value)
+        return tuple(_redact_browser_output(item, typed_replacement=typed_replacement) for item in value)
     if isinstance(value, dict):
-        return {_redact_browser_output(key): _redact_browser_output(item) for key, item in value.items()}
+        return {
+            (key if typed_replacement is not None else _redact_browser_output(key)):
+            _redact_browser_output(item, typed_replacement=typed_replacement)
+            for key, item in value.items()
+        }
     return value

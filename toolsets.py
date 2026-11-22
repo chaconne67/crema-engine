@@ -222,7 +222,8 @@ TOOLSETS = {
          "knowledge_search", "knowledge_get", "knowledge_write", "knowledge_think", "crema_backup", "crema_chats", "crema_schedule",
          "mail", "calendar", "drive", "crema_services", "crema_ego", "crema_unmet"],
     ),
-    "hermes-cli": _bundle("Full interactive CLI toolset - all default tools plus cronjob management"),
+    "hermes-cli": _bundle("Full interactive CLI toolset - all default tools plus cronjob management",
+                          CREMA_RESTRICTED_BROWSER_TOOLS),
 
     # Mirrors hermes-cli; `hermes tools` platform config filters it down and
     # _get_platform_tools() drops _DEFAULT_OFF_TOOLSETS unless user-enabled.

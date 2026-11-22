@@ -666,12 +666,6 @@
   },
   {
     "path": "tools/crema_browser_install.py",
-    "symbol": "_find_agent_browser",
-    "kind": "bare_which",
-    "reason": "After installation, rediscover agent-browser in the same host and engine locations so the new CLI is immediately usable."
-  },
-  {
-    "path": "tools/crema_browser_install.py",
     "symbol": "_resolve_npx_bin",
     "kind": "bare_which",
     "reason": "Crema's browser can use a runnable host npm when the engine did not install npm on that machine."

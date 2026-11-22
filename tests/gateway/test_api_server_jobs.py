@@ -11,6 +11,7 @@ Covers:
 """
 
 import logging
+import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -47,6 +48,18 @@ def _make_adapter(api_key: str = "") -> APIServerAdapter:
         extra["key"] = api_key
     config = PlatformConfig(enabled=True, extra=extra)
     return APIServerAdapter(config)
+
+
+@pytest.mark.asyncio
+async def test_cron_fire_is_unavailable_without_chronos(monkeypatch):
+    monkeypatch.setitem(sys.modules, "plugins.cron_providers.chronos.verify", None)
+    adapter = _make_adapter()
+    app = web.Application()
+    app.add_routes([web.post(path, handler) for method, path, handler in adapter._http_route_table()
+                    if method == "POST" and path == "/api/cron/fire"])
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post("/api/cron/fire")
+        assert response.status == 404
 
 
 def _create_app(adapter: APIServerAdapter) -> web.Application:

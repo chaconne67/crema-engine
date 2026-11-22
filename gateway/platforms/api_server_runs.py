@@ -1414,13 +1414,20 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
         _retire_live_run(self, run_id)
 
 
-def _release_run_waiters(approval_session_key: Optional[str]) -> None:
-    """Best-effort release of what a run waits on, its approval and its clarify question (no-op without a key)."""
+def _unregister_approval_notify(approval_session_key: Optional[str]) -> None:
+    """Best-effort release of a run's approval waiter."""
     if not approval_session_key:
         return
     with suppress(Exception):
         from tools.approval import unregister_gateway_notify
         unregister_gateway_notify(approval_session_key)
+
+
+def _release_run_waiters(approval_session_key: Optional[str]) -> None:
+    """Release a run's approval and clarify waiters."""
+    if not approval_session_key:
+        return
+    _unregister_approval_notify(approval_session_key)
     with suppress(Exception):
         from tools import clarify_gateway
         clarify_gateway.clear_session(approval_session_key)

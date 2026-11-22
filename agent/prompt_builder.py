@@ -1590,21 +1590,10 @@ def load_soul_md(context_length: Optional[int] = None, home_override: Path | Non
         return None
 
 
-def _read_context_file(path: Path, root: Optional[Path] = None) -> Optional[str]:
-    """Stripped text of *path*; "" when missing, empty or unreadable (logged at debug).
-
-    With *root* (the resolved project root the file was discovered under), a file whose resolved target
-    leaves *root* or hits the read deny-list is skipped: the policy subdirectory hints apply. That refusal
-    returns None, so ``/context`` can tell it apart from a read failure."""
+def _read_context_file(path: Path) -> str:
+    """Stripped text of a Crema context file, or an empty string if unavailable."""
     if not path.exists():
         return ""
-    if root is not None:
-        from agent.subdirectory_hints import _resolved_hint_target  # late import: that module imports this one
-        target = _resolved_hint_target(path, root)
-        if target is None:
-            logger.warning("Skipping context file %s: it resolves outside %s or to a protected file", path, root)
-            return None
-        path = target  # read the vetted target, not the link, so a swap between check and read is harmless
     try:
         return (_read_text_with_timeout(path) or "").strip()
     except Exception as e:
@@ -1654,26 +1643,3 @@ def build_context_files_prompt(
         parts.append("# CREMA.md\n\nThe user's standing instructions for working in Crema. Follow them in this "
                      f"chat.{precedence}\n\n" + "\n\n".join(sections))
     return "\n\n".join(parts)
-
-
-# ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----
-# Names external plugins imported from this module before the Sep 2026 decomposition.
-# Internal code MUST NOT use these (scripts/check_compat_pointers.py fails CI if it does).
-# The whole block is removed by reverting the commit that added it.
-from typing import List  # noqa: F401,E402
-
-
-_PLUGIN_COMPAT_LAZY = {
-    'org_id_of_path': ('agent.skill_utils', 'org_id_of_path'),
-}
-
-
-def __getattr__(name):  # PEP 562 — lazy so no import cycles
-    target = _PLUGIN_COMPAT_LAZY.get(name)
-    if target is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    import importlib
-    from hermes_cli.plugin_compat import warn_once
-    warn_once(__name__, name, *target)
-    return getattr(importlib.import_module(target[0]), target[1])
-# ---- END PLUGIN-COMPAT ----

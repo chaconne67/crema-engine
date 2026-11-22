@@ -16,6 +16,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from tools.environments.local import build_subprocess_env
+
 # The Windows installer ego lite links from its README (github.com/citrolabs/ego-lite); the same address carries each
 # new version. It is run only when Windows says this company signed it.
 INSTALLER = "https://cdn.ego.app/setup/windows/x64/egoliteSetup-Y7MbxKIuhzFB.exe"
@@ -147,7 +149,8 @@ CLOSE = ("$end = (Get-Date).AddSeconds(60); $quiet = (Get-Date).AddSeconds(15); 
 
 
 def _close_windows() -> None:
-    subprocess.run(["powershell", "-NoProfile", "-Command", CLOSE], env={**os.environ, "EGO_HOME": str(_home())},
+    env = build_subprocess_env(scrub_secrets=False, inherit_profile_home=False, extra={"EGO_HOME": str(_home())})
+    subprocess.run(["powershell", "-NoProfile", "-Command", CLOSE], env=env,
                    capture_output=True, timeout=90, creationflags=NO_WINDOW)
 
 
@@ -171,10 +174,13 @@ def _install() -> None:
             setup = Path(tempfile.mkdtemp(prefix="ego-lite-")) / "egoliteSetup.exe"
             urllib.request.urlretrieve(INSTALLER, setup, _downloaded)
             _progress.update(step="check", percent=None)
+            # A path with a quote in it stays out of the command text.
+            env = build_subprocess_env(scrub_secrets=False, inherit_profile_home=False,
+                                       extra={"EGO_SETUP": str(setup)})
             signed = subprocess.run(
                 ["powershell", "-NoProfile", "-Command",
                  "$s = Get-AuthenticodeSignature -LiteralPath $env:EGO_SETUP; if ($s.Status -eq 'Valid') { $s.SignerCertificate.Subject }"],
-                env={**os.environ, "EGO_SETUP": str(setup)},  # a path with a quote in it stays out of the command text
+                env=env,
                 capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW).stdout
             if SIGNER not in signed:
                 raise ValueError(f"ego lite's installer is not signed by Citro Labs: {signed.strip() or 'no valid signature'}")

@@ -3456,7 +3456,14 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         # Startup-wait budget starts here so a slow JWKS fetch cannot outlast the forwarder timeout.
         received_at = asyncio.get_running_loop().time()
         from hermes_cli.config import cfg_get, load_config
-        from plugins.cron_providers.chronos.verify import get_fire_verifier
+        try:
+            from plugins.cron_providers.chronos.verify import get_fire_verifier
+        except ModuleNotFoundError as exc:
+            if exc.name not in {
+                "plugins.cron_providers", "plugins.cron_providers.chronos", "plugins.cron_providers.chronos.verify",
+            }:
+                raise
+            return web.json_response({"error": "Chronos cron provider is unavailable"}, status=404)
         auth = request.headers.get("Authorization", "")
         token = auth[7:].strip() if auth.startswith("Bearer ") else ""
         cfg = load_config()

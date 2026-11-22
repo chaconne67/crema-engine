@@ -22,3 +22,39 @@ def test_copilot_ambient_login_requires_opt_in(monkeypatch):
     monkeypatch.setattr(credential_sources, "adopt_external_logins_enabled", lambda: True)
     assert get_provider_profile("copilot-acp").external_process_allowed()
     assert credentials.resolve_copilot_token() == ("ghu_offline_fixture", "gh auth token")
+
+
+def test_pool_seeding_honors_source_suppression_and_explicit_selection(monkeypatch):
+    from plugins.model_providers.copilot import credentials
+
+    profile = get_provider_profile("copilot")
+    source = "env:COPILOT_GITHUB_TOKEN"
+    actions = []
+
+    def resolve():
+        actions.append("resolve")
+        return "test-token", "COPILOT_GITHUB_TOKEN"
+
+    def exchange(token):
+        actions.append("exchange")
+        return "exchanged-token", "https://copilot.example"
+
+    monkeypatch.setattr(credentials, "resolve_copilot_token", resolve)
+    monkeypatch.setattr(credentials, "get_copilot_api_token", exchange)
+    assert profile.seed_pool_credentials(
+        suppressed_sources=frozenset(credentials._POOL_SOURCES), explicitly_configured=True,
+    ) == []
+    assert actions == []
+    assert profile.seed_pool_credentials(suppressed_sources=frozenset({source}), explicitly_configured=True) == []
+    assert actions == ["resolve"]
+    actions.clear()
+    assert profile.seed_pool_credentials(suppressed_sources=frozenset(), explicitly_configured=False) == [
+        {"source": source, "access_token": "test-token", "base_url": None, "label": "COPILOT_GITHUB_TOKEN"},
+    ]
+    assert actions == ["resolve"]
+    actions.clear()
+    assert profile.seed_pool_credentials(suppressed_sources=frozenset(), explicitly_configured=True) == [
+        {"source": source, "access_token": "exchanged-token", "base_url": "https://copilot.example",
+         "label": "COPILOT_GITHUB_TOKEN"},
+    ]
+    assert actions == ["resolve", "exchange"]

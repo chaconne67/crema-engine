@@ -112,14 +112,16 @@ def _get_backend() -> str:
         # Shared selection exists (use_gateway) but no shared name: firecrawl, no ladder.
         return "firecrawl"
 
-    return _autodetect_backend() or _keyless_backend() or ("ddgs" if _ddgs_package_importable() else "firecrawl")
+    return _autodetect_backend() or _keyless_backend() or "firecrawl"
 
 
 def _autodetect_backend() -> Optional[str]:
-    """Explicit credentials and registered non-native backends before keyless fallback."""
+    """Explicit credentials, DuckDuckGo, and registered providers before keyless fallback."""
     for backend, available in _keyed_backend_candidates():
         if available:
             return backend
+    if _ddgs_package_importable():
+        return "ddgs"
     # Plugin-contributed providers (built-ins are covered above); probe the held object directly. OpenAI's own
     # search is not one to pick from a sign-in alone: it runs only inside the Codex transport, which decides it
     # per request (model_search_wanted); as the client-side search every other model would call, it only fails.

@@ -205,9 +205,26 @@ five minutes. The Hermes request planner may split a system prompt with per-requ
 into three blocks on some routes.
 
 The server browser looks for a runnable `npx` in engine-managed npm, the legacy engine and
-Homebrew locations, then the system PATH. Browser discovery, cache warming, and Chromium
-installation and launch share the resolver. When the login vault is available, browser input
-tools tell the model to call `browser_vault` through `tool_call`.
+Homebrew locations, then the system PATH. Browser discovery, Chromium installation and launch
+share the resolver. The Chromium download follows Hermes's lazy-install policy. The historical
+updater's browser cache warmer is inert. Browser input masks secret values echoed in tool
+results and errors. When the login vault is available, browser input tools tell the model to
+call `browser_vault` through `tool_call`. The interactive CLI bundle includes the retained
+Crema browser tools so its delegated tasks can request the browser toolset. A local Bot Desktop
+session uses Hermes's live Chromium probe to attach to the dock browser.
+
+The app's chat stream releases its approval notifier at completion. Run completion and stop
+also release pending Crema questions. Copilot credential seeding follows Hermes's current
+provider interface and keeps the opt-in for external GitHub CLI credentials. Automatic
+function-based web search tries DuckDuckGo before registered plugin fallbacks and keyless
+hosting. The model's own search decision only counts usable search connections.
+
+The explicit `/init` command reads an existing `AGENTS.md` if its target is inside the chosen
+working folder and passes Hermes's file-read policy. Regular chats load Crema's own
+instruction files. File searches across multiple roots use one ordered scan with the caller's
+symlink setting. The three Ego PowerShell spawns use Hermes's child-process environment builder
+with their existing per-command variables. The bundle returns 404 for the optional Chronos
+webhook when the external scheduler plugin is absent.
 
 Messaging adapters remain outside the archive. Their declared secret environment variable names
 stay in the child-process scrub policy. The full-checkout blocklist test checks the copy used

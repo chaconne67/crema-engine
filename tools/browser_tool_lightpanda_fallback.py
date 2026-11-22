@@ -54,15 +54,7 @@ def lightpanda_engine_status() -> Tuple[bool, str]:
         except Exception:
             name = type(provider).__name__
         return False, f"cloud provider {name} is selected (browser.cloud_provider, or auto-detected from credentials)"
-    if not _bt._is_browser_use_cli_mode():
-        return True, "built-in browser tools: agent-browser --engine lightpanda"
-    try:
-        from tools.browser_use_cli import _read_browser_cfg, is_legacy_browser_use_cloud_config
-        if is_legacy_browser_use_cloud_config(_read_browser_cfg()):
-            return False, "Browser Use cloud (BROWSER_USE_API_KEY) is selected"
-    except Exception as e:
-        _bt.logger.debug("legacy Browser Use cloud check failed: %s", e)
-    return True, "Browser Use mode: Hermes spawns `lightpanda serve` per session"
+    return True, "built-in browser tools: agent-browser --engine lightpanda"
 
 
 def _lightpanda_fallback_reason(engine: str, command: str, result: Dict[str, Any]) -> Optional[str]:

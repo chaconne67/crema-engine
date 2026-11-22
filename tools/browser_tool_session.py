@@ -265,28 +265,10 @@ def _create_local_session(task_id: str, allow_real_profile: bool = True) -> Dict
             _bt.logger.info("Created real-profile local session %s for task %s", info["session_name"], task_id)
             return info
 
-    # Browser Use mode + ``browser.engine: lightpanda`` drives a Hermes-spawned
-    # ``lightpanda serve`` (the built-in tools are hidden in that mode).
-    if _bt._is_browser_use_cli_mode() and _lp._using_lightpanda_engine():
-        return _create_lightpanda_session(task_id)
-
     info = _session_record("h", None, {"local": True})
     if restricted:
         info["restricted_storage"] = get_hermes_home() / "browser" / info["session_name"]
     _bt.logger.info("Created local browser session %s for task %s", info["session_name"], task_id)
-    return info
-
-
-def _create_lightpanda_session(task_id: str) -> Dict[str, Any]:
-    """Spawn ``lightpanda serve`` for this session key (Browser Use mode)."""
-    from tools.browser_lightpanda import launch_lightpanda
-
-    info = _session_record("lp", None, {"local": True, "lightpanda": True})
-    server, err = launch_lightpanda(info["session_name"], block_private_networks=not _cloud._is_local_backend())
-    if err:
-        raise RuntimeError(err)
-    info["cdp_url"] = server.cdp_url
-    _bt.logger.info("Created Lightpanda session %s (port %s) for task %s", info["session_name"], server.port, task_id)
     return info
 
 
@@ -750,9 +732,22 @@ def _bot_desktop_attach_port(session_info: Dict[str, Any]) -> Optional[int]:
     """DevTools port of a human-started Chromium on the Bot Desktop's shared profile, else ``None``."""
     if not _shares_bot_desktop_browser(session_info):
         return None
-    from tools.bot_desktop import browser as _bd_browser
-    return _bd_browser.running_instance_cdp_port(str(_bd_browser.profile_dir()),
-                                                 exclude_session=session_info["session_name"])
+    import psutil
+    from tools.bot_desktop import browser
+    from tools.browser_launcher import running_instance
+
+    running = running_instance(str(browser.profile_dir()))
+    if running is None:
+        return None
+    port, _, pid = running
+    try:
+        parent = psutil.Process(pid).parent()
+        # Adding --cdp to the owning daemon would close the very browser it needs.
+        if parent and parent.environ().get("AGENT_BROWSER_SESSION") == session_info["session_name"]:
+            return None
+    except (OSError, psutil.Error):
+        pass
+    return port
 
 
 def _dispatch_browser_command(

@@ -7,6 +7,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from tools.environments.local import build_subprocess_env
+
 
 # UI labels and the Text click are from the installed Ego Space picker. Each action
 # uses a fresh accessibility element and verifies its result before proceeding.
@@ -256,9 +258,11 @@ def call(action: str, exe: Path, **payload) -> dict:
     if os.name != "nt":
         raise OSError("Ego window control requires Windows")
     request = {"action": action, "exe": str(exe), **payload}
+    env = build_subprocess_env(scrub_secrets=False, inherit_profile_home=False,
+                               extra={"CREMA_EGO_WINDOW_REQUEST": json.dumps(request, ensure_ascii=False)})
     completed = subprocess.run(
         ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", _SCRIPT],
-        env={**os.environ, "CREMA_EGO_WINDOW_REQUEST": json.dumps(request, ensure_ascii=False)},
+        env=env,
         capture_output=True, encoding="utf-8", errors="replace", timeout=22,
         creationflags=subprocess.CREATE_NO_WINDOW,
     )

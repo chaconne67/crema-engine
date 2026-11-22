@@ -2,7 +2,6 @@
 
 Split out of ``tools/browser_tool.py``. Facade-owned state is read through ``_bt`` (``tools.browser_tool``, resolved per call) — no import cycle."""
 
-import contextlib
 import functools
 import os
 import shutil
@@ -11,7 +10,6 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from hermes_cli._subprocess_compat import windows_hide_flags
 from hermes_constants import (
     _is_executable_file, _run_version_probe, _version_probe_ok, find_node_executable,
     get_hermes_home, is_termux as _is_termux_environment, with_hermes_node_path,
@@ -19,7 +17,6 @@ from hermes_constants import (
 from tools.browser_tool_origin import origin_module as _origin
 from tools import browser_tool_cdp as _cdp
 from tools import browser_tool_cloud as _cloud
-from tools import browser_tool_lifecycle as _lifecycle
 from tools import browser_tool_lightpanda_fallback as _lp
 
 
@@ -128,7 +125,7 @@ def _agent_browser_candidates(extended_path: str):
 
 
 def _find_agent_browser(*, validate: bool = True) -> str:
-    """Find the agent-browser CLI: PATH, Homebrew/managed dirs, local node_modules/.bin, npx fallback, lazy install.
+    """Find the agent-browser CLI: PATH, Homebrew/managed dirs, local node_modules/.bin, or npx fallback.
 
     A bare ``shutil.which`` hit is NOT trusted: agent-browser's npm postinstall re-points a global symlink at our
     local node_modules binary, which vanishes on the next ``hermes update`` and leaves a dangling link ``which``
@@ -164,64 +161,8 @@ def _find_agent_browser(*, validate: bool = True) -> str:
         return _accept(_bt.NPX_AGENT_BROWSER_SENTINEL)
     if not validate:
         raise FileNotFoundError("agent-browser CLI not found")
-    try:  # Nothing found — try lazy installation before giving up.
-        from hermes_cli.dep_ensure import ensure_dependency
-        if ensure_dependency("browser"):
-            home = get_hermes_home()
-            managed = (home / "node_modules" / ".bin", home / "node" / "bin", home / "node")
-            for path in (None, *([extended_path] if extended_path else []), *map(str, managed)):
-                recheck = shutil.which("agent-browser", path=path)
-                if recheck and agent_browser_runnable(recheck):
-                    return _accept(recheck)
-    except Exception:
-        pass
     _bt._agent_browser_resolved = True
     raise _not_found(cached=False)
-
-
-def warm_agent_browser_npx_cache(timeout: float = 60.0) -> bool:
-    """Best-effort pre-fetch of the agent-browser npm package via npx (``hermes update`` / ``doctor --fix``).
-
-    Runs with the credential-scrubbed env every other agent-browser spawn uses (registry-fetched npm code must
-    never see the operator keyring), in its own process group, and tree-kills on timeout so a surviving
-    descendant cannot hold the capture pipe open. Never raises; True only when npx exited 0.
-
-    agent-browser is no longer a root package.json dependency (#43564) — it resolves lazily via ``npx
-    agent-browser`` instead, which keeps it out of the npm workspace install graph entirely (nothing to
-    prune it anymore) but means the first real invocation in a session would otherwise pay npx's
-    registry-lookup/fetch cost. Calling this during ``hermes update`` (or ``hermes doctor --fix``) warms
-    npx's own cache ahead of time, restoring the "available before any session starts" property
-    agent-browser had while it was an eager root dependency — without re-entangling it with the workspace
-    graph.
-    """
-    _bt = _origin()
-    npx_bin = _resolve_npx_bin()
-    if not npx_bin:
-        return False
-    env = _bt._build_browser_env()
-    env["PATH"] = _browser_subprocess_path(env.get("PATH", ""))
-    popen_kwargs: dict = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True,
-                          "encoding": "utf-8", "errors": "replace", "env": env}
-    if os.name == "posix":
-        popen_kwargs.update(creationflags=windows_hide_flags(), start_new_session=True)
-    else:
-        popen_kwargs["creationflags"] = windows_hide_flags() | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    # --ignore-scripts: AGENT_BROWSER_NPX_SPEC is a floating range; a compromised future patch must not run
-    # install-time lifecycle scripts here. --prefer-offline: once cached, repeat runs must not re-hit the registry.
-    cmd = [npx_bin, "--ignore-scripts", "--prefer-offline", "-y", _bt.AGENT_BROWSER_NPX_SPEC, "--version"]
-    try:
-        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, **popen_kwargs)
-    except Exception:
-        return False
-    try:
-        proc.communicate(timeout=timeout)
-        return proc.returncode == 0
-    except Exception as exc:
-        _lifecycle._kill_process_tree(proc)
-        if isinstance(exc, subprocess.TimeoutExpired):
-            with contextlib.suppress(Exception):
-                proc.communicate(timeout=5)
-        return False
 
 
 def _chromium_search_roots() -> List[str]:
@@ -276,8 +217,8 @@ def _maybe_autoinstall_chromium() -> bool:
     _bt._chromium_autoinstall_attempted = True
     if _running_in_docker():
         return False
-    from tools.lazy_deps import _allow_lazy_installs
-    if not _allow_lazy_installs():
+    from pm import lazy_installs_allowed
+    if not lazy_installs_allowed():
         return False
     try:
         browser_cmd = _find_agent_browser()

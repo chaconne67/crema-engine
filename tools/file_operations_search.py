@@ -841,7 +841,6 @@ class SearchMixin:
             # One global traversal across roots so modified ordering and pagination
             # are exact; root admission wraps the actual rg/find invocation.
             merged = self._search_files(pattern, existing, limit, offset, order, follow_symlinks)
-            merged = self._search_files(pattern, existing, limit, offset, order)
             children = [merged]
         else:
             merged, children = SearchResult(), []

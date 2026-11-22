@@ -1,6 +1,7 @@
 """Crema launcher: distilling a quiet chat into the knowledge notebook, and the daily pass."""
 import json
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,9 +12,16 @@ from agent.knowledge_store import KnowledgeStore
 class FakeDB:
     def __init__(self, chats):
         self.chats = chats  # id -> (messages, last_active)
+        self.messages = SimpleNamespace(read_conversation=self.read_conversation)
+        self.sessions = SimpleNamespace(list_sessions=self.list_sessions)
 
-    def get_messages_as_conversation(self, session_id, **_):
-        return list(self.chats[session_id][0])
+    def read_conversation(self, session_id, request):
+        assert request.include_lineage and request.repair_alternation
+        return [SimpleNamespace(as_openai_message=lambda message=msg: message) for msg in self.chats[session_id][0]]
+
+    def list_sessions(self, query, window):
+        assert query.order.value == "last_active" and window.limit == 50
+        return [SimpleNamespace(as_list_row=lambda item=row: item) for row in self.list_sessions_rich()]
 
     def list_sessions_rich(self, **_):
         rows = [{"id": sid, "last_active": last, "message_count": len(msgs)} for sid, (msgs, last) in self.chats.items()]
@@ -34,7 +42,7 @@ class FakeApi:
         self._memory_sessions = FakeMemorySessions()
         self.created = []
 
-    def _ensure_session_db(self):
+    def _ensure_store(self):
         return self.db
 
     def _create_agent(self, **kwargs):

@@ -30,8 +30,9 @@ def test_anthropic_lists_the_live_catalog_strongest_first():
 
 def test_anthropic_falls_back_to_curated_when_live_unavailable():
     """No creds / live failure -> the curated list, in the same order."""
-    with patch.object(M, "_fetch_anthropic_models", return_value=None):
+    curated = ["claude-opus-5", "claude-fable-5", "claude-fable-5.1"]
+    with patch.object(M, "_fetch_anthropic_models", return_value=None), \
+         patch.dict(M._PROVIDER_MODELS, {"anthropic": curated}):
         result = M.provider_model_ids("anthropic")
 
-    assert result == sorted(M._PROVIDER_MODELS["anthropic"], key=M._anthropic_rank)
-    assert result[:3] == ["claude-fable-5.1", "claude-fable-5", "claude-opus-5"]
+    assert result == ["claude-fable-5.1", "claude-fable-5", "claude-opus-5"]

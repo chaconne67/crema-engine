@@ -19,7 +19,7 @@ from tools.browser_tool_origin import origin as _bt
 from tools import browser_tool_cdp as _cdp
 from tools import browser_tool_cloud as _cloud
 from tools import browser_tool_session as _session
-from tools import browser_tool_install as _install
+from tools import crema_browser_install as _install
 from tools import browser_tool_real_profile as _real_profile
 
 

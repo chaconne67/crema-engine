@@ -32,7 +32,7 @@ def _asking_agent():
     agent = MagicMock()
     agent.session_prompt_tokens = agent.session_completion_tokens = agent.session_total_tokens = 0
     agent.run_conversation.side_effect = lambda **_: {
-        "final_response": clarify_tool(question="", questions=QUESTIONS, callback=agent.clarify_callback)}
+        "final_response": clarify_tool(QUESTIONS, callback=agent.clarify_callback)}
     return agent
 
 

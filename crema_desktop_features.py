@@ -75,9 +75,9 @@ def _screen_value(kind, items, value):
 
 def _conversation_sessions(api, session_id):
     """A desktop chat keeps its ID even when the engine compacts its transcript."""
-    db = api._ensure_session_db()
-    if db is not None:
-        return db.get_compression_lineage(session_id) or [session_id]
+    store = api._ensure_store()
+    if store is not None:
+        return store.lineage.lineage(session_id) or [session_id]
     return [session_id]
 
 
@@ -262,16 +262,16 @@ class _PersonalSkills:
     def _describe(name, path, sources):
         from agent.skill_utils import ESSENTIAL_SKILLS, parse_frontmatter
         from tools.skill_usage import get_record, is_hub_installed
-        from tools.skills_sync import _dir_hash, _matches_origin_hash, _read_manifest
+        from tools.skills_sync import _matches_origin_hash, _read_manifest, dir_hash
 
         content = path.read_text(encoding="utf-8")
         metadata, _ = parse_frontmatter(content)
         source = sources.get(name)
         common = False
         if source is not None:
-            current_hash = _dir_hash(path.parent)
+            current_hash = dir_hash(path.parent)
             origin_hash = _read_manifest().get(name)
-            common = current_hash == _dir_hash(source) or _matches_origin_hash(path.parent, origin_hash, current_hash)
+            common = current_hash == dir_hash(source) or _matches_origin_hash(path.parent, origin_hash, current_hash)
         kind = "common" if common else "own"
         if not common:
             if is_hub_installed(name):

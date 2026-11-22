@@ -15,8 +15,8 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from agent.acp_openai_bridge import completion_to_stream_chunks, render_tool_bridge_sections
-from agent.copilot_acp_client import (
-    CopilotACPClient, _effective_timeout, _model_selection_request, _render_message_content,
+from agent.acp_client import (
+    ACPClient, _effective_timeout, _model_selection_request, _render_message_content,
     _session_model_ids, _INITIALIZE_PARAMS, _ROLE_LABELS,
 )
 from agent.message_sanitization import _sanitize_surrogates
@@ -143,7 +143,7 @@ class _Session:
     prefix: tuple = ()
     session_id: str = ""
     request: Callable | None = None
-    wire: CopilotACPClient | None = None
+    wire: ACPClient | None = None
     idle_since: float = 0
     timer: threading.Timer | None = None
 
@@ -251,8 +251,8 @@ def _release(entry, prefix):
             _sessions.remove(entry)
 
 
-class _GeminiWire(CopilotACPClient):
-    _label = "Google Gemini 구독"
+class _GeminiWire(ACPClient):
+    label = "Google Gemini 구독"
     _inherit_credentials = False
     _initialize_params = {**_INITIALIZE_PARAMS, "clientCapabilities": {}}
     _file_access_unavailable = "Hermes executes its own tools."
@@ -290,7 +290,7 @@ def probe_models(command, args, timeout):
         _release(entry, ())
 
 
-class GeminiACPClient(CopilotACPClient):
+class GeminiACPClient(ACPClient):
     """A request client leases a conversation-scoped ACP process from the engine."""
 
     def __init__(self, **kwargs):

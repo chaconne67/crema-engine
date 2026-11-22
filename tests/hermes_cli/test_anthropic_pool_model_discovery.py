@@ -126,7 +126,7 @@ def test_anthropic_picker_renews_an_expired_pool_oauth_token(monkeypatch):
     renewed = SimpleNamespace(auth_type="oauth", access_token="sk-ant-oat01-renewed")
     monkeypatch.setattr(
         "agent.credential_pool.load_pool",
-        lambda provider: SimpleNamespace(select=lambda: renewed),
+        lambda provider: SimpleNamespace(select=lambda *, endpoint_url=None: renewed),
     )
     captured = {}
 

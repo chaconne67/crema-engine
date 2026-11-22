@@ -7,13 +7,16 @@ from agent import model_metadata, system_prompt
 
 class FakeDb:
     def __init__(self, messages, prompt=None):
-        self.messages, self.prompt = messages, prompt
+        self.history, self.prompt = messages, prompt
+        self.messages = SimpleNamespace(read_conversation=self.read_conversation)
+        self.sessions = SimpleNamespace(get=self.get_session)
 
-    def get_messages_as_conversation(self, session_id, **_):
-        return self.messages
+    def read_conversation(self, session_id, request):
+        assert request.include_lineage and request.repair_alternation
+        return [SimpleNamespace(as_openai_message=lambda message=msg: message) for msg in self.history]
 
     def get_session(self, session_id):
-        return {"system_prompt": self.prompt}
+        return SimpleNamespace(system_prompt=self.prompt)
 
 
 def _api(db, checked_in):
@@ -23,7 +26,7 @@ def _api(db, checked_in):
                                  _effective_threshold_percent=ContextCompressor._effective_threshold_percent)
     agent = SimpleNamespace(tools=[{"name": "terminal"}], context_compressor=compressor)
     return SimpleNamespace(
-        _ensure_session_db=lambda: db, _create_agent=lambda **_: agent,
+        _ensure_store=lambda: db, _create_agent=lambda **_: agent,
         _memory_sessions=SimpleNamespace(checkin=checked_in.append)), agent
 
 

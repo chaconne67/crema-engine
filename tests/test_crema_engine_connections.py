@@ -72,7 +72,8 @@ def _no_spawn(monkeypatch):
 
 
 def test_copilot_cli_login_and_cli_are_not_used(monkeypatch, tmp_path):
-    from hermes_cli import auth, models
+    from hermes_cli import auth
+    from plugins.model_providers.copilot import catalog
 
     monkeypatch.setenv("HOME", str(tmp_path))
     (tmp_path / ".copilot").mkdir()
@@ -86,7 +87,7 @@ def test_copilot_cli_login_and_cli_are_not_used(monkeypatch, tmp_path):
     assert not status.get("configured") and not status.get("logged_in") and not status.get("auth_verified")
     with pytest.raises(auth.AuthError):
         auth.resolve_external_process_provider_credentials("copilot-acp")
-    assert models._copilot_cli_config_tokens() == []
+    assert catalog._copilot_cli_config_tokens() == []
     from providers import get_provider_profile
 
     assert get_provider_profile("copilot-acp").fetch_models() is None

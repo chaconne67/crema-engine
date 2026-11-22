@@ -12,6 +12,7 @@ from gateway.config import PlatformConfig
 from gateway.platforms.api_server import APIServerAdapter
 from gateway.platforms.api_server_runs import _http_routes
 from tools import clarify_gateway
+from tools.clarify_tool import clarify_tool
 
 
 @pytest.mark.asyncio
@@ -20,8 +21,10 @@ async def test_pending_clarify_status_matches_stream_and_is_cleared_after_reply(
     agent = MagicMock()
 
     def converse(*args, **kwargs):
-        answer = agent.clarify_callback("Pick a tone", ["Casual", "Formal"])
-        return {"final_response": f"Tone: {answer}"}
+        response = json.loads(clarify_tool(
+            [{"question": "Pick a tone", "choices": ["Casual", "Formal"]}],
+            callback=agent.clarify_callback))
+        return {"final_response": f"Tone: {response['responses'][0]['user_response']}"}
 
     agent.run_conversation.side_effect = converse
     monkeypatch.setattr(adapter, "_create_agent", lambda **kwargs: agent)
@@ -48,7 +51,7 @@ async def test_pending_clarify_status_matches_stream_and_is_cleared_after_reply(
 
             status = await (await client.get(url)).json()
             assert status["status"] == "waiting_for_clarify"
-            assert status["clarify"] == event
+            assert status["clarify"] == {key: value for key, value in event.items() if key != "seq"}
             assert event["title"] == ""
             assert event["questions"][0]["choices"] == ["Casual", "Formal"]
             reply = await client.post(f"{url}/clarify", json={

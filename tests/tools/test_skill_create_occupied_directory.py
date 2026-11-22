@@ -22,7 +22,8 @@ Create the thing.
 
 @contextmanager
 def _skill_dir(tmp_path):
-    with patch("tools.skill_manager_tool.SKILLS_DIR", tmp_path), \
+    with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path.parent)}), \
+         patch("tools.skill_manager_tool._skills_dir", return_value=tmp_path), \
          patch("agent.skill_utils.get_all_skills_dirs", return_value=[tmp_path]):
         yield
 

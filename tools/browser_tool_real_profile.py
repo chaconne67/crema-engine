@@ -15,7 +15,7 @@ from typing import Optional, Tuple
 from agent.proxy_bypass import loopback_request_kwargs
 from tools.browser_tool_origin import origin_module as _origin
 from tools import browser_tool_cloud as _cloud
-from tools import browser_tool_install as _install
+from tools import crema_browser_install as _install
 from tools import browser_tool_lightpanda_fallback as _lp
 from tools import browser_tool_session as _session
 

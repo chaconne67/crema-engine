@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from tools.browser_tool_origin import origin_module as _origin
 from tools import browser_tool_cdp as _cdp
 from tools import browser_tool_cloud as _cloud
-from tools import browser_tool_install as _install
+from tools import crema_browser_install as _install
 from tools import browser_tool_session as _session
 
 # Commands where Chrome can meaningfully produce a different result. Session-management

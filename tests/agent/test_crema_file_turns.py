@@ -15,6 +15,9 @@ A, B = "agent-client-a", "agent-client-b"
 class FakeDB:
     def __init__(self):
         self.roots, self.tips = {}, {}  # a long chat's later sessions (compression) -> the chat, and back
+        self.lineage = SimpleNamespace(conversation_root=self.get_conversation_root, resolve_resume_target=self.resolve_resume_session_id)
+        self.sessions = SimpleNamespace(get=self.get_session)
+        self.messages = SimpleNamespace(read_conversation=self.read_conversation)
 
     def get_conversation_root(self, session_id):
         return self.roots.get(session_id, session_id)
@@ -23,10 +26,15 @@ class FakeDB:
         return self.tips.get(session_id, session_id)
 
     def get_session(self, session_id):
-        return {"title": {A: "보고서", B: "메일"}.get(session_id, "")}
+        return SimpleNamespace(title={A: "보고서", B: "메일"}.get(session_id, ""))
 
     def get_messages_as_conversation(self, session_id, **_):
         return [{"role": "user", "content": f"{session_id} 요청"}]
+
+    def read_conversation(self, session_id, request):
+        assert request.include_lineage and request.repair_alternation
+        return [SimpleNamespace(as_openai_message=lambda message=msg: message)
+                for msg in self.get_messages_as_conversation(session_id)]
 
 
 class FakeApi:
@@ -34,7 +42,7 @@ class FakeApi:
         self._run_statuses = {}
         self.db = FakeDB()
 
-    def _ensure_session_db(self):
+    def _ensure_store(self):
         return self.db
 
     def replying(self, session_id, on=True):

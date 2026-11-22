@@ -36,7 +36,6 @@ def made(monkeypatch, adapter):
     monkeypatch.setattr("gateway.run._resolve_gateway_model", lambda: "gpt-test")
     monkeypatch.setattr("gateway.run._load_gateway_config", lambda: {})
     monkeypatch.setattr("hermes_cli.tools_config._get_platform_tools", lambda *_: {"terminal", "file"})
-    monkeypatch.setattr(adapter, "_ensure_session_db", lambda: None)
     return toolsets
 
 

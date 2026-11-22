@@ -58,7 +58,7 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
     from engine_home import ProfileAPIError, prepare_profile, profile_api
     from engine_keys import engine_key
     from hermes_constants import get_hermes_home
-    from hermes_state import SessionDB
+    from persistence_assembly import open_persistence, profile_scope
     from gateway.platforms.api_server_run_idempotency import TERMINAL_STATUSES
     from utils import atomic_json_write
 
@@ -73,9 +73,8 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
     if not session or not session.startswith(crema_file_turns.CHAT_PREFIX) or origin.get("profile", home.name) != home.name:
         jobs.pause_job(job["id"], MISSING_SOURCE)
         return result("failed", MISSING_SOURCE)
-    from contextlib import closing
-    with closing(SessionDB(home / "state.db", read_only=True)) as db:
-        owned = db.get_session(db.resolve_resume_session_id(session))
+    with open_persistence(profile_scope()) as store:
+        owned = store.sessions.get(store.lineage.resolve_resume_target(session))
     if not owned:
         jobs.pause_job(job["id"], MISSING_SOURCE)
         return result("failed", MISSING_SOURCE)

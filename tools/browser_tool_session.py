@@ -20,7 +20,7 @@ from utils import atomic_write_text
 from tools.browser_tool_origin import origin as _bt
 from tools import browser_tool_cdp as _cdp
 from tools import browser_tool_cloud as _cloud
-from tools import browser_tool_install as _install
+from tools import crema_browser_install as _install
 from tools import browser_tool_lifecycle as _lifecycle
 from tools import browser_tool_lightpanda_fallback as _lp
 from tools import browser_tool_real_profile as _real_profile

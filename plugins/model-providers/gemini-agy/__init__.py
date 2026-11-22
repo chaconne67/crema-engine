@@ -101,7 +101,7 @@ class GeminiAGYProfile(ProviderProfile):
         from tempfile import TemporaryDirectory
 
         from agent.account_usage import AccountUsageSnapshot, AccountUsageWindow
-        from agent.copilot_acp_client import _build_subprocess_env
+        from agent.acp_client import _build_subprocess_env
 
         if not self.external_process_allowed() or not (command := self._executable()):
             return None

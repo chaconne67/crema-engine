@@ -61,13 +61,15 @@ def desktop(tmp_path, monkeypatch):
 
 
 def test_local_screen_show_list_answer_and_restore(desktop, monkeypatch, tmp_path):
+    from persistence.conversation.sessions import NewSession
+
     setup, _ = desktop
     settings, api = setup(media=["screens"])
-    db = api._ensure_session_db()
+    store = api._ensure_store()
     chat = "agent-client-card"
-    db.create_session(chat, "api_server")
-    db.end_session(chat, "compression")
-    db.create_session("compacted", "api_server", parent_session_id=chat)
+    store.sessions.create(NewSession(chat, "api_server"))
+    store.sessions.end(chat, "compression")
+    store.sessions.create(NewSession("compacted", "api_server", parent_session_id=chat))
 
     def show(args, session="compacted"):
         return json.loads(registry.dispatch("screen_show", args, session_id=session))
@@ -208,7 +210,7 @@ def test_personal_skill_management_uses_local_store_and_preserves_slash_list(des
     assert not (home / "skills/my-skill").exists()
 
 
-@pytest.mark.linux_only
+@pytest.mark.platforms("linux")
 def test_personal_skills_refuse_links(desktop, tmp_path):
     setup, home = desktop
     settings, _ = setup(["skills"])
@@ -230,10 +232,11 @@ async def test_pending_question_is_bound_to_live_run_and_session(desktop, monkey
     settings, api = setup(["clarify"])
     agent = MagicMock()
     questions = [{"qid": "q", "question": "어떤 색인가요?", "context": "색을 고르세요.",
-                  "choices_offered": ["빨강", "파랑"], "descriptions": ["따뜻함", "차가움"], "multi_select": False}]
+                  "choices_offered": ["빨강", "파랑"], "descriptions": ["따뜻함", "차가움"],
+                  "multi_select": False, "title": "색"}]
 
     def converse(*args, **kwargs):
-        reply = agent.clarify_callback("색", None, questions=questions)
+        reply = agent.clarify_callback(questions)
         return {"final_response": f"{reply['answers']['q']}으로 정했습니다."}
 
     agent.run_conversation.side_effect = converse

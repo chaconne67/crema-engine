@@ -202,8 +202,11 @@ def _note(conn, task_id: str, text: str, **more: Any) -> None:
 # ── the run API, sessions and Git ────────────────────────────────────────────
 
 
-def _session_db():
-    return _api._ensure_session_db()
+def conversation_messages(store, session_id: str) -> list[dict]:
+    from persistence.conversation.messages import ConversationRequest
+
+    request = ConversationRequest(include_lineage=True, repair_alternation=True)
+    return [message.as_openai_message() for message in store.messages.read_conversation(session_id, request)]
 
 
 def _chat(session_id: str) -> Optional[str]:
@@ -214,7 +217,7 @@ def _chat(session_id: str) -> Optional[str]:
     if session_id.startswith(CHAT_PREFIX):
         return session_id
     try:
-        root = _session_db().get_conversation_root(session_id)
+        root = _api._ensure_store().lineage.conversation_root(session_id)
     except Exception:
         logger.warning("crema turns: no conversation root for %s", session_id, exc_info=True)
         return None
@@ -233,16 +236,17 @@ def _title(session_id: str) -> str:
     title = next((_name(c) for c in _directory() if c["session"] == session_id), None)
     if not title:
         try:
-            title = (_session_db().get_session(session_id) or {}).get("title")
+            row = _api._ensure_store().sessions.get(session_id)
+            title = row.title if row is not None else None
         except Exception:
             title = None
     return title or session_id.removeprefix(CHAT_PREFIX)[:8]
 
 
 def _requests(chat: str) -> list[str]:
-    db = _session_db()
-    latest = db.resolve_resume_session_id(chat) or chat  # a long chat's newest session
-    messages = db.get_messages_as_conversation(latest, include_ancestors=True, repair_alternation=True)
+    store = _api._ensure_store()
+    latest = store.lineage.resolve_resume_target(chat) or chat  # a long chat's newest session
+    messages = conversation_messages(store, latest)
     asked = [m.get("content") for m in messages if m.get("role") == "user" and isinstance(m.get("content"), str)]
     return [text[:500] for text in reversed(asked[-3:])]
 
@@ -1110,9 +1114,9 @@ def read(session_id: str, to: str) -> dict:
     _, target, problem = _addressed(session_id, to)
     if problem:
         return {"error": problem}
-    db = _session_db()
-    latest = db.resolve_resume_session_id(target["session"]) or target["session"]
-    messages = db.get_messages_as_conversation(latest, include_ancestors=True, repair_alternation=True)
+    store = _api._ensure_store()
+    latest = store.lineage.resolve_resume_target(target["session"]) or target["session"]
+    messages = conversation_messages(store, latest)
     reply = next((m["content"] for m in reversed(messages) if m.get("role") == "assistant"
                   and isinstance(m.get("content"), str) and m["content"].strip()), None)
     if reply is None:

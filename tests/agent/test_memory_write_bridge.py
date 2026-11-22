@@ -174,3 +174,24 @@ def test_previous_content_cannot_come_from_uncommitted_arguments():
         {'success': True}, args, build_metadata=lambda: {'previous_content': 'Uncommitted metadata'}
     )
     assert provider.calls[0]['metadata'] == {'old_text': 'partial'}
+
+
+@pytest.mark.parametrize('batch', [False, True])
+def test_patch_mirrors_as_a_replace_of_the_whole_entry(tmp_path, monkeypatch, batch):
+    from tools.memory_tool import MemoryStore, memory_tool
+
+    monkeypatch.setattr('tools.memory_tool.get_memory_dir', lambda: tmp_path)
+    store = MemoryStore()
+    store.load_from_disk()
+    store.add('memory', 'Server runs on port 8080 behind nginx')
+    manager, provider = _manager_with_provider()
+    ops = [{'action': 'patch', 'old_text': 'port 8080', 'content': 'port 9090'},
+           {'action': 'patch', 'old_text': 'nginx', 'content': 'caddy'}]
+    for args in ([{'target': 'memory', 'operations': ops}] if batch else [{'target': 'memory', **op} for op in ops]):
+        result = memory_tool(store=store, **args)
+        assert json.loads(result)['success'] is True
+        manager.notify_memory_tool_write(result, args)
+    assert [(c['action'], c['content'], c['metadata']['previous_content']) for c in provider.calls] == [
+        ('replace', 'Server runs on port 9090 behind nginx', 'Server runs on port 8080 behind nginx'),
+        ('replace', 'Server runs on port 9090 behind caddy', 'Server runs on port 9090 behind nginx'),
+    ]

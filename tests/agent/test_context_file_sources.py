@@ -130,3 +130,16 @@ def test_a_work_folders_crema_md_is_blocked_on_a_scanner_hit_the_users_own_is_no
     assert [s["status"] for s in list_context_file_sources(home_override=home, cwd=str(root))] == [
         "flagged", "blocked"]
 
+
+def test_truncation_marker_names_the_omitted_sections_only():
+    from agent.prompt_builder import _truncate_content
+
+    pad = "word " * 400
+    content = (
+        f"# Kept head\n{pad}\n## Lost section\n{pad}\n```bash\n# a shell comment\n```\n"
+        f"### Lost subsection\n{pad}\n{pad}\n## Kept tail\nshort\n"
+    )
+    out = _truncate_content(content, "AGENTS.md", max_chars=2500, queue_warning=False)
+    marker = out[out.index("[...truncated"):out.index("]", out.index("[...truncated"))]
+    assert "Lost section; Lost subsection" in marker
+    assert "Kept head" not in marker and "Kept tail" not in marker and "shell comment" not in marker

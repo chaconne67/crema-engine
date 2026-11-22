@@ -11,7 +11,7 @@ A, B = "agent-client-a", "agent-client-b"
 class FakeApi:
     _run_statuses = {}
 
-    def _ensure_session_db(self):
+    def _ensure_store(self):
         raise AssertionError("titles come from the sidebar list")
 
 

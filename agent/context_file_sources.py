@@ -27,7 +27,7 @@ _STATUS_DISPLAY = {
 }
 
 
-def _entry(label: str, path: Path, content: str, status: str) -> Dict[str, Any]:
+def _entry(label: str, path: Path, content: str, status: str) -> dict[str, Any]:
     return {
         "label": label, "path": str(path), "chars": len(content), "est_tokens": estimate_tokens_rough(content),
         "loaded": status in ("loaded", "truncated", "flagged"), "status": status,
@@ -67,7 +67,7 @@ def list_context_file_sources(
     return rows
 
 
-def context_file_sources_for_agent(agent: Any) -> List[Dict[str, Any]]:
+def context_file_sources_for_agent(agent: Any) -> list[dict[str, Any]]:
     """The manifest for a live agent, scoped to the agent's own profile home."""
     if getattr(agent, "skip_context_files", False):
         return []
@@ -81,7 +81,7 @@ def context_file_sources_for_agent(agent: Any) -> List[Dict[str, Any]]:
     )
 
 
-def render_context_file_lines(sources: List[Dict[str, Any]]) -> List[str]:
+def render_context_file_lines(sources: list[dict[str, Any]]) -> list[str]:
     """Plain-text ``Context files`` block for ``/context``; [] when nothing was found."""
     if not sources:
         return []
@@ -90,5 +90,5 @@ def render_context_file_lines(sources: List[Dict[str, Any]]) -> List[str]:
     for src in sources:
         glyph, note = _STATUS_DISPLAY.get(str(src.get("status") or ""), ("•", ""))
         suffix = f"  ({note})" if note else ""
-        lines.append(f"{glyph} {str(src.get('label') or ''):<{width}} ~{int(src.get('est_tokens') or 0):>9,} tokens{suffix}")
+        lines.append(f"{glyph} {src.get('label') or ''!s:<{width}} ~{int(src.get('est_tokens') or 0):>9,} tokens{suffix}")
     return lines

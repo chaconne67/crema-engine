@@ -105,7 +105,7 @@ def app(monkeypatch):
     root = Path(source)
     monkeypatch.syspath_prepend(str(root / "services/_server"))
     # The pinned probe has an empty OS home, hence no operator's Playwright cache.
-    monkeypatch.setattr("tools.browser_tool_install._chromium_search_roots", lambda: [])
+    monkeypatch.setattr("tools.crema_browser_install._chromium_search_roots", lambda: [])
     monkeypatch.setattr("tools.browser_tool._cached_chromium_installed", None)
 
     def offline(*_args, **_kwargs):
@@ -165,7 +165,7 @@ def check_tools(config, surface, expected):
 
 def check_registration(home, startup, expected):
     from hermes_cli.plugins import get_plugin_manager
-    from tools.skills_sync import _dir_hash, _iter_active_skill_mds
+    from tools.skills_sync import dir_hash, _iter_active_skill_mds
 
     manager = get_plugin_manager()
     plugins = {name: {"enabled": entry.enabled, "loaded": entry.module is not None, "deferred": entry.deferred}
@@ -187,7 +187,7 @@ def check_registration(home, startup, expected):
         wanted["pre_llm_call"][:0] = ["engine/crema_engine.py:change_principles_start"]
     assert {event: [hook_id(callback, home) for callback in callbacks]
             for event, callbacks in manager._hooks.items()} == wanted
-    assert [{"path": path.relative_to(home / "skills").as_posix(), "bundleSha256": _dir_hash(path.parent)}
+    assert [{"path": path.relative_to(home / "skills").as_posix(), "bundleSha256": dir_hash(path.parent)}
             for path in _iter_active_skill_mds(sort=True)] == expected["skills"]
 
 

@@ -128,6 +128,7 @@ def test_service_job_and_import_pause_keep_existing_lanes(crema, monkeypatch):
     personal_result = (True, "conversation", "personal", None)
     dispatched = []
     monkeypatch.setattr(scheduler, "_prepare_job_prompt", lambda *args, **kwargs: (managed_result, None))
+    monkeypatch.setattr("gateway.session_cron.current_execution", lambda: (None, "cron-test", service["id"], None))
     monkeypatch.setattr(crema_schedule_tool, "server_scheduled",
                         lambda job, **kwargs: dispatched.append(job["id"]) or personal_result)
     assert run_job(service) == managed_result
@@ -194,13 +195,12 @@ def test_scheduled_result_retries_the_same_occurrence_without_restarting_the_tur
     monkeypatch.setitem(sys.modules, "engine_home", SimpleNamespace(
         ProfileAPIError=error, profile_api=call_profile, prepare_profile=lambda *_: home))
     monkeypatch.setitem(sys.modules, "engine_keys", SimpleNamespace(engine_key=lambda _: "key"))
-    monkeypatch.setattr("hermes_state.SessionDB", lambda *_, **__: SimpleNamespace(
-        close=lambda: None, get_session=lambda _: {"id": A}, resolve_resume_session_id=lambda _: A))
     monkeypatch.setattr("crema_startup.engine_input", lambda _: {
         "themeId": "test", "tools": {"chat": ["crema_schedule"]}})
     monkeypatch.setattr("httpx.Client", Client)
     token = set_hermes_home_override(home)
     try:
+        _seed_scheduled_session(home)
         job = {"id": "job", "prompt": "작업", "origin": {"session_id": A, "profile": "own"},
                "_scheduled_instant": "2026-11-20T18:00:00+09:00"}
         with pytest.raises(OSError, match="lost"):
@@ -249,15 +249,22 @@ def test_scheduled_pc_offline_posts_without_starting_a_run(tmp_path, monkeypatch
     monkeypatch.setitem(sys.modules, "engine_home", SimpleNamespace(
         ProfileAPIError=ProfileAPIError, profile_api=profile_api, prepare_profile=lambda *_: None))
     monkeypatch.setitem(sys.modules, "engine_keys", SimpleNamespace(engine_key=lambda _: "key"))
-    monkeypatch.setattr("hermes_state.SessionDB", lambda *_, **__: SimpleNamespace(
-        close=lambda: None, get_session=lambda _: {"id": A}, resolve_resume_session_id=lambda _: A))
     monkeypatch.setattr("crema_startup.engine_input", lambda _: {
         "themeId": "test", "tools": {"chat": ["crema_schedule"]}})
     monkeypatch.setattr("httpx.Client", Client)
     token = set_hermes_home_override(tmp_path)
     try:
+        _seed_scheduled_session(tmp_path)
         job = {"id": "job", "prompt": "작업", "origin": {"session_id": A},
                "_scheduled_instant": "2026-11-20T18:00:00+09:00"}
         assert not schedule.server_scheduled(job)[0]
     finally:
         reset_hermes_home_override(token)
+
+
+def _seed_scheduled_session(home):
+    from persistence.conversation.sessions import NewSession
+    from persistence_assembly import open_persistence, profile_scope
+
+    with open_persistence(profile_scope(home=home)) as store:
+        store.sessions.create(NewSession(A, "api_server"))

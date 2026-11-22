@@ -665,13 +665,15 @@ def estimate_context(api, session_id: str, model: str = "", provider: str = "") 
     Settings locks 앞 대화 요약 시점 on such a model (주인님 2026-11-07)."""
     from agent.model_metadata import estimate_request_tokens_rough
     from agent.system_prompt import build_system_prompt_parts
+    from agent.crema_file_turns import conversation_messages
 
-    db = api._ensure_session_db()
-    messages = db.get_messages_as_conversation(session_id, include_ancestors=True, repair_alternation=True)
+    store = api._ensure_store()
+    messages = conversation_messages(store, session_id)
     agent = api._create_agent(session_id=session_id, requested_model=model or None, requested_provider=provider or None)
     try:
         # A continuing chat sends the prompt it started with; a new one the prompt built now (as conversation_loop).
-        prompt = (db.get_session(session_id) or {}).get("system_prompt") if messages else None
+        session = store.sessions.get(session_id) if messages else None
+        prompt = session.system_prompt if session is not None else None
         if not prompt:
             parts = build_system_prompt_parts(agent)
             prompt = "\n\n".join(part for part in (parts["stable"], parts["context"], parts["volatile"]) if part)
@@ -690,6 +692,7 @@ def distill(api, session_id: str, model: str = "", provider: str = "", *, on_rev
     from agent.background_review import (_background_review_task_config, spawn_background_review_thread,
                                          prepare_background_review_run, finish_background_review_run)
     from agent.knowledge_store import KnowledgeStore
+    from agent.crema_file_turns import conversation_messages
     from hermes_cli.config import load_config_readonly
 
     from tools.knowledge_tool import plan_free
@@ -699,8 +702,7 @@ def distill(api, session_id: str, model: str = "", provider: str = "", *, on_rev
     if plan_free():
         return {"ran": False, "written": [], "skipped": "free"}
     store = KnowledgeStore.open()
-    messages = api._ensure_session_db().get_messages_as_conversation(
-        session_id, include_ancestors=True, repair_alternation=True)
+    messages = conversation_messages(api._ensure_store(), session_id)
     done = store.distilled_count(session_id)
     fresh = messages[done:] if done <= len(messages) else messages
     if not fresh or (sum(1 for m in fresh if m.get("role") == "user") < DISTILL_MIN_USER_TURNS
@@ -756,13 +758,16 @@ async def daily_pass(api) -> None:
 def daily_once(api, now: float = None, *, on_review_ready=None) -> dict:
     from agent.knowledge_store import KnowledgeStore
     from hermes_cli.config import load_config_readonly
+    from persistence.conversation.sessions import SessionOrder, SessionQuery, SessionWindow
 
     now = now or time.time()
     store = KnowledgeStore.open()
     last = store.maintenance_value("last_daily")
     if last and now - last.get("at", 0) < DAILY_EVERY_S:
         return {}
-    sessions = api._ensure_session_db().list_sessions_rich(limit=50, order_by_last_active=True)
+    query = SessionQuery(order=SessionOrder.LAST_ACTIVE)
+    sessions = api._ensure_store().sessions.list_sessions(query, SessionWindow(limit=50))
+    sessions = [entry.as_list_row() for entry in sessions]
     chats = [s for s in sessions if str(s.get("id", "")).startswith(CHAT_PREFIX)]
     if chats and now - float(chats[0].get("last_active") or 0) < DAILY_IDLE_S:
         return {}  # someone is working: another time
@@ -959,19 +964,14 @@ def notebook_upkeep(store, now: float) -> dict:
 
 
 def index_past_chats() -> None:
-    """Index the chats saved before the Korean/CJK two-letter search index existed; new messages are
-    indexed as they are saved. Until this finishes, short CJK searches scan the chats instead. Then
-    give knowledge pages written before meaning search (or under another model) their vectors; until
-    then the notebook finds them by words."""
-    from hermes_state import SessionDB
+    """Complete search index migration for saved chats and fill missing knowledge vectors."""
+    from persistence.core.admin import AdminUnsupported
+    from persistence_assembly import open_store_admin, profile_scope
 
     try:
-        db = SessionDB()
-        try:
-            if db.fts_optimize_available():
-                db.optimize_fts_storage(vacuum=False)
-        finally:
-            db.close()
+        admin = open_store_admin(profile_scope(), read_only=False)
+        if not isinstance(admin, AdminUnsupported) and admin.fts_optimize_available():
+            admin.optimize_fts_storage(vacuum=False)
     except Exception:
         logging.getLogger(__name__).warning("indexing past chats failed", exc_info=True)
     try:

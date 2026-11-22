@@ -376,11 +376,11 @@ def _db_agent(db):
 
     a = AIAgent(
         api_key="test-key-1234567890", base_url="https://openrouter.ai/api/v1", model="test/model",
-        quiet_mode=True, session_db=db, session_id="EARLY", skip_context_files=True, skip_memory=True,
+        quiet_mode=True, session_db=db, persistence=db, session_id="EARLY", skip_context_files=True, skip_memory=True,
     )
     a._compression_feasibility_checked = True
     c = _compressor()
-    c.bind_session_state(db, "EARLY")
+    c.bind_session_state(db, "EARLY", persistence=db)
     a.context_compressor = c
     return a
 
@@ -389,10 +389,11 @@ def _db_agent(db):
 def agent_with_db(tmp_path):
     """A real AIAgent on a real SessionDB with a real compressor: the path every compaction takes
     (AIAgent._compress_context → progress-timeout worker → compress_context → compress)."""
-    from hermes_state import SessionDB
+    from persistence.conversation.sessions import NewSession
+    from persistence_assembly import open_persistence, profile_scope
 
-    db = SessionDB(db_path=tmp_path / "state.db")
-    db.create_session("EARLY", source="desktop")
+    db = open_persistence(profile_scope(home=tmp_path))
+    db.sessions.create(NewSession("EARLY", "desktop"))
     patches = (
         patch("model_tools.get_tool_definitions", return_value=_tool_defs("web_search")),
         patch("model_tools.check_toolset_requirements", return_value={}),
@@ -405,6 +406,7 @@ def agent_with_db(tmp_path):
     finally:
         for p in patches:
             p.stop()
+        db.close()
 
 
 def _stoppable_call(started: threading.Event, release: threading.Event, ticks: bool = False):
@@ -563,10 +565,20 @@ class TestEarlyCompactionOnTheRealPath:
             assert started.wait(10)
             job = first.context_compressor._early_compaction
             second = _db_agent(db)
+            waiting = threading.Event()
+            original_join = job.thread.join
+
+            def join_summary(timeout=None):
+                waiting.set()
+                return original_join(timeout)
+
             owner = threading.Thread(target=lambda: second._compress_context(msgs, "sys", approx_tokens=90_000))
-            owner.start()
-            time.sleep(0.5)
-            second.hard_interrupt()
+            with patch.object(job.thread, "join", side_effect=join_summary):
+                owner.start()
+                try:
+                    assert waiting.wait(15), "the new reply never entered the shared summary wait"
+                finally:
+                    second.hard_interrupt()
             owner.join(5)
             job.thread.join(5)
             alive = job.thread.is_alive()
@@ -590,7 +602,7 @@ class TestEarlyCompactionOnTheRealPath:
         with patch("agent.context_compressor.call_llm", side_effect=fake):
             agent.context_compressor.start_early_compaction(msgs, current_tokens=80_000)
             _wait_done(agent.context_compressor)
-            assert not db.get_compression_failure_cooldown("EARLY")
+            assert not db.messages.read_compression_cooldown("EARLY", time.time())
             assert not _automatic_compression_gate_blocks(agent, False)
             out, _prompt = agent._compress_context(msgs, "sys", approx_tokens=90_000)
         assert "SECOND_SUMMARY" in _contents(out)

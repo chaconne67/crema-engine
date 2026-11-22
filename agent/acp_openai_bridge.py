@@ -30,9 +30,15 @@ _TOOL_CALL_SHAPE = (
 TOOL_CALL_CONTRACT = _TOOL_CALL_SHAPE + " arguments must be a JSON string."
 
 __all__ = [
-    "TOOL_CALL_BLOCK_RE", "TOOL_CALL_JSON_RE", "TOOL_CALL_CONTRACT", "StreamChunks", "build_openai_tool_call",
-    "tool_specs_from_openai_tools", "render_tool_bridge_sections", "extract_tool_calls_from_text",
+    "TOOL_CALL_BLOCK_RE",
+    "TOOL_CALL_CONTRACT",
+    "TOOL_CALL_JSON_RE",
+    "StreamChunks",
+    "build_openai_tool_call",
     "completion_to_stream_chunks",
+    "extract_tool_calls_from_text",
+    "render_tool_bridge_sections",
+    "tool_specs_from_openai_tools",
 ]
 
 

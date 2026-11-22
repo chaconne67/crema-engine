@@ -119,7 +119,7 @@ _SANE_PATH_DIRS = (
 )
 _SANE_PATH = os.pathsep.join(_SANE_PATH_DIRS)
 
-from tools import browser_tool_install as _install
+from tools import crema_browser_install as _install
 
 _last_screenshot_cleanup_by_dir: dict[str, float] = {}  # throttles full directory scans
 
@@ -1318,14 +1318,13 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
 # Registry
 # ---------------------------------------------------------------------------
 from tools.registry import registry, tool_error
-from tools.browser_extension_router import extension_controller_available, routed_browser_handler
 
 _BROWSER_SCHEMA_MAP = {s["name"]: s for s in BROWSER_TOOL_SCHEMAS}
 
 
 def check_browser_routed_requirements(action: str = "browser_snapshot") -> bool:
-    """Availability gate for tools that can use either browser backend."""
-    return _install.check_browser_requirements() or extension_controller_available(action)
+    """Availability of the retained fenced browser."""
+    return _install.check_browser_requirements()
 
 
 def _fallback_call(fn_name: str, arg_defaults: Dict[str, Any], extra_kw: tuple = ()):
@@ -1365,10 +1364,9 @@ def _routed_check_fn(name: str):
     return check
 
 
-def _routed_handler(name: str, fallback):
+def _registered_handler(fallback):
     def handler(args, **kw):
-        return routed_browser_handler(name, args, fallback=lambda: fallback(args, kw),
-                                      task_id=kw.get("task_id"), session_id=kw.get("session_id"))
+        return fallback(args, kw)
     return handler
 
 
@@ -1376,7 +1374,7 @@ for _name, _emoji, _check_fn, _defaults, *_extra in _BROWSER_TOOL_TABLE:
     if _check_fn is None:  # also binds the legacy check_browser_<x>_requirements globals (tests + callers)
         _check_fn = globals()[f"check_{_name}_requirements"] = _routed_check_fn(_name)
     registry.register(name=_name, toolset="browser", schema=_BROWSER_SCHEMA_MAP[_name],
-                      handler=_routed_handler(_name, _fallback_call(_name, _defaults, *_extra)),
+                      handler=_registered_handler(_fallback_call(_name, _defaults, *_extra)),
                       check_fn=_check_fn, emoji=_emoji)
 
 
@@ -1402,9 +1400,9 @@ _PLUGIN_COMPAT_LAZY = {
     'BrowserbaseProvider': ('plugins.browser.browserbase.provider', 'BrowserbaseBrowserProvider'),
     'CloudBrowserProvider': ('agent.browser_provider', 'BrowserProvider'),
     'FirecrawlProvider': ('plugins.browser.firecrawl.provider', 'FirecrawlBrowserProvider'),
-    'agent_browser_runnable': ('hermes_constants', 'agent_browser_runnable'),
-    'check_browser_requirements': ('tools.browser_tool_install', 'check_browser_requirements'),
-    'check_browser_vision_requirements': ('tools.browser_tool_install', 'check_browser_vision_requirements'),
+    'agent_browser_runnable': ('tools.crema_browser_install', 'agent_browser_runnable'),
+    'check_browser_requirements': ('tools.crema_browser_install', 'check_browser_requirements'),
+    'check_browser_vision_requirements': ('tools.crema_browser_install', 'check_browser_vision_requirements'),
     'cleanup_all_browsers': ('tools.browser_tool_lifecycle', 'cleanup_all_browsers'),
     'cleanup_browser': ('tools.browser_tool_lifecycle', 'cleanup_browser'),
     'get_hermes_home_override': ('hermes_constants', 'get_hermes_home_override'),
@@ -1415,7 +1413,7 @@ _PLUGIN_COMPAT_LAZY = {
     'normalize_browser_cloud_provider': ('tools.tool_backend_helpers', 'normalize_browser_cloud_provider'),
     'reset_hermes_home_override': ('hermes_constants', 'reset_hermes_home_override'),
     'set_hermes_home_override': ('hermes_constants', 'set_hermes_home_override'),
-    'warm_agent_browser_npx_cache': ('tools.browser_tool_install', 'warm_agent_browser_npx_cache'),
+    'warm_agent_browser_npx_cache': ('tools.crema_browser_install', 'warm_agent_browser_npx_cache'),
     'windows_hide_flags': ('hermes_cli._subprocess_compat', 'windows_hide_flags'),
 }
 

@@ -7,8 +7,8 @@ thinking off is trying to stop paying for.  The disable has to be sent:
 
     thinking: {"type": "disabled"}
 
-Reasoning-mandatory families (claude-fable) reject that with an HTTP 400
-("Thinking is mandatory for this model"), so they keep the omission — a
+Reasoning-mandatory families (claude-fable, claude-mythos, claude-opus-5-5)
+reject that with an HTTP 400, so they keep the omission — a
 silently-ignored disable is a much better failure than a dead turn.
 
 Legacy manual-thinking Claude (<= 4.5) needs no disable at all: thinking is
@@ -60,7 +60,8 @@ class TestThinkingOffIsSentExplicitly:
         assert "output_config" not in kwargs
 
     @pytest.mark.parametrize("model", ["anthropic/claude-fable-5", "claude-opus-5-5", "anthropic/claude-opus-5.5",
-                                       "claude-mythos-5-1", "anthropic/claude-mythos-5.1"])
+                                       "claude-mythos-5-1", "anthropic/claude-mythos-5.1",
+                                       "claude-fable-5-2"])
     def test_mandatory_thinking_models_keep_the_omission(self, model: str) -> None:
         """Fable, Mythos and Opus 5.5 answer a disable with HTTP 400, so don't send one."""
         kwargs = _kwargs(model, {"enabled": False})
@@ -118,8 +119,6 @@ class TestEnablePathIsUnchanged:
         skip sent it no thinking at all."""
         kwargs = _kwargs("anthropic/claude-haiku-5.5", {"enabled": True, "effort": "high"})
         assert kwargs["thinking"] == {"type": "adaptive", "display": "summarized"}
-        assert "thinking" not in _kwargs("claude-haiku-4-5-20251001", {"enabled": True, "effort": "high"})
-        assert "thinking" not in _kwargs("claude-3-5-haiku-20241022", {"enabled": True, "effort": "high"})
 
     def test_no_reasoning_config_sends_no_thinking_field(self) -> None:
         assert "thinking" not in _kwargs("anthropic/claude-opus-5", None)

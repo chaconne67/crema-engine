@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -132,16 +133,17 @@ class TestRefreshCadence:
         with patch("hermes_cli.config.load_config", return_value={"model_catalog": {"ttl_minutes": 20, "ttl_hours": 3}}):
             assert model_catalog.refresh_interval_seconds() == 3 * 3600
 
-    def test_refresh_catalogs_forces_every_source(self):
+    def test_refresh_catalogs_forces_the_enabled_provider_lists(self, monkeypatch):
         from hermes_cli import model_catalog
 
-        with patch.object(model_catalog, "_load_catalog_config", return_value={
-            "enabled": True, "ttl_hours": 1.0, "providers": {},
-        }), patch("hermes_cli.models.fetch_openrouter_models") as orm, \
+        monkeypatch.setattr(model_catalog, "_load_catalog_config", lambda: {"enabled": True})
+        monkeypatch.setattr("hermes_cli.anon_auth.current_nous_state", lambda: None)
+        monkeypatch.setattr("hermes_cli.auth.read_credential_pool", lambda _provider: [])
+        with patch("hermes_cli.models.fetch_openrouter_models") as router, \
              patch("hermes_cli.models.fetch_nous_recommended_models") as nous:
             assert model_catalog.refresh_catalogs() is True
-        orm.assert_called_once_with(force_refresh=True)
-        nous.assert_called_once_with(force_refresh=True)
+        router.assert_called_once_with(force_refresh=True)
+        nous.assert_not_called()
 
 
 class TestIntegrationWithModelsModule:
@@ -242,8 +244,9 @@ class TestIntegrationWithModelsModule:
         full_row = _nous(full)
         assert full_row is not None and full_row["models"] == expected
 
+        # The Nous row is already curated, so an int cap never trims it (its free tier sits last).
         one_row = _nous(one)
-        assert one_row is not None and one_row["models"] == expected[:1]
+        assert one_row is not None and one_row["models"] == expected
 
         zero_row = _nous(zero)
         # 0 means an empty model list — NOT unlimited. total_models still real.
@@ -262,6 +265,40 @@ class TestIntegrationWithModelsModule:
 # free-tier picker showed "No free models currently available." even though
 # the Portal was serving qwen/qwen3.6-plus as free. CI must catch this.
 # -----------------------------------------------------------------------------
+
+
+def test_failed_self_hosted_catalog_backoff_is_profile_scoped(tmp_path, monkeypatch, isolated_home):
+    from agent.secret_scope import reset_multiplex_context, set_multiplex_context
+    from hermes_cli import model_catalog
+    from hermes_constants import get_hermes_home, reset_hermes_home_override, set_hermes_home_override
+
+    other = tmp_path / "other"
+    other.mkdir()
+    for home in (isolated_home, other):
+        (home / "config.yaml").write_text(
+            "model_catalog:\n  providers:\n    openrouter:\n      url: https://catalog.example.test/manifest\n",
+            encoding="utf-8",
+        )
+    fetched = []
+
+    def fetch(url, _timeout):
+        assert url == "https://catalog.example.test/manifest"
+        home = get_hermes_home()
+        fetched.append(home)
+        return _valid_manifest() if home == other else None
+
+    monkeypatch.setattr(model_catalog, "_fetch_manifest", fetch)
+    multiplex = set_multiplex_context(True)
+    try:
+        for home, expected in [(isolated_home, False), (other, True), (isolated_home, False)]:
+            token = set_hermes_home_override(home)
+            try:
+                assert bool(model_catalog.get_curated_openrouter_models()) is expected
+            finally:
+                reset_hermes_home_override(token)
+    finally:
+        reset_multiplex_context(multiplex)
+    assert fetched == [isolated_home, other]
 
 
 class TestManifestMatchesInRepoLists:

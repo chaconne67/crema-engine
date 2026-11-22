@@ -28,12 +28,12 @@ def test_korean_words_stay_and_an_unknown_english_name_reads_as_a_dangerous_comm
 
 @pytest.mark.asyncio
 async def test_the_approval_event_the_app_shows_is_in_korean_and_keeps_the_engines_key():
+    from gateway.platforms import api_server
     from gateway.platforms.api_server_runs import _make_approval_notify
 
     host = SimpleNamespace(_set_run_status=lambda *_, **__: None)
-    server = SimpleNamespace(_approval_event_choices=lambda **_: ["once", "deny"])
     queue = asyncio.Queue()
-    notify = _make_approval_notify(host, SimpleNamespace(run_id="run-1", queue=queue), _api_server=server)
+    notify = _make_approval_notify(host, SimpleNamespace(run_id="run-1", queue=queue), _api_server=api_server)
     notify({"command": "rm -rf build", "description": "recursive delete", "pattern_key": "recursive delete"})
     event = await asyncio.wait_for(queue.get(), 1)
     assert event["description"] == "폴더째 지우기"

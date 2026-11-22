@@ -54,11 +54,11 @@ Both bind 127.0.0.1 only.
 |---|---|---|
 | Tools | files, terminal/process, todo, web search/extract, image understanding, memory, past-chat search, skills (the agent writes and improves them), a keyless backup ("백업해 줘"); image and video generation when the app's 부가 기능 연동 connects them | `hermes-api-server` in `toolsets.py`; the app adds `image_gen`/`video_gen` to `platform_toolsets.api_server` |
 | Knowledge notebook | pages of what the agent learned working with the user, searched before work and written after (the method of GBrain, below); a quiet chat is distilled into it, and once a day while Crema is quiet the notebook is tidied | `knowledge` in `toolsets.py` (a direct surface in `tools/tool_search.py`, so never deferred); `knowledge.search_mode` light/balanced/thorough, `knowledge.nightly` |
-| Past-chat search in Korean/CJK | the `cjk_unicode61` tokenizer (`native/fts5_cjk/`), built by Crema as `fts5_cjk.dll` and named in `HERMES_FTS5_CJK_SO`; chats saved before it are indexed when the engine starts | `crema_engine.py` |
+| Past-chat search in Korean/CJK | the SQLite store uses its trigram index and a short-term SQL search for one- and two-character CJK terms; startup prepares the index for chats saved by older releases | `crema_engine.py::index_past_chats`, `persistence/sqlite/conversation/_store/search.py` |
 | Providers | every upstream provider that needs no extra package (Bedrock needs boto3 and Vertex google-auth, so both are left out) | provider plugins kept below; the Crema app hides only `moa` and `claude-code` |
 | Logins | only those made in Crema: other programs' logins (Claude Code, Codex CLI, GitHub CLI) are never borrowed | `auth.adopt_external_logins` default |
 | Shared files | chats that change the same file take turns: an order on the kanban board, a hand-over when the other chat is quiet and committed, else one judge call (the chat's model or `auxiliary.crema_turns`); a refused write waits for nothing, and the app starts the chat again | `agent/crema_file_turns.py`, `/api/crema/turns` |
-| Approval words | the approval box says in Korean what a held command would do: the `approval.request` event's description goes through a table of the engine's English names (unknown ones read as a dangerous command in general); `pattern_key` keeps the English name | `agent/crema_approval_words.py`, `gateway/platforms/api_server_runs.py` |
+| Approval words | the approval box explains held commands in Korean. The event translates recognized descriptions and shows a general warning for unknown ones. The original approval identifier stays in `pattern_key`. | `agent/crema_approval_words.py`, `gateway/platforms/api_server.py::_approval_request_event` |
 | Messages between chats | a chat lists the user's other chats and sends one a message (the `crema_chats` tool): a replying chat reads it after its current tool step, an idle one when it next works, or now when the sender asks to wake it (the app starts it) | `crema_chats` in `toolsets.py`; `agent/crema_file_turns.py` notes, `/api/crema/chats` |
 | Crema's manual | the built-in skill `crema-guide`: how Crema's screens, settings, engine, account and updates work, read by the agent when the user asks about Crema; each release ships its own, and an edited or deleted copy is put back at start | `skills/crema-guide/`, seeded by `crema_engine.py` |
 
@@ -68,10 +68,11 @@ Both bind 127.0.0.1 only.
 2. `toolsets.py` — `hermes-api-server` lists Crema's tools instead of the full core set.
 3. `hermes_cli/config_defaults.py` — `auth.adopt_external_logins` defaults to false: borrowing another
    program's rotating login can log that program out, and a Provider should appear only once added.
-4. `hermes_cli/copilot_auth.py` — the `gh auth token` fallback follows `auth.adopt_external_logins` too.
+4. `plugins/model-providers/copilot/` — the GitHub CLI fallback and Copilot CLI model discovery follow
+   `auth.adopt_external_logins`. Copilot ACP uses the same setting through its provider profile.
 5. `pyproject.toml` — the `crema` extra (see below).
-6. `hermes_state.py` — a read-only attach also loads the CJK tokenizer and serves the CJK index when
-   it is complete, as the writer does; without it the dashboard's prefix search ("세금*") found nothing.
+6. `persistence/` — the settings reader uses the same Korean search as the writer, including prefixes
+   such as `세금*`. Crema uses the storage interface for chat history, context estimates and scheduled chats.
 7. `agent/learning_mutations.py` — a user's memory edit or delete holds the memory tool's file lock.
 8. `hermes_cli/backup.py`, `hermes_cli/subcommands/backup.py` — `--no-secrets` leaves out `.env`,
    `auth.json` and the credential vault. `tools/crema_backup_tool.py` (new, `backup` toolset in `hermes-api-server`)
@@ -207,7 +208,7 @@ Anthropic adapter imports `agent/bedrock_adapter.py`, which asks for boto3, and 
 
 ## Updating from upstream
 
-This section will be updated when Crema moves to an official Hermes release in step ③.
-
-Compare only the kept paths: `git diff hermes-upstream <new upstream commit> -- $(git ls-files)`,
-take the security and bug fixes that touch them, advance `hermes-upstream`, and run the tests.
+The merge for Hermes v0.23.3 uses upstream commit `caafe5389ae585ef77387a962aee05b1bcf17029`
+as its second parent. Compare the merge with that parent when validating the two Crema inventories
+on the update branch. Compare both parents' changes and run the linked feature tests before accepting
+a new upstream base.

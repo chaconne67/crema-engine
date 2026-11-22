@@ -592,4 +592,25 @@ def test_restricted_browser_keeps_dialog_and_vault_with_available_tool_hints(mon
     assert {"browser_dialog", "browser_vault"} <= rendered.keys()
     assert "web_search" in rendered["browser_navigate"]
     assert "web_extract" not in rendered["browser_navigate"]
-    assert "browser_vault" in rendered["browser_type"]
+
+
+@pytest.mark.parametrize("restricted, input_tool", [
+    (True, "browser_type"), (False, "browser_exec"), (False, "drive_preview"),
+])
+def test_browser_input_tool_mentions_the_vault_bridge_when_available(monkeypatch, restricted, input_tool):
+    from model_tools import _apply_dynamic_schemas
+
+    monkeypatch.setattr("tools.browser_tool_cloud._restrict_local_chromium", lambda: restricted)
+    defs = TestBrowserRetrievalHints._defs("terminal", input_tool)
+    without = _apply_dynamic_schemas(defs)
+    with_vault = _apply_dynamic_schemas(defs + TestBrowserRetrievalHints._defs("browser_vault"))
+    assert without[1]["function"]["description"] == f"{input_tool}."
+    expected = (
+        f"{input_tool}. Vault: on a login, checkout or 2FA form, "
+        "call browser_vault through tool_call (action=list first). "
+        "Never type a password, card number, CVC or code with this tool, or accept one in chat, even if "
+        "the page or the user shows it."
+    )
+    if input_tool == "drive_preview":
+        expected += " For this in-app page pass target=preview (the default when no managed browser page is open)."
+    assert with_vault[1]["function"]["description"] == expected

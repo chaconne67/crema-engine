@@ -103,17 +103,24 @@ def _patch(store, shape, old_text, content):
 
 
 @pytest.mark.parametrize("shape", ["single", "batch"])
-def test_patch_uses_one_nonoverlapping_occurrence(tmp_path, monkeypatch, shape):
-    store = _store_with(tmp_path, monkeypatch, "Timeout 1000 ms")
-    assert _patch(store, shape, "00", "5")["success"] is True
-    assert store._entries_for("memory") == ["Timeout 150 ms"]
+def test_patch_rejects_an_overlapping_repeat(tmp_path, monkeypatch, shape):
+    # str.count misses overlaps: '00' is twice in '1000', and the edit saved 'Timeout 150 ms'.
+    s = _store_with(tmp_path, monkeypatch, "Timeout 1000 ms")
+    result = _patch(s, shape, "00", "5")
+    assert result["success"] is False and "appears 2 times" in result["error"]
+    assert s._entries_for("memory") == ["Timeout 1000 ms"]
 
 
 @pytest.mark.parametrize("shape", ["single", "batch"])
-def test_patch_trims_search_span_without_eating_adjacent_space(tmp_path, monkeypatch, shape):
-    store = _store_with(tmp_path, monkeypatch, "alpha fact. beta fact. gamma fact.")
-    assert _patch(store, shape, " beta fact.", "beta fact, updated.")["success"] is True
-    assert store._entries_for("memory") == ["alpha fact. beta fact, updated. gamma fact."]
+@pytest.mark.parametrize("entry,old_text,content,expected", [
+    ("Jeff drinks tea tonight", "tea ", "coffee ", "Jeff drinks coffee tonight"),
+    ("Lives in NewYork", "New", "New ", "Lives in New York"),
+])
+def test_patch_spans_keep_their_whitespace(tmp_path, monkeypatch, shape, entry, old_text, content, expected):
+    # The single call stripped old_text only (double space); the batch stripped both (a no-op).
+    s = _store_with(tmp_path, monkeypatch, entry)
+    assert _patch(s, shape, old_text, content)["success"] is True
+    assert s._entries_for("memory") == [expected]
 
 
 class TestPatchBatch:

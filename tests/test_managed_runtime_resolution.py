@@ -75,6 +75,9 @@ _EXEMPT_DIRS = (
 # (path, command) -> why. Keep this list short and justified — the default
 # answer for a new call site is a managed-aware helper, not a new exemption.
 _ALLOWED: dict[tuple[str, str], str] = {
+    ("tools/crema_browser_install.py", "npx"): (
+        "Crema's browser tries managed npm first, then supports installs that only have a host npx."
+    ),
     ("tools/env_probe.py", "uv"): (
         "Reports the environment the MODEL sees in the terminal tool. The model "
         "can only run what is on that subshell's PATH, which local.py populates "

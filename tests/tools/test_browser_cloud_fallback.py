@@ -6,12 +6,41 @@ is configured but fails at runtime (issue #10883).
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from tools.bot_desktop import placement
 from tools import browser_launcher
 from tools import browser_session as bs
 from tools import browser_session_cloud as bs_cloud
 
 _LOCAL_CDP = "ws://127.0.0.1:9333/devtools/browser/local"
+
+
+@pytest.mark.platforms("posix")
+def test_agent_browser_npx_uses_extended_path_before_system_path(tmp_path, monkeypatch):
+    from tools import browser_tool, browser_tool_session, crema_browser_install
+
+    engine, system = tmp_path / "engine", tmp_path / "system"
+    for directory in (engine, system):
+        directory.mkdir()
+        npx = directory / "npx"
+        npx.write_text("#!/bin/sh\nexit 0\n")
+        npx.chmod(0o755)
+    companion = engine / "npx-test-node"
+    companion.write_text("#!/bin/sh\nexit 0\n")
+    companion.chmod(0o755)
+    (engine / "npx").write_text("#!/usr/bin/env npx-test-node\n")
+    monkeypatch.setattr(crema_browser_install, "find_node_executable", lambda _name: None)
+    monkeypatch.setattr(crema_browser_install, "_browser_candidate_path_dirs", lambda: [str(engine)])
+    monkeypatch.setattr(browser_tool, "_agent_browser_resolved", False)
+    monkeypatch.setenv("PATH", str(system))
+
+    browser = crema_browser_install._find_agent_browser(validate=False)
+    assert browser == browser_tool.NPX_AGENT_BROWSER_SENTINEL
+    assert browser_tool_session._agent_browser_argv(browser)[0] == str(engine / "npx")
+
+    (engine / "npx").write_text("#!/bin/sh\nexit 1\n")
+    assert browser_tool_session._agent_browser_argv(browser)[0] == str(system / "npx")
 
 
 def test_fenced_browser_toolset_and_task_identity_follow_the_active_profile(tmp_path, monkeypatch):

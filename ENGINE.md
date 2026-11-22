@@ -57,7 +57,7 @@ profile. The assembled input supplies chat and scheduled toolsets, plugins and h
 |---|---|---|
 | Tools | files, terminal/process, todo, web search/extract, image understanding, memory, past-chat search, skills (the agent writes and improves them), a keyless backup ("백업해 줘"); image and video generation when the app's 부가 기능 연동 connects them | `hermes-api-server` in `toolsets.py`; the app adds `image_gen`/`video_gen` to `platform_toolsets.api_server` |
 | Knowledge notebook | pages of what the agent learned working with the user, searched before work and written after (the method of GBrain, below); a quiet chat is distilled into it, and once a day while Crema is quiet the notebook is tidied | `knowledge` in `toolsets.py` (a direct surface in `tools/tool_search.py`, so never deferred); `knowledge.search_mode` light/balanced/thorough, `knowledge.nightly` |
-| Past-chat search in Korean/CJK | the SQLite store uses its trigram index and a short-term SQL search for one- and two-character CJK terms; startup prepares the index for chats saved by older releases | `crema_engine.py::index_past_chats`, `persistence/sqlite/conversation/_store/search.py` |
+| Past-chat search in Korean/CJK | the SQLite store uses word and trigram indexes with a SQL scan for short terms; startup prepares the indexes for chats saved by older releases | `crema_engine.py::index_past_chats`, `persistence/sqlite/conversation/_store/search.py` |
 | Providers | the previous Crema provider set, with the new Hermes modules required by existing connections | provider profiles are discovered from the bundled paths and filtered by the application's connection settings |
 | Logins | only those made in Crema: other programs' logins (Claude Code, Codex CLI, GitHub CLI) are never borrowed | `auth.adopt_external_logins` default |
 | Shared files | chats that change the same file take turns: an order on the kanban board, a hand-over when the other chat is quiet and committed, else one judge call (the chat's model or `auxiliary.crema_turns`); a refused write waits for nothing, and the app starts the chat again | `agent/crema_file_turns.py`, `/api/crema/turns` |
@@ -75,9 +75,12 @@ profile. The assembled input supplies chat and scheduled toolsets, plugins and h
    `auth.adopt_external_logins`. Copilot ACP uses the same setting through its provider profile.
 5. `pyproject.toml` — the `crema` extra (see below).
 6. `persistence/` — the settings reader uses the same Korean search as the writer, including prefixes
-   such as `세금*`. Short Latin terms such as `AI` also find a word joined to Korean when the
-   word index misses. Default one- and two-character searches omit tool output. Crema uses the storage interface for chat history, context estimates and scheduled chats.
+   such as `세금*`. A word-index miss on one or two ASCII letters or digits, such as `5G`, retries
+   at ASCII word boundaries. That retry and short CJK scans that replace the old bigram route
+   omit tool output. Word-index hits and explicit tool-role searches can include tool output.
+   Crema uses the storage interface for chat history, context estimates and scheduled chats.
 7. `agent/learning_mutations.py` — Hermes now provides the shared lock for memory edits and deletes. Crema keeps a regression test for concurrent writes.
+   Partial memory edits use Hermes's whitespace-preserving spans and reject overlapping matches.
 8. `hermes_cli/backup.py`, `hermes_cli/subcommands/backup.py` — `--no-secrets` leaves out `.env`,
    `auth.json` and the credential vault. `tools/crema_backup_tool.py` (new, `backup` toolset in `hermes-api-server`)
    makes that backup when the user asks in the chat, in Documents\Crema 백업.
@@ -197,11 +200,18 @@ profile. The assembled input supplies chat and scheduled toolsets, plugins and h
    tests in `tests/gateway/test_api_server_run_work_folder.py`
 
 The prompt-cache duration defaults to five minutes. Marker caching stays enabled on supported
-routes, and Crema skips extra model calls that would keep the cache warm. The new Hermes request
-planner may split a system prompt with per-request instructions into three blocks on some routes.
+routes, and Crema skips extra model calls that would keep the cache warm, so `auto` stays at
+five minutes. The Hermes request planner may split a system prompt with per-request instructions
+into three blocks on some routes.
+
+The server browser looks for a runnable `npx` in engine-managed npm, the legacy engine and
+Homebrew locations, then the system PATH. Browser discovery, cache warming, and Chromium
+installation and launch share the resolver. When the login vault is available, browser input
+tools tell the model to call `browser_vault` through `tool_call`.
 
 Messaging adapters remain outside the archive. Their declared secret environment variable names
-stay in the child-process scrub policy. Tests that need an omitted Telegram plugin, Vertex
+stay in the child-process scrub policy. The full-checkout blocklist test checks the copy used
+in the archive against the bundled platform manifests. Tests that need an omitted Telegram plugin, Vertex
 profile, catalog generator, evaluation parser, or Desktop handoff run when the corresponding
 files are available.
 

@@ -269,6 +269,17 @@ def test_a_symlinked_home_alias_shares_its_profiles_plugin_declarations(child_en
 
 @pytest.mark.skipif(os.name == "nt" or os.geteuid() == 0,  # windows-footgun: ok — short-circuits on nt
                     reason="needs POSIX permissions as non-root")
+def test_crema_archive_blocklist_covers_bundled_platform_declarations():
+    from hermes_cli.config import _platform_manifest_paths, platform_manifest_secret_envs
+    from tools.environments.local_env_policy import _CREMA_ADAPTER_SECRET_ENV
+
+    if not any(_platform_manifest_paths(source="bundled")):
+        pytest.skip("Bundled platform manifests are omitted from the Crema archive")
+    declared = platform_manifest_secret_envs(source="bundled", strict=True)
+    missing = declared - _CREMA_ADAPTER_SECRET_ENV
+    assert not missing, sorted(missing)
+
+
 def test_unreadable_platform_manifest_fails_closed(tmp_path):
     """A manifest that cannot be read might declare secrets, so the policy scan raises rather than
     returning a set without them. A malformed one declares nothing and is skipped."""

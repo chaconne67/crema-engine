@@ -6,6 +6,7 @@ import re
 import sqlite3
 import time
 from dataclasses import dataclass
+from itertools import groupby
 from typing import Any, Collection, Optional
 from persistence.sqlite._state.common import fts_rebuild_admission
 from persistence.sqlite._state.errors import _DISK_IO_ERROR_MARKER
@@ -85,6 +86,10 @@ _LIKE_COALESCED_COLUMN_SQL = (
     "COALESCE(m.tool_name, '') LIKE ? ESCAPE '\\' OR "
     "COALESCE(m.tool_calls, '') LIKE ? ESCAPE '\\')"
 )
+
+_SHORT_ASCII_COLUMN_SQL = "(" + " OR ".join(
+    f"(' ' || lower(m.{column}) || ' ') GLOB ?" for column in ("content", "tool_name", "tool_calls")
+) + ")"
 
 
 _FTS_RANK_ORDER_BY = "ORDER BY rank"
@@ -602,9 +607,18 @@ def _compile_like_boolean_query(query: str) -> tuple[str, list[Any], Optional[st
 
 
 def _search_messages_like_fallback(
-    holder: StoreHolder, query: str, *, limit: int, offset: int, sort: Optional[str], **filters) -> list[dict[str, Any]]:
-    """Search canonical messages while derived FTS state is stale."""
-    predicate, params, snippet_term = _compile_like_boolean_query(query)
+    holder: StoreHolder, query: str, *, limit: int, offset: int, sort: Optional[str],
+    short_ascii_term: Optional[str] = None, **filters,
+) -> list[dict[str, Any]]:
+    """Search canonical messages for explicit tool rows, stale FTS, or a short ASCII miss."""
+    if short_ascii_term is None:
+        predicate, params, snippet_term = _compile_like_boolean_query(query)
+    else:
+        # The old bigram tokenizer split ASCII words at CJK boundaries. A padded
+        # GLOB checks the real neighbors (including digits) before applying LIMIT.
+        predicate, snippet_term = _SHORT_ASCII_COLUMN_SQL, short_ascii_term
+        params = [f"*[^a-z0-9]{short_ascii_term.lower()}[^a-z0-9]*"] * 3
+        filters["exclude_tool_rows"] = True
     if not predicate or snippet_term is None:
         return []
     where = [f"({predicate})"]
@@ -711,11 +725,9 @@ def _search_messages_impl(
     query = _sanitize_fts5_query(query)
     if not query:
         return []
-    short_term = _strip_cjk_wildcards(query).strip('"').strip()
-    short_query = 0 < len(short_term) <= 2
     filters = dict(include_inactive=include_inactive, source_filter=source_filter,
                    exclude_sources=exclude_sources, role_filter=role_filter,
-                   after_ts=after_ts, before_ts=before_ts, exclude_tool_rows=short_query and not role_filter)
+                   after_ts=after_ts, before_ts=before_ts)
     # New oversized tool results index only a bounded prefix; an explicit tool-role search is the
     # opt-in full-body path and scans canonical rows via LIKE.
     if role_filter and "tool" in role_filter:
@@ -767,10 +779,11 @@ def _search_messages_impl(
     # one token, so MATCH "youer" misses). On a zero-result Latin miss retry the
     # trigram index (>=3-char tokens). Gated on a miss so hits keep their ranking ("cat"
     # may then match "concatenate"). Skipped for role='tool' (trigram excludes tool rows).
-    if not matches and not is_cjk and not (bool(role_filter) and "tool" in role_filter):
-        if short_query and re.fullmatch(r"[a-zA-Z]{1,2}", short_term):
-            # A trailing prefix star is not a character the trigram tokenizer can index.
-            matches = _search_messages_like_fallback(holder, query, limit=limit, offset=offset, sort=sort, **filters)
+    if not matches and not is_cjk:
+        short_term = query.rstrip("*").strip('"').strip()
+        if re.fullmatch(r"[A-Za-z0-9]{1,2}", short_term):
+            matches = _search_messages_like_fallback(holder, query, limit=limit, offset=offset, sort=sort,
+                                                     short_ascii_term=short_term, **filters)
         elif holder._trigram_available and _trigram_eligible_tokens(query):
             fb_query = _quote_fts_tokens(query.strip('"').strip())
             matches = _match_rows(holder, "messages_fts_trigram", fb_query, fail_open="Trigram", **route) or matches
@@ -810,8 +823,13 @@ def _search_cjk(holder: StoreHolder, query: str, wants_unindexed_rows: bool, rou
     like_params: list = [p for tok in non_op_tokens for p in _like_params(tok)]
     like_where = [f"({' OR '.join([_LIKE_ANY_COLUMN_SQL] * len(non_op_tokens))})"]
     filters = {k: route[k] for k in ("include_inactive", "source_filter", "exclude_sources", "role_filter",
-                                     "after_ts", "before_ts", "exclude_tool_rows")}
-    _search_filter_clauses(like_where, like_params, **filters)
+                                     "after_ts", "before_ts")}
+    # The old bigram index excluded tool rows. A lone CJK character in any
+    # run already used the wider LIKE scan in Crema (e.g. "AI 답" or "PC가").
+    exclude_tool_rows = not wants_unindexed_rows and _has_short_cjk_token(raw_query) and all(
+        sum(1 for _ in run) > 1 for is_cjk, run in groupby(raw_query, key=lambda ch: _is_cjk(ord(ch))) if is_cjk
+    )
+    _search_filter_clauses(like_where, like_params, exclude_tool_rows=exclude_tool_rows, **filters)
     # instr() for the snippet uses the first search token.
     return _like_rows(holder, like_where, [non_op_tokens[0], *like_params, route["limit"], route["offset"]],
                            order_by="ORDER BY m.timestamp DESC", limit_sql="LIMIT ? OFFSET ?")

@@ -139,11 +139,16 @@ def _repeated_span_message(old_text: str, count: int) -> str:
             f"Include more surrounding text so old_text occurs once.")
 
 
+def _span_occurrences(text: str, span: str) -> int:
+    """Occurrences of *span* in *text*, overlapping ones included: '00' occurs twice in '1000'."""
+    return sum(text.startswith(span, i) for i in range(len(text) - len(span) + 1))
+
+
 def _patch_entry(entry: str, old_text: str, new_text: str) -> tuple[Optional[str], str, str]:
     """``(patched entry, "", "none")``, or ``(None, error, failure class)`` when the span occurs more
     than once in the entry, the edit changes nothing, or the patched entry fails the threat scan.
     Single and batch patches both go through here, so they share one rule."""
-    if (count := entry.count(old_text)) > 1:
+    if (count := _span_occurrences(entry, old_text)) > 1:
         return None, _repeated_span_message(old_text, count), "ambiguous"
     patched = entry.replace(old_text, new_text, 1)
     if patched == entry:
@@ -437,7 +442,8 @@ class MemoryStore:
             return _error("old_text cannot be empty.", "missing_old_text")
         if new_text is None or not str(new_text).strip():
             return _error(f"new_text cannot be empty. {PATCH_DROP_HINT}", "missing_content")
-        return self._patch(target, old_text.strip(), str(new_text), matched_entry)
+        # The span keeps its whitespace: it is part of the text being replaced ("tea " -> "coffee ").
+        return self._patch(target, old_text, str(new_text), matched_entry)
 
     def _patch(self, target: str, old_text: str, new_text: str,
                matched_entry: Optional[str] = None) -> dict[str, Any]:
@@ -593,7 +599,8 @@ class MemoryStore:
             for i, op in enumerate(ops):
                 act = op.get("action")
                 content, old_text = op.get("content") or op.get("new_text") or "", op.get("old_text") or ""
-                content, old_text = content.strip(), old_text.strip()
+                if act != "patch":  # whole-entry actions; a patch span keeps its whitespace
+                    content, old_text = content.strip(), old_text.strip()
                 msg, previous_content, failure_class, after = self._apply_batch_op(
                     working, act, content, old_text, f"Operation {i + 1} ({act or 'unknown'})",
                     op.get("matched_entry"))

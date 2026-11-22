@@ -12,7 +12,10 @@ from pathlib import Path
 from typing import List, Optional
 
 from hermes_cli._subprocess_compat import windows_hide_flags
-from hermes_constants import _is_executable_file, _version_probe_ok, find_node_executable, get_hermes_home, is_termux as _is_termux_environment
+from hermes_constants import (
+    _is_executable_file, _run_version_probe, _version_probe_ok, find_node_executable,
+    get_hermes_home, is_termux as _is_termux_environment, with_hermes_node_path,
+)
 from tools.browser_tool_origin import origin_module as _origin
 from tools import browser_tool_cdp as _cdp
 from tools import browser_tool_cloud as _cloud
@@ -63,6 +66,11 @@ def _merge_browser_path(existing_path: str = "") -> str:
     return os.pathsep.join(prefix_parts + path_parts)
 
 
+def _browser_subprocess_path(existing_path: str) -> str:
+    """Put PM's Node on the child PATH and keep the browser's legacy locations available."""
+    return with_hermes_node_path({"PATH": _merge_browser_path(existing_path)})["PATH"]
+
+
 def _browser_install_hint() -> str:
     return "npm install -g agent-browser && agent-browser install" + ("" if _is_termux_environment() else " --with-deps")
 
@@ -87,6 +95,24 @@ def _agent_browser_candidate_present(path: str | None) -> bool:
     return os.path.exists(path) and (os.name == "nt" or os.access(path, os.X_OK))
 
 
+def _resolve_npx_bin() -> Optional[str]:
+    """Prefer engine npm, then the legacy browser/Homebrew locations and ambient PATH."""
+    from tools.environments.local import hermes_subprocess_env
+
+    managed = find_node_executable("npx")
+    extended_path = _merge_browser_path("")
+    paths = ([extended_path] if extended_path else []) + [None]
+    candidates = [managed, *(shutil.which("npx", path=path) for path in paths)]
+    for candidate in dict.fromkeys(candidates):
+        if candidate:
+            env = hermes_subprocess_env()
+            env["PATH"] = _browser_subprocess_path(env.get("PATH", ""))
+            probe = _run_version_probe([candidate, "--version"], env=env)
+            if probe is not None and probe.returncode == 0:
+                return candidate
+    return None
+
+
 def _agent_browser_candidates(extended_path: str):
     """Yield agent-browser lookup candidates lazily: ambient PATH → extended PATH → repo-local node_modules/.bin.
 
@@ -107,14 +133,15 @@ def _find_agent_browser(*, validate: bool = True) -> str:
     A bare ``shutil.which`` hit is NOT trusted: agent-browser's npm postinstall re-points a global symlink at our
     local node_modules binary, which vanishes on the next ``hermes update`` and leaves a dangling link ``which``
     still reports (exec fails with 127). Candidates are validated with ``agent_browser_runnable`` before caching
-    so a dead one falls through. ``validate=False`` (schema-time check_fn) only tests presence and never caches.
+    so a dead one falls through. ``validate=False`` (schema-time check_fn) only tests direct binary
+    presence and never caches. The npx fallback still requires a runnable candidate.
     Raises FileNotFoundError when agent-browser is not installed.
     """
     _bt = _origin()
 
     def _not_found(cached: bool) -> FileNotFoundError:
         return FileNotFoundError(f"agent-browser CLI not found{' (cached)' if cached else ''}. Install it with: "
-                                 f"{_browser_install_hint()}\nOr ensure Hermes has a managed npm runtime.")
+                                 f"{_browser_install_hint()}\nOr make a runnable npx available to Hermes.")
 
     def _accept(candidate: str) -> str:
         # Set resolved at each accept site (not before the search) so a concurrent reader never sees
@@ -133,8 +160,7 @@ def _find_agent_browser(*, validate: bool = True) -> str:
     for candidate in _agent_browser_candidates(extended_path):
         if candidate and ok(candidate):
             return _accept(candidate)
-    # npx fallback uses the selected npm runtime.
-    if find_node_executable("npx"):
+    if _resolve_npx_bin():
         return _accept(_bt.NPX_AGENT_BROWSER_SENTINEL)
     if not validate:
         raise FileNotFoundError("agent-browser CLI not found")
@@ -169,11 +195,11 @@ def warm_agent_browser_npx_cache(timeout: float = 60.0) -> bool:
     graph.
     """
     _bt = _origin()
-    npx_bin = find_node_executable("npx")
+    npx_bin = _resolve_npx_bin()
     if not npx_bin:
         return False
     env = _bt._build_browser_env()
-    env["PATH"] = _merge_browser_path(env.get("PATH", ""))
+    env["PATH"] = _browser_subprocess_path(env.get("PATH", ""))
     popen_kwargs: dict = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True,
                           "encoding": "utf-8", "errors": "replace", "env": env}
     if os.name == "posix":
@@ -259,15 +285,17 @@ def _maybe_autoinstall_chromium() -> bool:
         return False
     install_cmd = [browser_cmd, "install"]
     if _is_npx_agent_browser_sentinel(browser_cmd):
-        npx_bin = find_node_executable("npx")
+        npx_bin = _resolve_npx_bin()
         if npx_bin is None:
             return False
         install_cmd = [npx_bin, "--ignore-scripts", "-y", _bt.AGENT_BROWSER_NPX_SPEC, "install"]
 
     _bt.logger.info("browser: Chromium missing — auto-installing the browser binary (one-time ~170MB; disable via security.allow_lazy_installs)")
+    env = _bt._build_browser_env()
+    env["PATH"] = _browser_subprocess_path(env.get("PATH", ""))
     try:
         proc = subprocess.run(install_cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=600,
-                              env=_bt._build_browser_env(), stdin=subprocess.DEVNULL)
+                              env=env, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError) as e:
         _bt.logger.warning("browser: Chromium auto-install failed to start: %s", e)
         return False

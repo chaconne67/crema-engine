@@ -680,8 +680,8 @@ DEFAULT_CONFIG = {
         "prepare_ahead": False,
     },
     # Anthropic prompt caching (Claude via OpenRouter or native API). cache_ttl: "5m" (Crema default) | "auto" | "1h"
-    # (auto = 1h for human-paced sessions — cli/tui/desktop/messaging — and 5m for subagent, cron,
-    # oneshot, webhook, kanban, api_server, tool, batch, curator); falsy ("off", null, ...) disables caching.
+    # Crema disables cache warming, so "auto" stays at 5m instead of promoting human-paced sessions to 1h.
+    # Falsy values ("off", null, ...) disable caching.
     # route_ttl_ceilings {<provider>: "5m"|"1h"} overrides a profile's prompt_cache_max_ttl.
     "prompt_caching": {"cache_ttl": "5m", "route_ttl_ceilings": {}},
     # OpenRouter settings. response_cache: X-OpenRouter-Cache header — identical requests return

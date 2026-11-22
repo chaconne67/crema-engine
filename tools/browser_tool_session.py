@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from hermes_cli._subprocess_compat import windows_hide_flags
-from hermes_constants import find_node_executable, get_hermes_home
+from hermes_constants import get_hermes_home
 from utils import atomic_write_text
 from tools.browser_tool_origin import origin as _bt
 from tools import browser_tool_cdp as _cdp
@@ -112,13 +112,13 @@ def _format_browser_timeout_error(
 def _agent_browser_argv(browser_cmd: str) -> list:
     """Command prefix to invoke agent-browser (concrete binary, or the npx sentinel expanded).
 
-    Resolve npx from the same managed npm install as browser discovery. Keep
+    Use the same npx resolver as browser discovery. Keep
     package install scripts disabled when running the pinned range.
     """
     if _install._is_npx_agent_browser_sentinel(browser_cmd):
-        npx_bin = find_node_executable("npx")
+        npx_bin = _install._resolve_npx_bin()
         if npx_bin is None:
-            raise FileNotFoundError("Managed npx is unavailable for agent-browser")
+            raise FileNotFoundError("No runnable npx is available for agent-browser")
         return [npx_bin, "--ignore-scripts", "--prefer-offline", "-y", _bt.AGENT_BROWSER_NPX_SPEC]
     return [browser_cmd]
 
@@ -169,7 +169,7 @@ def _agent_browser_command_env(socket_dir: str) -> Dict[str, str]:
     daemon-side idle self-termination (agent-browser 0.24+) mirroring the Python janitor
     unless the user set ``AGENT_BROWSER_IDLE_TIMEOUT_MS`` explicitly."""
     env = _bt._build_browser_env()
-    env["PATH"] = _install._merge_browser_path(env.get("PATH", ""))
+    env["PATH"] = _install._browser_subprocess_path(env.get("PATH", ""))
     env["AGENT_BROWSER_SOCKET_DIR"] = socket_dir
     if "AGENT_BROWSER_IDLE_TIMEOUT_MS" not in env:
         env["AGENT_BROWSER_IDLE_TIMEOUT_MS"] = str(_daemon_idle_timeout_seconds() * 1000)

@@ -114,6 +114,23 @@ def _build_provider_env_blocklist() -> frozenset:
     return frozenset(blocked)
 
 
+# Crema's archive omits plugins/platforms. Keep their declared secret names in
+# the child-process policy without shipping or registering the adapters.
+# Buzz relay and auth-tag values share the private key's session-scoped
+# terminal exception, so they also stay out of other child environments.
+_CREMA_ADAPTER_SECRET_ENV = frozenset({
+    "A2A_BEARER_TOKEN", "A2A_PEER_TOKENS", "A2A_PUSH_SECRET",
+    "BUZZ_AUTH_TAG", "BUZZ_PRIVATE_KEY", "BUZZ_RELAY_URL",
+    "DINGTALK_CLIENT_SECRET", "EMAIL_PASSWORD", "FEISHU_APP_SECRET",
+    "GOOGLE_CHAT_SERVICE_ACCOUNT_JSON", "LINE_CHANNEL_ACCESS_TOKEN", "LINE_CHANNEL_SECRET",
+    "MATRIX_PASSWORD", "NTFY_TOKEN", "PHOTON_PROJECT_SECRET", "PHOTON_SIDECAR_TOKEN", "QQ_STT_API_KEY",
+    "TEAMS_CLIENT_SECRET", "TEAMS_GRAPH_ACCESS_TOKEN", "TEAMS_INCOMING_WEBHOOK_URL",
+    "TELEGRAM_WEBHOOK_SECRET", "TWILIO_AUTH_TOKEN", "WECOM_CALLBACK_CORP_SECRET",
+    "WECOM_CALLBACK_ENCODING_AES_KEY", "WECOM_CALLBACK_TOKEN", "WECOM_SECRET", "WEIXIN_TOKEN",
+    "WHATSAPP_CLOUD_ACCESS_TOKEN", "WHATSAPP_CLOUD_APP_SECRET", "WHATSAPP_CLOUD_VERIFY_TOKEN",
+})
+
+
 def _build_adapter_secret_env() -> frozenset:
     """Secrets the messaging adapters declare, process-wide: core ``password`` messaging entries
     of OPTIONAL_ENV_VARS, the bundled platform plugin manifests' secret entries, and the
@@ -126,27 +143,13 @@ def _build_adapter_secret_env() -> frozenset:
         CORE_DECLARED_ENV_NAMES, OPTIONAL_ENV_VARS, PLATFORM_SECRET_ENV_SUFFIXES, platform_manifest_secret_envs)
     from hermes_cli.profile_channels import config_env_table_keys
     # Read in code only, declared nowhere else: the Microsoft Graph app secret and webhook
-    # clientState, the QQ bot's speech-to-text key, and secrets only a plugin's ``env_overrides``
+    # clientState, and secrets only a plugin's ``env_overrides``
     # reads (Feishu webhook keys; Yuanbao's legacy app key, kept while the plugin is absent). Those rows live on the adapter's
     # PlatformEntry, which this import-time policy cannot load without importing every adapter;
     # tests/gateway/test_platform_env_overrides.py pins that every such secret is listed here.
-    names: set[str] = {"MSGRAPH_CLIENT_SECRET", "MSGRAPH_WEBHOOK_CLIENT_STATE", "QQ_STT_API_KEY",
+    names: set[str] = {"MSGRAPH_CLIENT_SECRET", "MSGRAPH_WEBHOOK_CLIENT_STATE",
                        "FEISHU_ENCRYPT_KEY", "FEISHU_VERIFICATION_TOKEN", "YUANBAO_APP_KEY"}
-    # Crema's archive omits plugins/platforms. Keep their declared secret names in the
-    # child-process policy without shipping or registering the adapters.
-    # Buzz relay and auth-tag values share the private key's session-scoped
-    # terminal exception, so they also stay out of other child environments.
-    names.update({
-        "A2A_BEARER_TOKEN", "A2A_PEER_TOKENS", "A2A_PUSH_SECRET",
-        "BUZZ_AUTH_TAG", "BUZZ_PRIVATE_KEY", "BUZZ_RELAY_URL",
-        "DINGTALK_CLIENT_SECRET", "EMAIL_PASSWORD", "FEISHU_APP_SECRET",
-        "GOOGLE_CHAT_SERVICE_ACCOUNT_JSON", "LINE_CHANNEL_ACCESS_TOKEN", "LINE_CHANNEL_SECRET",
-        "MATRIX_PASSWORD", "NTFY_TOKEN", "PHOTON_PROJECT_SECRET", "PHOTON_SIDECAR_TOKEN",
-        "TEAMS_CLIENT_SECRET", "TEAMS_GRAPH_ACCESS_TOKEN", "TEAMS_INCOMING_WEBHOOK_URL",
-        "TELEGRAM_WEBHOOK_SECRET", "TWILIO_AUTH_TOKEN", "WECOM_CALLBACK_CORP_SECRET",
-        "WECOM_CALLBACK_ENCODING_AES_KEY", "WECOM_CALLBACK_TOKEN", "WECOM_SECRET", "WEIXIN_TOKEN",
-        "WHATSAPP_CLOUD_ACCESS_TOKEN", "WHATSAPP_CLOUD_APP_SECRET", "WHATSAPP_CLOUD_VERIFY_TOKEN",
-    })
+    names.update(_CREMA_ADAPTER_SECRET_ENV)
     names.update(name.upper() for name, meta in OPTIONAL_ENV_VARS.items()
                  if name in CORE_DECLARED_ENV_NAMES
                  and meta.get("category") == "messaging" and meta.get("password"))

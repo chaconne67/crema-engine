@@ -182,7 +182,7 @@ def _search_select_sql(snippet_sql: str, from_sql: str, where: list[str], order_
 def _search_filter_clauses(
     where: list[str], params: list, *, include_inactive: bool, source_filter: Optional[list[str]],
     exclude_sources: Optional[list[str]], role_filter: Optional[list[str]],
-    after_ts: Optional[int] = None, before_ts: Optional[int] = None) -> None:
+    after_ts: Optional[int] = None, before_ts: Optional[int] = None, exclude_tool_rows: bool = False) -> None:
     """Append the visibility/source/role/session-start predicates every search route shares. Live
     rows (active=1) AND compaction-archived rows (compacted=1) are discoverable; only
     rewind/undo rows (active=0, compacted=0) are hidden. ``after_ts``/``before_ts`` bound
@@ -198,6 +198,8 @@ def _search_filter_clauses(
     if exclude_sources is not None:
         where.append(f"s.source NOT IN ({','.join('?' for _ in exclude_sources)})")
         params.extend(exclude_sources)
+    if exclude_tool_rows:
+        where.append("m.role <> 'tool'")
     if role_filter:
         where.append(f"m.role IN ({','.join('?' for _ in role_filter)})")
         params.extend(role_filter)
@@ -713,14 +715,12 @@ def _search_messages_impl(
     short_query = 0 < len(short_term) <= 2
     filters = dict(include_inactive=include_inactive, source_filter=source_filter,
                    exclude_sources=exclude_sources, role_filter=role_filter,
-                   after_ts=after_ts, before_ts=before_ts)
+                   after_ts=after_ts, before_ts=before_ts, exclude_tool_rows=short_query and not role_filter)
     # New oversized tool results index only a bounded prefix; an explicit tool-role search is the
     # opt-in full-body path and scans canonical rows via LIKE.
     if role_filter and "tool" in role_filter:
         matches = _search_messages_like_fallback(holder, query, limit=limit, offset=offset, sort=sort, **filters)
         return _finalize_search_matches(holder, matches, result_fields=result_fields)
-    if short_query and not role_filter:
-        filters["role_filter"] = ["user", "assistant", "system"]
     _refresh_fts_stale_state(holder)
     if holder._fts_stale:
         return _search_messages_stale(holder, query, limit, offset, sort, filters, result_fields)
@@ -768,11 +768,12 @@ def _search_messages_impl(
     # trigram index (>=3-char tokens). Gated on a miss so hits keep their ranking ("cat"
     # may then match "concatenate"). Skipped for role='tool' (trigram excludes tool rows).
     if not matches and not is_cjk and not (bool(role_filter) and "tool" in role_filter):
-        fb_query = _quote_fts_tokens(query.strip('"').strip())
-        if holder._trigram_available and _trigram_eligible_tokens(query):
-            matches = _match_rows(holder, "messages_fts_trigram", fb_query, fail_open="Trigram", **route) or matches
-        elif short_query and re.fullmatch(r"[a-zA-Z]{1,2}", short_term):
+        if short_query and re.fullmatch(r"[a-zA-Z]{1,2}", short_term):
+            # A trailing prefix star is not a character the trigram tokenizer can index.
             matches = _search_messages_like_fallback(holder, query, limit=limit, offset=offset, sort=sort, **filters)
+        elif holder._trigram_available and _trigram_eligible_tokens(query):
+            fb_query = _quote_fts_tokens(query.strip('"').strip())
+            matches = _match_rows(holder, "messages_fts_trigram", fb_query, fail_open="Trigram", **route) or matches
 
     # OR-relaxed retry: the implicit AND between terms means a paraphrased multi-word query
     # misses a stored sentence that lacks even ONE word ("when does Sarah like her standup
@@ -809,7 +810,7 @@ def _search_cjk(holder: StoreHolder, query: str, wants_unindexed_rows: bool, rou
     like_params: list = [p for tok in non_op_tokens for p in _like_params(tok)]
     like_where = [f"({' OR '.join([_LIKE_ANY_COLUMN_SQL] * len(non_op_tokens))})"]
     filters = {k: route[k] for k in ("include_inactive", "source_filter", "exclude_sources", "role_filter",
-                                     "after_ts", "before_ts")}
+                                     "after_ts", "before_ts", "exclude_tool_rows")}
     _search_filter_clauses(like_where, like_params, **filters)
     # instr() for the snippet uses the first search token.
     return _like_rows(holder, like_where, [non_op_tokens[0], *like_params, route["limit"], route["offset"]],

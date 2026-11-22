@@ -35,12 +35,15 @@ def git_changes():
     tokens = iter(raw.decode("utf-8").removesuffix("\0").split("\0") if raw else ())
     expected = {}
     counts = dict.fromkeys(("M", "A", "D"), 0)
+    deleted = []
     for status, path in zip(tokens, tokens, strict=True):
         if status in counts:
             counts[status] += 1
         if status in KINDS:
             expected[path] = KINDS[status]
-    return expected, counts
+        elif status == "D":
+            deleted.append(path)
+    return expected, counts, deleted
 
 
 def check_list(expected):
@@ -81,8 +84,9 @@ def check_list(expected):
 
 def main():
     try:
-        expected, counts = git_changes()
+        expected, counts, deleted = git_changes()
         errors, unknown = check_list(expected)
+        errors.extend(f"{path!r}: upstream file deleted" for path in deleted)
     except subprocess.CalledProcessError as error:
         detail = error.stderr.decode("utf-8", errors="replace").strip()
         errors = [detail or str(error)]

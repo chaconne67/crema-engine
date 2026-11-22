@@ -1,7 +1,7 @@
 # Crema engine
 
-This branch (`crema`) is the engine bundled inside the Crema desktop app: a pruned fork of
-[NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) (MIT, see `LICENSE`).
+This branch (`crema`) is a fork of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
+(MIT, see `LICENSE`). Crema bundles the engine source exported by Git.
 Files keep their upstream paths and names so upstream changes can be compared and taken file by file.
 
 - Upstream base: the commit pointed to by the `hermes-upstream` branch.
@@ -119,9 +119,12 @@ Both bind 127.0.0.1 only.
    - the files a reply wrote (Crema plan `Crema-파일-링크-계획-2026-10-09.md`): every write of `write_file`/`patch`
      (made or changed) and every file of the chat's folder whose content a terminal command changed in Git is a `crema_wrote` event;
      `GET /api/crema/files?session_id=&since=` lists those still there, for the app's line under the reply
-13. Removed (not used by the engine; nothing kept imports them):
-   - top level: `apps/ website/` (except `website/static/api/model-catalog.json`) `ui-tui/ web/ skills/ (Crema's own is item 14) optional-skills/
-     optional-mcps/ plugin-catalog/ evals/ scripts/ docker/ nix/ native/ (except native/fts5_cjk/) tests-js/ contributors/`,
+13. Excluded from the Crema bundle because Crema does not use these Hermes features or development files.
+   Git keeps the upstream copies to avoid deletion conflicts during merges. The `export-ignore` rules
+   in `.gitattributes` specify what `git archive` leaves out.
+   - top level: `apps/`, `website/` (except `website/static/api/model-catalog.json`), `ui-tui/`, `web/`,
+     Hermes bundled skills (see item 14 for Crema's manual), `optional-skills/`, `optional-mcps/`,
+     `plugin-catalog/`, `evals/`, `docker/`, `nix/`, `tests-js/`, `contributors/`,
      Docker/Nix/npm/lint files, translated READMEs, `batch_runner.py mini_swe_runner.py mcp_serve.py
      toolset_distributions.py trajectory_compressor.py setup-hermes.sh`
    - `tools/`: `xai_video_tools.py`
@@ -129,10 +132,10 @@ Both bind 127.0.0.1 only.
      teams_pipeline platforms cron_providers`, the memory providers under `plugins/memory/`,
      and the model providers `bedrock vertex` (they need packages the bundle does not carry; the other
      providers were cut at first and restored on 2026-09-26)
-   - `scripts/` except `run_tests_parallel.py`, upstream's per-file test runner the tests rely on for
-     isolation: run the tests with `python scripts/run_tests_parallel.py`, not bare pytest
-   - the test files of removed features (every test in them failed only here, or their subject is a
-     removed feature). The tests of kept files that still check a removed feature are listed in the
+   - Hermes scripts other than `scripts/run_tests_parallel.py`, upstream's runner for per-file
+     test isolation. Run bundled tests with `python scripts/run_tests_parallel.py`.
+   - test files for excluded features, and files whose tests all failed only in Crema.
+     Retained tests that still check an excluded feature are listed in the
      Crema repo's `scripts/engine-tests/known-pruned-failures.txt`, which the engine test comparison
      (`.github/workflows/engine-tests.yml` there) reports apart from new failures
    - brought back on 2026-09-27 (1a85b8bbf1): `tools/video_generation_tool.py` and the image/video backends
@@ -164,20 +167,28 @@ Both bind 127.0.0.1 only.
    it as the session's terminal/file-tool cwd (`register_task_env_overrides`), so concurrent chats keep their own;
    tests in `tests/gateway/test_api_server_run_work_folder.py`
 
-Item 13 will be updated when the deleted upstream files are restored in step ②.
+Running or testing the engine directly from a full Git checkout can discover components absent from
+the bundle. Use an empty directory and run `git archive HEAD | tar -x -C <empty-directory>` to
+prepare the bundled engine source before running or testing it.
 
-Kept code still mentions many removed features (browser, memory, delegation, …) through imports that
-are either lazy or guarded; those modules stay until the code that names them is gone.
+- Spotify and more image/video backends load automatically. Platform adapters register lazily.
+- Bedrock and Vertex register through model-provider discovery. Memory providers become discoverable.
+- The xAI video edit and extend tools register. Exposure depends on toolset, provider and credentials.
+- Hermes skills and catalogs become discoverable. The Hermes dashboard can discover Kanban and Achievements.
+
+Kept code still mentions many unbundled features (browser, memory, delegation, …) through lazy or
+guarded imports.
 
 Known harmless log: the first Anthropic call logs "boto3 lazy install did not complete" once — the
 Anthropic adapter imports `agent/bedrock_adapter.py`, which asks for boto3, and runtime installs are off.
 
 ## Adding a feature back
 
-1. Restore the upstream files at the same paths: `git checkout hermes-upstream -- <path>` (or from a newer
-   upstream commit after comparing with `git diff hermes-upstream upstream/main -- <path>`).
-2. Turn it on where it is chosen (table above).
-3. Add a Crema CI check for it and list the change here.
+1. Remove the feature's `export-ignore` rules from `.gitattributes`. If a rule covers a whole
+   directory, replace it with rules for the paths that should stay excluded.
+2. Enable the feature in the relevant Crema configuration.
+3. Test the feature from the exported source. Add a Crema CI check and record the change in
+   `CREMA_CHANGES.tsv` and this document.
 
 ## Updating from upstream
 

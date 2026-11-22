@@ -134,8 +134,11 @@ def _build_adapter_secret_env() -> frozenset:
                        "FEISHU_ENCRYPT_KEY", "FEISHU_VERIFICATION_TOKEN", "YUANBAO_APP_KEY"}
     # Crema's archive omits plugins/platforms. Keep their declared secret names in the
     # child-process policy without shipping or registering the adapters.
+    # Buzz relay and auth-tag values share the private key's session-scoped
+    # terminal exception, so they also stay out of other child environments.
     names.update({
-        "A2A_BEARER_TOKEN", "A2A_PEER_TOKENS", "A2A_PUSH_SECRET", "BUZZ_PRIVATE_KEY",
+        "A2A_BEARER_TOKEN", "A2A_PEER_TOKENS", "A2A_PUSH_SECRET",
+        "BUZZ_AUTH_TAG", "BUZZ_PRIVATE_KEY", "BUZZ_RELAY_URL",
         "DINGTALK_CLIENT_SECRET", "EMAIL_PASSWORD", "FEISHU_APP_SECRET",
         "GOOGLE_CHAT_SERVICE_ACCOUNT_JSON", "LINE_CHANNEL_ACCESS_TOKEN", "LINE_CHANNEL_SECRET",
         "MATRIX_PASSWORD", "NTFY_TOKEN", "PHOTON_PROJECT_SECRET", "PHOTON_SIDECAR_TOKEN",

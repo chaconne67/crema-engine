@@ -14,6 +14,21 @@ Files keep their upstream paths and names so upstream changes can be compared an
 - When modifying an upstream file or adding a file, record what changed and why in `CREMA_CHANGES.tsv` and run `python scripts/check_crema_changes.py`. The record gives the next merge a reason to keep or reconsider each change.
 - Add Crema features in new files wherever practical to reduce overlap with future Hermes changes.
 
+### Feature inventory
+
+`CREMA_FEATURES.tsv` records user- and operator-visible differences from the Hermes baseline, with
+the behavior, evidence, verification steps and implementation status for each feature. Update it
+when changing engine behavior or bundle exclusions and when reconciling a new Hermes baseline.
+Run each relevant row's verification on the updated engine. The inventory check validates links and
+paths. It does not execute the feature checks.
+
+- Link changed files to the feature IDs in `CREMA_CHANGES.tsv` (`features`, comma-separated). Use
+  `non-feature` with a `non_feature_reason` for maintenance-only changes.
+- In `.gitattributes`, a `# crema-feature <id>` line assigns the consecutive `export-ignore` rules
+  below it to that feature. For a test-only rule, use `# crema-feature non-feature <reason>`.
+- The feature inventory's `tests` and `inspect` columns list comma-separated repository paths.
+  `inspect` can name a code location as `path::symbol`. A dash marks an empty reference list.
+
 ## How Crema runs it
 
 `python crema_engine.py` with `HERMES_HOME` (Crema's own engine folder, never the user's own Hermes)

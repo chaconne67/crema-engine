@@ -37,8 +37,14 @@ docker/entrypoint.sh text eol=lf
 # Keep these files in Git to avoid deletion conflicts when merging Hermes updates.
 # To bundle a path, remove its export-ignore rule and document the change in
 # CREMA_CHANGES.tsv and ENGINE.md. Split a directory rule to keep other paths excluded.
+
+# crema-feature exclude-development
 /.coderabbit.yaml export-ignore
+
+# crema-feature exclude-standalone
 /.dockerignore export-ignore
+
+# crema-feature exclude-development
 /.envrc export-ignore
 /.hadolint.yaml export-ignore
 /.mailmap export-ignore
@@ -47,41 +53,81 @@ docker/entrypoint.sh text eol=lf
 /.prettierrc export-ignore
 /CONTRIBUTING.es.md export-ignore
 /CONTRIBUTING.md export-ignore
+
+# crema-feature exclude-standalone
 /Dockerfile export-ignore
+
+# crema-feature exclude-development
 /README.es.md export-ignore
 /README.ur-pk.md export-ignore
 /README.zh-CN.md export-ignore
 /SECURITY.es.md export-ignore
+
+# crema-feature exclude-maintenance
 /agent/subdirectory_hints.py export-ignore
+
+# crema-feature exclude-desktop
 /apps export-ignore
 /assets export-ignore
+
+# crema-feature exclude-standalone
 /batch_runner.py export-ignore
 /constraints-termux.txt export-ignore
+
+# crema-feature exclude-development
 /contributors export-ignore
+
+# crema-feature exclude-standalone
 /docker export-ignore
 /docker-compose.windows.yml export-ignore
 /docker-compose.yml export-ignore
+
+# crema-feature exclude-development
 /eslint.config.shared.mjs export-ignore
 /evals export-ignore
+
+# crema-feature exclude-standalone
 /flake.lock export-ignore
 /flake.nix export-ignore
 /mcp_serve.py export-ignore
 /mini_swe_runner.py export-ignore
 /nix export-ignore
+
+# crema-feature exclude-catalog
 /optional-mcps export-ignore
+
+# crema-feature exclude-skills
 /optional-skills export-ignore
+
+# crema-feature exclude-development
 /package-lock.json export-ignore
 /package.json export-ignore
+
+# crema-feature exclude-catalog
 /plugin-catalog export-ignore
+
+# crema-feature exclude-cron-provider
 /plugins/cron_providers export-ignore
+
+# crema-feature exclude-maintenance
 /plugins/disk-cleanup export-ignore
+
+# crema-feature exclude-meetings
 /plugins/google_meet export-ignore
+
+# crema-feature exclude-maintenance
 /plugins/hermes-achievements export-ignore
+
+# crema-feature exclude-media
 /plugins/image_gen/deepinfra export-ignore
 /plugins/image_gen/fal export-ignore
 /plugins/image_gen/krea export-ignore
 /plugins/image_gen/meta-ai export-ignore
+
+# crema-feature exclude-kanban
 /plugins/kanban export-ignore
+
+# crema-feature exclude-memory
 /plugins/memory/byterover export-ignore
 /plugins/memory/holographic export-ignore
 /plugins/memory/honcho export-ignore
@@ -89,20 +135,40 @@ docker/entrypoint.sh text eol=lf
 /plugins/memory/openviking export-ignore
 /plugins/memory/retaindb export-ignore
 /plugins/memory/supermemory export-ignore
+
+# crema-feature exclude-cloud-models
 /plugins/model-providers/bedrock export-ignore
 /plugins/model-providers/vertex export-ignore
+
+# crema-feature exclude-observability
 /plugins/observability export-ignore
+
+# crema-feature exclude-messaging
 /plugins/platforms export-ignore
+
+# crema-feature exclude-maintenance
 /plugins/security-guidance export-ignore
+
+# crema-feature exclude-spotify
 /plugins/spotify export-ignore
+
+# crema-feature exclude-meetings
 /plugins/teams_pipeline export-ignore
+
+# crema-feature exclude-media
 /plugins/video_gen/deepinfra export-ignore
 /plugins/video_gen/fal export-ignore
+
+# crema-feature exclude-development
 /scripts/aa_quality_sync.py export-ignore
 /scripts/add_contributor.py export-ignore
 /scripts/audit_pr_attribution.py export-ignore
 /scripts/build_model_catalog.py export-ignore
+
+# crema-feature exclude-skills
 /scripts/build_skills_index.py export-ignore
+
+# crema-feature exclude-development
 /scripts/capture-cage-terminal.sh export-ignore
 /scripts/check-case-collisions.py export-ignore
 /scripts/check-windows-footguns.py export-ignore
@@ -113,41 +179,81 @@ docker/entrypoint.sh text eol=lf
 /scripts/check_subprocess_stdin.py export-ignore
 /scripts/ci export-ignore
 /scripts/contributor_audit.py export-ignore
+
+# crema-feature exclude-desktop
 /scripts/desktop-update export-ignore
 /scripts/desktop-update.ps1 export-ignore
+
+# crema-feature exclude-development
 /scripts/dev-sandbox.sh export-ignore
+
+# crema-feature exclude-messaging
 /scripts/discord-voice-doctor.py export-ignore
+
+# crema-feature exclude-standalone
 /scripts/docker_config_migrate.py export-ignore
 /scripts/docker_rebootstrap_nous_session.py export-ignore
+
+# crema-feature exclude-desktop
 /scripts/dump_desktop_slash_registry.py export-ignore
+
+# crema-feature exclude-development
 /scripts/e2e_shared_metrics_staging.py export-ignore
 /scripts/gen_gateway_contracts.py export-ignore
 /scripts/generate_conformance_vectors.py export-ignore
+
+# crema-feature exclude-messaging
 /scripts/hermes-gateway export-ignore
+
+# crema-feature exclude-standalone
 /scripts/install.cmd export-ignore
 /scripts/install.ps1 export-ignore
 /scripts/install.sh export-ignore
 /scripts/install_psutil_android.py export-ignore
+
+# crema-feature exclude-development
 /scripts/iso-certify.py export-ignore
 /scripts/keystroke_diagnostic.py export-ignore
 /scripts/kill_modal.sh export-ignore
 /scripts/launch_capture_probe.sh export-ignore
+
+# crema-feature exclude-standalone
 /scripts/lib export-ignore
+
+# crema-feature exclude-development
 /scripts/lint_diff.py export-ignore
 /scripts/micro_compaction_report.py export-ignore
+
+# crema-feature exclude-observability
 /scripts/observability export-ignore
+
+# crema-feature exclude-development
 /scripts/probe_active_session_exclusivity.py export-ignore
+
+# crema-feature exclude-terminal-ui
 /scripts/profile-tui.py export-ignore
+
+# crema-feature exclude-development
 /scripts/release.py export-ignore
 /scripts/run_tests.sh export-ignore
 /scripts/sample_and_compress.py export-ignore
 /scripts/sandbox export-ignore
 /scripts/smoke_nemo_relay_shared_metrics.py export-ignore
 /scripts/tests export-ignore
+
+# crema-feature exclude-catalog
 /scripts/validate_plugin_catalog.py export-ignore
+
+# crema-feature exclude-messaging
 /scripts/whatsapp-bridge export-ignore
+
+# crema-feature exclude-development
 /scripts/windows_e2e_harness.ps1 export-ignore
+
+# crema-feature exclude-standalone
 /setup-hermes.sh export-ignore
+
+# crema-feature exclude-skills
 /skills/AGENTS.md export-ignore
 /skills/apple export-ignore
 /skills/autonomous-ai-agents export-ignore
@@ -162,6 +268,8 @@ docker/entrypoint.sh text eol=lf
 /skills/social-media export-ignore
 /skills/software-development export-ignore
 /skills/web export-ignore
+
+# crema-feature exclude-development
 /tests-js export-ignore
 /tests/acp_adapter/test_acp_commands.py export-ignore
 /tests/acp_adapter/test_acp_images.py export-ignore
@@ -176,19 +284,31 @@ docker/entrypoint.sh text eol=lf
 /tests/acp_adapter/test_server.py export-ignore
 /tests/acp_adapter/test_session_construction_off_loop.py export-ignore
 /tests/acp_adapter/test_tools.py export-ignore
+
+# crema-feature non-feature 검증 전용 시험 파일이라 제외해도 사용자 실행 경로는 바뀌지 않는다.
 /tests/agent/test_anthropic_external_login_optout.py export-ignore
 /tests/agent/test_claude_code_version_path.py export-ignore
 /tests/agent/test_prompt_builder.py export-ignore
 /tests/agent/test_reasoning_shape_boundaries.py export-ignore
+
+# crema-feature exclude-maintenance
 /tests/agent/test_subdirectory_hints.py export-ignore
 /tests/agent/test_subdirectory_hints_tilde.py export-ignore
+
+# crema-feature exclude-development
 /tests/ci export-ignore
 /tests/conformance/test_vector_generator.py export-ignore
+
+# crema-feature non-feature 검증 전용 시험 파일이라 제외해도 사용자 실행 경로는 바뀌지 않는다.
 /tests/cron/test_warning_delivery_policy.py export-ignore
 /tests/cron/test_warning_execution_outcome.py export-ignore
+
+# crema-feature exclude-development
 /tests/e2e export-ignore
 /tests/evals/test_codebase_navigability.py export-ignore
 /tests/evals/test_compaction_jev_arm.py export-ignore
+
+# crema-feature exclude-messaging
 /tests/gateway/test_buzz_adapter.py export-ignore
 /tests/gateway/test_buzz_authz.py export-ignore
 /tests/gateway/test_buzz_forum_kinds.py export-ignore
@@ -272,8 +392,12 @@ docker/entrypoint.sh text eol=lf
 /tests/gateway/test_heartbeat_execution_ownership.py export-ignore
 /tests/gateway/test_homeassistant.py export-ignore
 /tests/gateway/test_irc_adapter.py export-ignore
+
+# crema-feature exclude-kanban
 /tests/gateway/test_kanban_wake_acceptance.py export-ignore
 /tests/gateway/test_kanban_wake_scope.py export-ignore
+
+# crema-feature exclude-messaging
 /tests/gateway/test_late_plugin_rewire.py export-ignore
 /tests/gateway/test_line_plugin.py export-ignore
 /tests/gateway/test_matrix.py export-ignore
@@ -346,7 +470,11 @@ docker/entrypoint.sh text eol=lf
 /tests/gateway/test_task_card_destination_preflight.py export-ignore
 /tests/gateway/test_teams.py export-ignore
 /tests/gateway/test_teams_dotenv_isolation.py export-ignore
+
+# crema-feature exclude-meetings
 /tests/gateway/test_teams_pipeline_runtime_wiring.py export-ignore
+
+# crema-feature exclude-messaging
 /tests/gateway/test_telegram_approval_buttons.py export-ignore
 /tests/gateway/test_telegram_auth_check.py export-ignore
 /tests/gateway/test_telegram_callback_auth_fail_closed.py export-ignore
@@ -435,9 +563,15 @@ docker/entrypoint.sh text eol=lf
 /tests/gateway/test_whatsapp_text_batching.py export-ignore
 /tests/gateway/test_ws_auth_retry.py export-ignore
 /tests/gateway/test_ws_auth_retry_verifier_probe.py export-ignore
+
+# crema-feature non-feature 검증 전용 시험 파일이라 제외해도 사용자 실행 경로는 바뀌지 않는다.
 /tests/hermes_cli/test_completion_backlog.py export-ignore
 /tests/hermes_cli/test_doctor_journal_modes.py export-ignore
+
+# crema-feature exclude-meetings
 /tests/hermes_cli/test_teams_pipeline_plugin_cli.py export-ignore
+
+# crema-feature exclude-memory
 /tests/hermes_cli/test_web_memory_providers_honcho_write.py export-ignore
 /tests/honcho_plugin/test_a2a_sessions.py export-ignore
 /tests/honcho_plugin/test_async_memory.py export-ignore
@@ -461,10 +595,14 @@ docker/entrypoint.sh text eol=lf
 /tests/honcho_plugin/test_shutdown.py export-ignore
 /tests/honcho_plugin/test_turn_author_peers.py export-ignore
 /tests/openviking_plugin export-ignore
+
+# crema-feature exclude-media
 /tests/plugins/image_gen/test_deepinfra_provider.py export-ignore
 /tests/plugins/image_gen/test_fal_provider.py export-ignore
 /tests/plugins/image_gen/test_krea_provider.py export-ignore
 /tests/plugins/image_gen/test_meta_ai_provider.py export-ignore
+
+# crema-feature exclude-memory
 /tests/plugins/memory/test_bom_tolerant_config_reads.py export-ignore
 /tests/plugins/memory/test_byterover_multiplex_child_env.py export-ignore
 /tests/plugins/memory/test_byterover_provider.py export-ignore
@@ -490,19 +628,33 @@ docker/entrypoint.sh text eol=lf
 /tests/plugins/memory/test_provider_threads_inherit_profile.py export-ignore
 /tests/plugins/memory/test_retaindb_provider.py export-ignore
 /tests/plugins/memory/test_supermemory_provider.py export-ignore
+
+# crema-feature exclude-messaging
 /tests/plugins/platforms export-ignore
 /tests/plugins/test_a2a_phase23.py export-ignore
 /tests/plugins/test_a2a_plugin.py export-ignore
 /tests/plugins/test_a2a_tools_gate.py export-ignore
+
+# crema-feature exclude-maintenance
 /tests/plugins/test_achievements_plugin.py export-ignore
+
+# crema-feature exclude-cron-provider
 /tests/plugins/test_chronos_cron.py export-ignore
 /tests/plugins/test_chronos_verify.py export-ignore
+
+# crema-feature exclude-messaging
 /tests/plugins/test_discord_runtime_failure.py export-ignore
+
+# crema-feature exclude-maintenance
 /tests/plugins/test_disk_cleanup_plugin.py export-ignore
+
+# crema-feature exclude-meetings
 /tests/plugins/test_google_meet_audio.py export-ignore
 /tests/plugins/test_google_meet_node.py export-ignore
 /tests/plugins/test_google_meet_plugin.py export-ignore
 /tests/plugins/test_google_meet_realtime.py export-ignore
+
+# crema-feature exclude-memory
 /tests/plugins/test_holographic_vector_storage.py export-ignore
 /tests/plugins/test_honcho_client_concurrency.py export-ignore
 /tests/plugins/test_honcho_client_config.py export-ignore
@@ -510,6 +662,8 @@ docker/entrypoint.sh text eol=lf
 /tests/plugins/test_honcho_session_context.py export-ignore
 /tests/plugins/test_honcho_startup_fail_open.py export-ignore
 /tests/plugins/test_honcho_summary_sanitize.py export-ignore
+
+# crema-feature exclude-kanban
 /tests/plugins/test_kanban_attachments.py export-ignore
 /tests/plugins/test_kanban_board_done_order.py export-ignore
 /tests/plugins/test_kanban_board_lifecycle_api.py export-ignore
@@ -521,24 +675,44 @@ docker/entrypoint.sh text eol=lf
 /tests/plugins/test_kanban_model_override.py export-ignore
 /tests/plugins/test_kanban_read_admission.py export-ignore
 /tests/plugins/test_kanban_ws_idle_disconnect.py export-ignore
+
+# crema-feature exclude-observability
 /tests/plugins/test_langfuse_max_depth.py export-ignore
 /tests/plugins/test_langfuse_plugin.py export-ignore
+
+# crema-feature non-feature 검증 전용 시험 파일이라 제외해도 사용자 실행 경로는 바뀌지 않는다.
 /tests/plugins/test_plugin_paths_follow_profile.py export-ignore
+
+# crema-feature exclude-memory
 /tests/plugins/test_retaindb_plugin.py export-ignore
+
+# crema-feature non-feature 검증 전용 시험 파일이라 제외해도 사용자 실행 경로는 바뀌지 않는다.
 /tests/plugins/test_scoped_secret_readers_fail_closed.py export-ignore
+
+# crema-feature exclude-maintenance
 /tests/plugins/test_security_guidance_plugin.py export-ignore
+
+# crema-feature exclude-meetings
 /tests/plugins/test_teams_pipeline_meetings.py export-ignore
 /tests/plugins/test_teams_pipeline_plugin.py export-ignore
+
+# crema-feature exclude-messaging
 /tests/plugins/test_telegram_polling_progress_ptb.py export-ignore
 /tests/plugins/test_telegram_update_admission.py export-ignore
+
+# crema-feature exclude-media
 /tests/plugins/video_gen/test_deepinfra_provider.py export-ignore
 /tests/plugins/video_gen/test_fal_plugin.py export-ignore
+
+# crema-feature exclude-desktop
 /tests/scripts/desktop_update/test_desktop_update_gateway_flag.py export-ignore
 /tests/scripts/desktop_update/test_desktop_update_linux_gate.py export-ignore
 /tests/scripts/desktop_update/test_desktop_update_shim_profile_cleanup.py export-ignore
 /tests/scripts/desktop_update/test_desktop_update_shim_progress.py export-ignore
 /tests/scripts/desktop_update/test_desktop_update_tcc_heal.py export-ignore
 /tests/scripts/desktop_update/test_desktop_update_windows_gateway_flag.py export-ignore
+
+# crema-feature exclude-standalone
 /tests/scripts/install/test_install_autostash_conflict_recovery.py export-ignore
 /tests/scripts/install/test_install_commit_pin_rollback.py export-ignore
 /tests/scripts/install/test_install_lockfile_churn.py export-ignore
@@ -558,7 +732,11 @@ docker/entrypoint.sh text eol=lf
 /tests/scripts/install/test_install_sh_termux_python_bounds.py export-ignore
 /tests/scripts/install/test_install_sh_uv_lock_config.py export-ignore
 /tests/scripts/install/test_install_unmerged_index.py export-ignore
+
+# crema-feature exclude-skills
 /tests/scripts/test_build_skills_index_health.py export-ignore
+
+# crema-feature exclude-development
 /tests/scripts/test_case_collision_check.py export-ignore
 /tests/scripts/test_check_compat_pointers.py export-ignore
 /tests/scripts/test_check_no_tmp_literals.py export-ignore
@@ -569,7 +747,11 @@ docker/entrypoint.sh text eol=lf
 /tests/scripts/test_footgun_subprocess_encoding.py export-ignore
 /tests/scripts/test_release_bootstrap_installer_version.py export-ignore
 /tests/scripts/test_smoke_nemo_relay_shared_metrics.py export-ignore
+
+# crema-feature exclude-catalog
 /tests/scripts/test_validate_plugin_catalog.py export-ignore
+
+# crema-feature exclude-skills
 /tests/skills/test_authoring_standards.py export-ignore
 /tests/skills/test_cloudflare_temporary_deploy_skill.py export-ignore
 /tests/skills/test_comfyui_skill.py export-ignore
@@ -596,48 +778,92 @@ docker/entrypoint.sh text eol=lf
 /tests/skills/test_unbroker_skill.py export-ignore
 /tests/skills/test_weekly_review_planning_skill.py export-ignore
 /tests/skills/test_youtube_quiz.py export-ignore
+
+# crema-feature exclude-standalone
 /tests/test_batch_runner_checkpoint.py export-ignore
 /tests/test_batch_runner_discard_resume.py export-ignore
 /tests/test_batch_runner_durability.py export-ignore
+
+# crema-feature non-feature 검증 전용 시험 파일이라 제외해도 사용자 실행 경로는 바뀌지 않는다.
 /tests/test_engines_satisfiable.py export-ignore
+
+# crema-feature exclude-standalone
 /tests/test_mcp_serve.py export-ignore
 /tests/test_mini_swe_runner.py export-ignore
 /tests/test_trajectory_compressor.py export-ignore
 /tests/test_trajectory_compressor_async.py export-ignore
+
+# crema-feature exclude-messaging
 /tests/tools/test_discord_send_message_caption.py export-ignore
+
+# crema-feature exclude-standalone
 /tests/tools/test_docker_config_migrate.py export-ignore
 /tests/tools/test_docker_rebootstrap_nous_session.py export-ignore
+
+# crema-feature exclude-media
 /tests/tools/test_image_generation_managed.py export-ignore
+
+# crema-feature non-feature 검증 전용 시험 파일이라 제외해도 사용자 실행 경로는 바뀌지 않는다.
 /tests/tools/test_mcp_enabled_reader.py export-ignore
 /tests/tools/test_mcp_tool.py export-ignore
 /tests/tools/test_schema_boolean_required.py export-ignore
+
+# crema-feature exclude-messaging
 /tests/tools/test_send_message_missing_platforms.py export-ignore
 /tests/tools/test_send_message_react.py export-ignore
 /tests/tools/test_send_message_slack.py export-ignore
 /tests/tools/test_send_message_telegram_proxy.py export-ignore
 /tests/tools/test_send_message_tool.py export-ignore
 /tests/tools/test_slack_send_message_media.py export-ignore
+
+# crema-feature exclude-spotify
 /tests/tools/test_spotify_client.py export-ignore
+
+# crema-feature non-feature 검증 전용 시험 파일이라 제외해도 사용자 실행 경로는 바뀌지 않는다.
 /tests/tools/test_subprocess_stdin_guard.py export-ignore
+
+# crema-feature exclude-messaging
 /tests/tools/test_telegram_send_message_caption.py export-ignore
 /tests/tools/test_telegram_send_message_video_metadata.py export-ignore
+
+# crema-feature exclude-catalog
 /tests/tools/test_toolset_distributions.py export-ignore
+
+# crema-feature exclude-media
 /tests/tools/test_video_generate_schema.py export-ignore
 /tests/tools/test_video_generation_tool_surface_matrix.py export-ignore
+
+# crema-feature exclude-messaging
 /tests/tools/test_whatsapp_send_message_media.py export-ignore
+
+# crema-feature exclude-terminal-ui
 /tests/tui_gateway/test_seeded_branch_title_routing.py export-ignore
 /tests/tui_gateway/test_session_agent_cwd.py export-ignore
+
+# crema-feature exclude-development
 /tests/website/test_check_doc_links.py export-ignore
 /tests/website/test_extract_plugins.py export-ignore
 /tests/website/test_extract_skills.py export-ignore
 /tests/website/test_fetch_plugin_stars.py export-ignore
 /tests/website/test_generate_llms_txt.py export-ignore
 /tests/website/test_generate_skill_docs.py export-ignore
+
+# crema-feature exclude-media
 /tools/xai_video_tools.py export-ignore
+
+# crema-feature exclude-catalog
 /toolset_distributions.py export-ignore
+
+# crema-feature exclude-standalone
 /trajectory_compressor.py export-ignore
+
+# crema-feature exclude-terminal-ui
 /ui-tui export-ignore
+
+# crema-feature exclude-dashboard
 /web export-ignore
+
+# crema-feature exclude-development
 /website/.gitignore export-ignore
 /website/.npmrc export-ignore
 /website/README.md export-ignore

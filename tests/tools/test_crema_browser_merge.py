@@ -7,6 +7,47 @@ from types import SimpleNamespace
 import pytest
 
 
+@pytest.fixture
+def local_browser_files(monkeypatch, tmp_path):
+    from tools import browser_tool, crema_browser_install
+
+    command = tmp_path / "agent-browser"
+    command.write_text("")
+    command.chmod(0o755)
+    monkeypatch.delenv("BROWSER_CDP_URL", raising=False)
+    monkeypatch.delenv("AGENT_BROWSER_EXECUTABLE_PATH", raising=False)
+    monkeypatch.setenv("AGENT_BROWSER_ENGINE", "chrome")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setattr(browser_tool, "_agent_browser_resolved", False)
+    monkeypatch.setattr(browser_tool, "_browser_engine_resolved", False)
+    monkeypatch.setattr(browser_tool, "_cached_browser_engine", None)
+    monkeypatch.setattr(browser_tool, "_cached_chromium_installed", None)
+    monkeypatch.setattr(crema_browser_install, "_agent_browser_candidates", lambda _: (str(command),))
+    monkeypatch.setattr(crema_browser_install, "_chromium_search_roots", lambda: [str(tmp_path)])
+    return tmp_path
+
+
+@pytest.mark.parametrize("chromium_installed", [True, False])
+def test_local_browser_requirements(local_browser_files, chromium_installed):
+    from tools.crema_browser_install import check_browser_requirements
+
+    if chromium_installed:
+        (local_browser_files / "chromium-123").mkdir()
+    assert check_browser_requirements() is chromium_installed
+
+
+def test_registry_offers_browser_navigate(local_browser_files):
+    from tools.registry import invalidate_check_fn_cache, registry
+
+    (local_browser_files / "chromium-123").mkdir()
+    invalidate_check_fn_cache()
+    try:
+        definitions = registry.get_definitions({"browser_navigate"})
+    finally:
+        invalidate_check_fn_cache()
+    assert [definition["function"]["name"] for definition in definitions] == ["browser_navigate"]
+
+
 @pytest.mark.parametrize("success", [True, False])
 def test_browser_type_masks_backend_echoes(monkeypatch, success):
     from agent.display import redact_tool_args_for_display
@@ -44,7 +85,7 @@ def test_browser_type_masks_backend_echoes(monkeypatch, success):
         assert result["error"] == f"Could not fill {masked}"
 
 
-@pytest.mark.parametrize("parent_session, port", [(None, 41234), ("mine", None)])
+@pytest.mark.parametrize("parent_session, port", [(None, 41234), ("other", 41234), ("mine", None)])
 def test_crema_bot_desktop_attaches_only_to_another_browser(monkeypatch, tmp_path, parent_session, port):
     import psutil
     from tools import browser_launcher, browser_tool_session

@@ -210,8 +210,10 @@ share the resolver. The Chromium download follows Hermes's lazy-install policy. 
 updater's browser cache warmer is inert. Browser input masks secret values echoed in tool
 results and errors. When the login vault is available, browser input tools tell the model to
 call `browser_vault` through `tool_call`. The interactive CLI bundle includes the retained
-Crema browser tools so its delegated tasks can request the browser toolset. A local Bot Desktop
-session uses Hermes's live Chromium probe to attach to the dock browser.
+Crema browser tools so its delegated tasks can request the browser toolset. The registry checks
+browser availability before offering those tools to the model. A local Bot Desktop session uses
+Hermes's live Chromium probe to attach to the dock browser, including when another conversation
+started it.
 
 The app's chat stream releases its approval notifier at completion. Run completion and stop
 also release pending Crema questions. Copilot credential seeding follows Hermes's current
@@ -223,7 +225,8 @@ The explicit `/init` command reads an existing `AGENTS.md` if its target is insi
 working folder and passes Hermes's file-read policy. Regular chats load Crema's own
 instruction files. File searches across multiple roots use one ordered scan with the caller's
 symlink setting. The three Ego PowerShell spawns use Hermes's child-process environment builder
-with their existing per-command variables. The bundle returns 404 for the optional Chronos
+with their existing per-command variables. The builder strips process supervisor markers from
+the inherited environment. The bundle returns 404 for the optional Chronos
 webhook when the external scheduler plugin is absent.
 
 Messaging adapters remain outside the archive. Their declared secret environment variable names

@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -111,12 +112,16 @@ class _Install:
         monkeypatch.setattr(crema_ego.subprocess, "run", run)
 
 
-def test_install_sets_ego_lite_up_as_crema_chooses(monkeypatch, tmp_path, config):
-    monkeypatch.setenv("CREMA_EGO_TEST_ENV", "sentinel")
-    inherited = dict(os.environ)
+@pytest.fixture
+def ego_process_env():
+    return {"HERMES_HOME": os.environ["HERMES_HOME"], "CREMA_EGO_TEST_ENV": "sentinel"}
+
+
+def test_install_sets_ego_lite_up_as_crema_chooses(monkeypatch, tmp_path, config, ego_process_env):
     install = _Install(monkeypatch, tmp_path)
     config["skills"]["disabled"].append("ego-browser")  # turned off before: 설치하고 켜기 turns it on
-    assert crema_ego.install() == {"installed": True, "enabled": True, "progress": None}
+    with patch.dict(os.environ, ego_process_env, clear=True):
+        assert crema_ego.install() == {"installed": True, "enabled": True, "progress": None}
     assert install.ran[0] == f'--install="{crema_ego.TAG}" --silent'
     assert "needsadmin=False" in crema_ego.TAG
     # Its welcome screens skipped; the default browser's default profile brought along in place of the empty one;
@@ -129,16 +134,14 @@ def test_install_sets_ego_lite_up_as_crema_chooses(monkeypatch, tmp_path, config
     signature_env, first_close_env, second_close_env = install.powershell_envs
     setup_path = Path(signature_env["EGO_SETUP"])
     assert setup_path.name == "egoliteSetup.exe"
-    assert signature_env == {**inherited, "EGO_SETUP": str(setup_path)}
-    assert first_close_env == second_close_env == {**inherited, "EGO_HOME": str(install.home)}
+    assert signature_env == {**ego_process_env, "EGO_SETUP": str(setup_path)}
+    assert first_close_env == second_close_env == {**ego_process_env, "EGO_HOME": str(install.home)}
 
 
 @pytest.mark.platforms("windows")
-def test_window_control_inherits_environment_with_its_request(monkeypatch, tmp_path):
+def test_window_control_inherits_environment_with_its_request(monkeypatch, tmp_path, ego_process_env):
     from tools import crema_ego_windows
 
-    monkeypatch.setenv("CREMA_EGO_TEST_ENV", "sentinel")
-    inherited = dict(os.environ)
     captured = []
 
     def run(command, **kwargs):
@@ -147,9 +150,10 @@ def test_window_control_inherits_environment_with_its_request(monkeypatch, tmp_p
 
     monkeypatch.setattr(crema_ego_windows.subprocess, "run", run)
     exe = tmp_path / "ego.exe"
-    assert crema_ego_windows.call("hide", exe, hwnd=42) == {"ok": True}
+    with patch.dict(os.environ, ego_process_env, clear=True):
+        assert crema_ego_windows.call("hide", exe, hwnd=42) == {"ok": True}
     request = {"action": "hide", "exe": str(exe), "hwnd": 42}
-    assert captured == [{**inherited, "CREMA_EGO_WINDOW_REQUEST": json.dumps(request, ensure_ascii=False)}]
+    assert captured == [{**ego_process_env, "CREMA_EGO_WINDOW_REQUEST": json.dumps(request, ensure_ascii=False)}]
 
 
 def test_bringing_the_sign_ins_along_failed_install_again_finishes_it(monkeypatch, tmp_path):

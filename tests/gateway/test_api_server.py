@@ -39,6 +39,18 @@ from gateway.platforms.api_server import (
 )
 
 
+def test_sse_projection_applies_only_while_serving_the_request():
+    from gateway.platforms.api_server import _api_response_projection, _sse_frame
+
+    data = {"model": "test-model", "content": "hello"}
+    token = _api_response_projection.set(lambda row: {"content": row["content"]})
+    try:
+        assert _sse_frame(data, id=4) == b'id: 4\ndata: {"content": "hello"}\n\n'
+    finally:
+        _api_response_projection.reset(token)
+    assert b"test-model" in _sse_frame(data)
+
+
 # ---------------------------------------------------------------------------
 # check_api_server_requirements
 # ---------------------------------------------------------------------------

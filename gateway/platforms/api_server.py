@@ -23,7 +23,7 @@ import time
 import uuid
 from datetime import datetime, timezone, UTC
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # _resolve_request_profile result for a /p/<profile>/ prefix this gateway does not serve (-> 404);
 # distinct from None (no prefix / multiplexing off -> default profile).
@@ -211,11 +211,18 @@ class ThreadSafeAsyncQueue(asyncio.Queue):
         self._loop_ref = asyncio.get_running_loop()
 
 
+# A hosting service can project wire metadata without touching the recorded run.
+_api_response_projection: ContextVar[Optional[Callable[[Any], Any]]] = ContextVar(
+    "api_response_projection", default=None)
+
+
 def _sse_frame(
     data: Any, *, event: str | None = None, ensure_ascii: bool = True, id: Optional[int] = None
 ) -> bytes:
     """Encode one SSE frame (``id:``/``event:`` lines if given, then ``data: <json>\n\n``) for
     every SSE writer. ``ensure_ascii=False`` keeps raw non-ASCII on the wire."""
+    if (project := _api_response_projection.get()) is not None:
+        data = project(data)
     prefix = (f"id: {id}\n" if id is not None else "") + (f"event: {event}\n" if event else "")
     return f"{prefix}data: {json.dumps(data, ensure_ascii=ensure_ascii)}\n\n".encode()
 

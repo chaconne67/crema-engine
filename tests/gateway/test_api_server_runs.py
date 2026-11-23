@@ -32,6 +32,7 @@ from gateway.platforms.api_server import (
 from tools import approval as approval_mod
 from tools import approval_gateway_wait
 from tests.waiting import async_wait_until
+from tools import clarify_gateway
 
 
 # ---------------------------------------------------------------------------
@@ -1406,9 +1407,10 @@ class TestRunLifecycleSweep:
                 assert run_id not in adapter._run_streams_created
                 assert adapter._run_approval_sessions[run_id] == run_id
 
-                limited = adapter._concurrency_limited_response()
-                assert limited is not None
-                assert limited.status == 429
+                # Still live work (the shutdown drain waits on it), but while it only waits on the user's
+                # approval it keeps no other chat from starting (주인님 2026-11-17).
+                assert adapter.active_agent_work_count() == 1
+                assert adapter._concurrency_limited_response() is None
 
                 approval_resp = await cli.post(
                     f"/v1/runs/{run_id}/approval",
@@ -1416,6 +1418,19 @@ class TestRunLifecycleSweep:
                 )
                 assert approval_resp.status == 200
                 assert pending.event.is_set()
+                # Answered, it works again and counts again.
+                limited = adapter._concurrency_limited_response()
+                assert limited is not None
+                assert limited.status == 429
+
+                # A question the user has not answered yet holds no slot either.
+                clarify_gateway.register("cap-q", run_id, "어느 쪽으로 할까요?", ["가", "나"])
+                try:
+                    assert adapter._concurrency_limited_response() is None
+                finally:
+                    clarify_gateway.resolve_gateway_clarify("cap-q", "가")
+                    clarify_gateway.wait_for_response("cap-q", 1)
+                assert adapter._concurrency_limited_response().status == 429
                 assert pending.result == "once"
 
                 stop_resp = await cli.post(f"/v1/runs/{run_id}/stop")

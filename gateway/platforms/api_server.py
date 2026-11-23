@@ -3553,13 +3553,25 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
         if hasattr(task, "add_done_callback"):
             task.add_done_callback(self._background_tasks.discard)
 
+    def _runs_waiting_on_user(self) -> int:
+        """Live /v1/runs whose agent is blocked on a question or an approval the user has not answered."""
+        from tools.approval import has_blocking_approval
+        from tools.clarify_gateway import get_pending_for_session
+        keys = [self._run_approval_sessions.get(run_id)
+                for run_id, task in list(self._active_run_tasks.items()) if not task.done()]
+        return sum(1 for key in keys if key and (
+            has_blocking_approval(key) or get_pending_for_session(key, include_choice_prompts=True) is not None))
+
     def _concurrency_limited_response(self) -> Optional[web.Response]:
         """429 when the concurrent-run cap is reached (0 disables), else None. Uses the same
-        adapter-owned work count as shutdown draining (admitted requests included)."""
+        adapter-owned work count as shutdown draining (admitted requests included), less the runs
+        waiting on the user's answer."""
         limit = self._max_concurrent_runs
         if limit <= 0:
             return None
-        inflight = self.active_agent_work_count()
+        # A run that only waits on the user's answer (a question or an approval) does no work, so it keeps
+        # no other chat from starting (주인님 2026-11-17: questions waited up to an hour while chats stood still).
+        inflight = self.active_agent_work_count() - self._runs_waiting_on_user()
         # The current request's own reservation must not consume its last available slot.
         reservation = _api_agent_request_reservation.get()
         if reservation and reservation["active"]:

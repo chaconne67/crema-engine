@@ -181,6 +181,15 @@ def _name_key(name: str) -> str:
     return unicodedata.normalize("NFC", unicodedata.normalize("NFC", name).casefold())
 
 
+_SERVER_GUARDED_WRITE_DENIED = "이 계정에서는 서버의 보호된 지침·시스템 설정 파일을 쓸 수 없습니다."
+
+
+def _server_denies_guarded_writes() -> bool:
+    from hermes_cli.config import load_config_readonly
+
+    return load_config_readonly().get("crema_deny_guarded_file_writes") is True
+
+
 def _protected_instruction_config() -> tuple[bool, list[str]]:
     """Return ``(enabled, extra_patterns)`` from ``security.protected_instruction_files`` /
     ``security.protected_instruction_extra_patterns`` (fnmatch on basename). Config read
@@ -188,7 +197,8 @@ def _protected_instruction_config() -> tuple[bool, list[str]]:
     try:
         from hermes_cli.config import load_config, cfg_get
         cfg = load_config()
-        enabled = cfg_get(cfg, "security", "protected_instruction_files", default=True)
+        enabled = (cfg.get("crema_deny_guarded_file_writes") is True
+                   or cfg_get(cfg, "security", "protected_instruction_files", default=True))
         extra = cfg_get(cfg, "security", "protected_instruction_extra_patterns", default=[])
     except Exception:
         return True, []
@@ -297,6 +307,8 @@ def _check_protected_instruction_write(paths: list[str], task_id: str = "default
                            for p in paths) if r]
     if not reasons:
         return None
+    if _server_denies_guarded_writes():
+        return _SERVER_GUARDED_WRITE_DENIED
     return _request_protected_instruction_approval(reasons, task_id)
 
 
@@ -329,6 +341,8 @@ def _check_approval_required_write(paths: list[str], task_id: str = "default") -
         if key := write_approval_key(resolved):
             by_key.setdefault(key, []).append(p)
 
+    if by_key and _server_denies_guarded_writes():
+        return _SERVER_GUARDED_WRITE_DENIED
     for pattern_key, targets in by_key.items():
         noun, why_gated = _APPROVAL_WRITE_CLASSES[pattern_key]
         display_targets = ", ".join(dict.fromkeys(targets))

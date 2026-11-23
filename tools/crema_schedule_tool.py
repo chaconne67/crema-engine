@@ -55,7 +55,7 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
     from agent import crema_file_turns
     from cron import jobs
     from cron.occurrences import scheduled_instant
-    from engine_home import ProfileAPIError, prepare_profile, profile_api
+    from engine_home import ProfileAPIError, profile_api
     from engine_keys import engine_key
     from hermes_constants import get_hermes_home
     from persistence_assembly import open_persistence, profile_scope
@@ -78,8 +78,6 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
     if not owned:
         jobs.pause_job(job["id"], MISSING_SOURCE)
         return result("failed", MISSING_SOURCE)
-    identity = profile_api(home, "/api/engine-profile", timeout=5)
-    prepare_profile(home.name, identity)
     from crema_startup import engine_input
     from hermes_cli.config import load_config_readonly
     config = load_config_readonly()

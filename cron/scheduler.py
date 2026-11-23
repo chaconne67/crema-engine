@@ -2521,13 +2521,29 @@ def run_job(
     ``extra_prompt``: optional per-run context from ``cronjob(action='run', prompt=...)`` (#57331). Appended
     to the stored prompt for this fire only — never persisted to the job definition.
     """
-    if os.environ.get("SERVICE_DIR"):
-        from fc_lifecycle import writable
-        from hermes_constants import get_hermes_home
-        if not writable(get_hermes_home()):
-            return False, "", "", "이용이 끝나 예약 작업을 실행하지 않았습니다."
     origin = (job.get("origin") or {}).get("platform")
-    if os.environ.get("SERVICE_DIR") and origin in ("api_server", "crema"):
+    service = bool(os.environ.get("SERVICE_DIR"))
+    personal = service and origin in ("api_server", "crema")
+    if origin == "crema" and not service:
+        from agent import crema_file_turns
+        return crema_file_turns.scheduled(job)
+    from gateway.session_cron import current_execution
+    owner_execution = current_execution()
+    if owner_execution is not None and owner_execution[2:] != (job['id'], execution_id):
+        owner_execution = None
+    if not personal and not job.get("no_agent") and owner_execution is None:
+        from cron.scheduler_authority import run_canonical_job
+        return run_canonical_job(job, extra_prompt=extra_prompt, cancel_event=cancel_event,
+                                 execution_id=execution_id)
+    if service:
+        from engine_home import ProfileAPIError, refresh_account_profile
+        try:
+            refresh_account_profile(_get_hermes_home())
+        except ProfileAPIError as error:
+            if not error.policy_denial:
+                raise
+            return False, "", "", error.detail
+    if personal:
         from hermes_cli.config import load_config_readonly
         from tools.crema_schedule_tool import MISSING_SOURCE, server_scheduled
         if origin != "api_server" or load_config_readonly().get("crema_personal_schedule_mode") != "conversation":
@@ -2535,17 +2551,6 @@ def run_job(
             pause_job(job["id"], MISSING_SOURCE)
             return False, "", "", MISSING_SOURCE
         return server_scheduled(job, cancel_event=cancel_event, extra_prompt=extra_prompt)
-    if origin == "crema":
-        from agent import crema_file_turns
-        return crema_file_turns.scheduled(job)
-    from gateway.session_cron import current_execution
-    owner_execution = current_execution()
-    if owner_execution is not None and owner_execution[2:] != (job['id'], execution_id):
-        owner_execution = None
-    if not job.get("no_agent") and owner_execution is None:
-        from cron.scheduler_authority import run_canonical_job
-        return run_canonical_job(job, extra_prompt=extra_prompt, cancel_event=cancel_event,
-                                 execution_id=execution_id)
     job_id = job["id"]
     job_name = str(job.get("name") or job.get("prompt") or job_id or "cron job")
 

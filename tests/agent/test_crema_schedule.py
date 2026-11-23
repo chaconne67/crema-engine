@@ -111,7 +111,8 @@ def test_service_job_and_import_pause_keep_existing_lanes(crema, monkeypatch):
     from tools import crema_schedule_tool
 
     monkeypatch.setenv("SERVICE_DIR", "/test/service")
-    monkeypatch.setitem(sys.modules, "fc_lifecycle", SimpleNamespace(writable=lambda home: True))
+    monkeypatch.setitem(sys.modules, "engine_home", SimpleNamespace(
+        ProfileAPIError=ValueError, refresh_account_profile=lambda home: None))
     monkeypatch.setattr(crema_schedule_tool, "PLATFORM", "api_server")
     monkeypatch.setattr("hermes_cli.config.load_config_readonly",
                         lambda: {"crema_personal_schedule_mode": "conversation"})
@@ -180,8 +181,6 @@ def test_scheduled_result_retries_the_same_occurrence_without_restarting_the_tur
 
     def call_profile(profile, path, payload=None, **_):
         assert profile == home
-        if path == "/api/engine-profile":
-            return {"themeId": "test"}
         if path == "/api/scheduled-context?sessionId=agent-client-a":
             return {"project": project, "model": {"provider": "custom:own", "model": "current-chat-model",
                                                   "reasoning": "high", "fast": True}}
@@ -193,7 +192,7 @@ def test_scheduled_result_retries_the_same_occurrence_without_restarting_the_tur
 
     error = type("ProfileAPIError", (ValueError,), {})
     monkeypatch.setitem(sys.modules, "engine_home", SimpleNamespace(
-        ProfileAPIError=error, profile_api=call_profile, prepare_profile=lambda *_: home))
+        ProfileAPIError=error, profile_api=call_profile))
     monkeypatch.setitem(sys.modules, "engine_keys", SimpleNamespace(engine_key=lambda _: "key"))
     monkeypatch.setattr("crema_startup.engine_input", lambda _: {
         "themeId": "test", "tools": {"chat": ["crema_schedule"]}})
@@ -223,8 +222,6 @@ def test_scheduled_pc_offline_posts_without_starting_a_run(tmp_path, monkeypatch
         pass
 
     def profile_api(home, path, payload=None, **_):
-        if path == "/api/engine-profile":
-            return {"themeId": "test"}
         if path == f"/api/scheduled-context?sessionId={A}":
             return {"project": {"id": "docs", "path": "pc://own-pc/C:/current"}, "model": None}
         assert path == "/api/scheduled-results"
@@ -247,7 +244,7 @@ def test_scheduled_pc_offline_posts_without_starting_a_run(tmp_path, monkeypatch
 
     monkeypatch.setattr(turns, "_api", SimpleNamespace(_port=8754))
     monkeypatch.setitem(sys.modules, "engine_home", SimpleNamespace(
-        ProfileAPIError=ProfileAPIError, profile_api=profile_api, prepare_profile=lambda *_: None))
+        ProfileAPIError=ProfileAPIError, profile_api=profile_api))
     monkeypatch.setitem(sys.modules, "engine_keys", SimpleNamespace(engine_key=lambda _: "key"))
     monkeypatch.setattr("crema_startup.engine_input", lambda _: {
         "themeId": "test", "tools": {"chat": ["crema_schedule"]}})

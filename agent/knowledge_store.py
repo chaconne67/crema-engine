@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Dict, Iterable, List, Optional
 
 from agent import knowledge_embed as embed
+from hermes_state_fts import load_fts5_cjk_extension
 
 logger = logging.getLogger(__name__)
 
@@ -195,11 +196,7 @@ class KnowledgeStore:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=5000")
-        try:
-            from hermes_state_fts import load_fts5_cjk_extension
-            self.cjk = load_fts5_cjk_extension(self.conn)
-        except Exception:
-            self.cjk = False
+        self.cjk = load_fts5_cjk_extension(self.conn)
         self.conn.executescript(_SCHEMA)
         word = "cjk_unicode61" if self.cjk else "unicode61"
         existing = self.conn.execute("SELECT sql FROM sqlite_master WHERE name = 'chunks_word'").fetchone()

@@ -136,16 +136,23 @@ def test_settings_lists_what_the_user_deleted_while_undo_still_brings_it_back(st
     assert [p["slug"] for p in store.list()] == ["feedback/보고서-말투"]
 
 
-def test_search_korean_short_words_titles_and_exact(store, cjk_so):
+def test_search_korean_short_words(store, cjk_so):
+    assert SRC.is_file(), f"Missing CJK tokenizer source: {SRC}"
+    if cjk_so is None:
+        pytest.skip("gcc is unavailable")
+
+    assert store.cjk
     store.write("incident/세금계산서-오류", title="세금계산서 발행 오류",
                 body="홈택스에서 세금계산서를 발행할 때 사업자번호 누락으로 실패했다. 거래처 정보를 고쳐 해결.", sources=["chat:a"])
+    top = store.search(["세금"])
+    assert top and top[0]["slug"] == "incident/세금계산서-오류"
+
+
+def test_search_korean_titles_and_exact(store):
     store.write("reference/부가세-일정", title="부가가치세 신고 일정",
                 body="부가가치세 신고는 1월과 7월 25일까지.", sources=["https://www.nts.go.kr"])
     store.write("decision/보고서-형식", title="주간 보고서는 표로",
                 body="주간 보고서는 표 한 장으로 정리하기로 했다. 이유: 읽는 사람이 빨리 비교.", sources=["chat:b"])
-    if cjk_so:
-        top = store.search(["세금"])
-        assert top and top[0]["slug"] == "incident/세금계산서-오류"
     assert store.search(["부가가치세 신고"])[0]["slug"] == "reference/부가세-일정"
     exact = store.search(["주간 보고서는 표로"])
     assert exact[0]["slug"] == "decision/보고서-형식" and exact[0]["evidence"] == "exact"

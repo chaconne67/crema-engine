@@ -54,6 +54,7 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
     import httpx
     from agent import crema_file_turns
     from cron import jobs
+    from crema_heartbeat import STOPPED, active, reference
     from cron.occurrences import scheduled_instant
     from engine_home import ProfileAPIError, profile_api
     from engine_keys import engine_key
@@ -66,10 +67,17 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
     origin = job.get("origin") or {}
     session = origin.get("session_id") or origin.get("chat_id")
     name = job.get("name") or job["id"]
+    heartbeat = reference(job)
+
+    def stopped():
+        return ((cancel_event is not None and cancel_event.is_set())
+                or (heartbeat is not None and not active(heartbeat, session)))
 
     def result(status, text):
         return status == "completed", f"# {name}\n\n{text}\n", text, None if status == "completed" else text
 
+    if heartbeat is not None and stopped():
+        return result("failed", STOPPED)
     if not session or not session.startswith(crema_file_turns.CHAT_PREFIX) or origin.get("profile", home.name) != home.name:
         jobs.pause_job(job["id"], MISSING_SOURCE)
         return result("failed", MISSING_SOURCE)
@@ -82,7 +90,8 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
     from hermes_cli.config import load_config_readonly
     config = load_config_readonly()
     startup = engine_input(config)
-    if not startup or "crema_schedule" not in startup["tools"]["chat"]:
+    if not startup or not (startup["schedules"].get("heartbeat") if heartbeat is not None
+                           else "crema_schedule" in startup["tools"]["chat"]):
         return result("failed", "이 계정은 개인 예약을 실행할 수 없습니다.")
     when = scheduled_instant(job.get("_scheduled_instant") or job.get("next_run_at"))
     if when is None:
@@ -96,6 +105,8 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
     else:
         key = engine_key(home.name)
         body = {"session_id": session, "input": job["prompt"] + (f"\n\n{extra_prompt}" if extra_prompt else "")}
+        if heartbeat is not None:
+            body["crema_heartbeat"] = heartbeat
         headers = {"Authorization": f"Bearer {key}", "Idempotency-Key": occurrence,
                    SCHEDULED_HEADER: scheduled_signature(key, occurrence), "X-Crema-Theme": startup["themeId"]}
         api = crema_file_turns._api
@@ -106,7 +117,7 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
             body = json.loads(submitted.read_text(encoding="utf-8"))
         elif api is not None:
             try:
-                query = urlencode({"sessionId": session})
+                query = urlencode({"sessionId": session, **({"kind": "heartbeat"} if heartbeat else {})})
                 context = profile_api(home, f"/api/scheduled-context?{query}", timeout=5)
             except ProfileAPIError as error:
                 if error.status == 404:
@@ -139,6 +150,9 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
                         body["model_options"] = options
                 # Lost acceptance is retried with the same request even if the chat changes.
                 atomic_json_write(submitted, body, mode=0o600)
+        if heartbeat is not None and stopped():
+            submitted.unlink(missing_ok=True)
+            return result("failed", STOPPED)
         if api is not None:
             url = f"http://127.0.0.1:{api._port}/p/{home.name}/v1/runs"
             with httpx.Client(headers=headers, timeout=15, trust_env=False) as client:
@@ -146,7 +160,7 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
                 if reply.status_code == 202:
                     run_id = reply.json()["run_id"]
                     while True:
-                        if cancel_event is not None and cancel_event.is_set():
+                        if stopped():
                             client.post(f"{url}/{run_id}/stop")
                             submitted.unlink(missing_ok=True)
                             return result("failed", "예약 실행을 중단했습니다.")
@@ -173,6 +187,13 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
                             "프로젝트의 현재 폴더를 확인하지 못했거나 대화가 사용 중입니다. 예약을 맡지 못했습니다.")
         payload = {"jobId": job["id"], "scheduledAt": when, "sessionId": session, "runId": run_id,
                    "status": status, "text": text}
+        if heartbeat is not None:
+            if stopped():
+                submitted.unlink(missing_ok=True)
+                return result("failed", STOPPED)
+            if status == "completed":
+                payload["text"] = "하트비트\n\n" + text
+            payload["heartbeat"] = heartbeat
         atomic_json_write(outbox, payload, mode=0o600)
     submitted.unlink(missing_ok=True)
     try:
@@ -185,9 +206,37 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
     return result(payload["status"], payload["text"])
 
 
+def post_heartbeat_notice(job, text):
+    from cron.occurrences import scheduled_instant
+    from crema_heartbeat import active, reference
+    from engine_home import ProfileAPIError, profile_api
+    from hermes_constants import get_hermes_home
+
+    session = job["origin"]["session_id"]
+    ref = reference(job)
+    when = scheduled_instant(job.get("_scheduled_instant") or job.get("next_run_at"))
+    if not when or not active(ref, session):
+        return
+    try:
+        profile_api(get_hermes_home(), "/api/scheduled-results", {
+            "jobId": job["id"], "scheduledAt": when, "sessionId": session, "runId": job["id"],
+            "status": "failed", "text": text, "heartbeat": ref,
+        }, timeout=5)
+    except ProfileAPIError as error:
+        if error.status not in {403, 404}:
+            raise
+
+
 def post_scheduled_result(home, outbox, payload):
+    from crema_heartbeat import active
+    from cron.jobs import use_cron_store
     from engine_home import ProfileAPIError, profile_api
 
+    if ref := payload.get("heartbeat"):
+        with use_cron_store(home):
+            if not active(ref, payload["sessionId"]):
+                outbox.unlink(missing_ok=True)
+                return
     try:
         answer = profile_api(home, "/api/scheduled-results", payload, timeout=5)
         if not isinstance(answer, dict) or type(answer.get("posted")) is not bool:
@@ -241,9 +290,13 @@ def crema_schedule(args: Dict[str, Any], session_id: str = "", **_: Any) -> str:
             return json.dumps({"created": _view(dict(job, _this_chat=True))}, ensure_ascii=False)
         if action == "list":
             mine = [dict(j, _this_chat=(j.get("origin") or {}).get("chat_id") == chat)
-                    for j in jobs.list_jobs(include_disabled=True) if (j.get("origin") or {}).get("platform") == PLATFORM]
+                    for j in jobs.list_jobs(include_disabled=True) if (j.get("origin") or {}).get("platform") == PLATFORM
+                    and not (j.get("origin") or {}).get("heartbeat")]
             return json.dumps({"tasks": [_view(j) for j in mine]}, ensure_ascii=False)
         job_id = str(args.get("id") or "")
+        from crema_heartbeat import reference
+        if action in {"update", "pause", "resume", "remove"} and (existing := jobs.resolve_job_ref(job_id)) and reference(existing):
+            return tool_error("Use the heartbeat command in its conversation.")
         if action == "update":
             updates = {k: v for k, v in (("prompt", args.get("task")), ("name", args.get("name"))) if v}
             if args.get("when"):

@@ -930,7 +930,10 @@ def scheduled(job: dict) -> tuple[bool, str, str, Optional[str]]:
 
     from hermes_time import now
 
-    chat = (job.get("origin") or {}).get("chat_id") or ""
+    from crema_heartbeat import desktop_session, reference
+
+    heartbeat = reference(job)
+    chat = desktop_session(job) if heartbeat else (job.get("origin") or {}).get("chat_id") or ""
     name = str(job.get("name") or job["id"])
     if not any(row["session"] == chat for row in _directory() + _directory(archived=True)):
         problem = "The chat that made this scheduled task is no longer in Crema."
@@ -946,7 +949,8 @@ def scheduled(job: dict) -> tuple[bool, str, str, Optional[str]]:
     try:
         _note(conn, _task_for(conn, chat).id, f"{head}\n{message}", message=message, sender="", handed=True,
               sender_chat="", sender_title="예약 작업", sender_project="",
-              scheduled={"name": name, **({"due": due} if late else {})})
+              scheduled={"name": name, **({"due": due} if late else {}),
+                         **({"heartbeat": heartbeat} if heartbeat else {})})
     finally:
         conn.close()
     return True, f"# {name}\n\nHanded to {chat} at {now().isoformat()}.\n", f"Handed to {chat}.", None
@@ -1199,7 +1203,10 @@ def state() -> dict:
         # A chat that waits for a file gets its messages too: one may be what lets it go on (2026-10-30, a message
         # to work in another file was held until the user let the chat go).
         for session in dict.fromkeys(t.session_id for t in tasks if t.session_id):
-            pending = _pending(conn, session)
+            from crema_heartbeat import active as heartbeat_active
+            pending = [event for event in _pending(conn, session)
+                       if not (ref := (event.payload.get("scheduled") or {}).get("heartbeat"))
+                       or heartbeat_active(ref, session)]
             if pending:
                 messages.append({"session_id": session, "upto": pending[-1].id, "items": [
                     {"from_chat": e.payload.get("sender_chat", ""), "from_title": e.payload.get("sender_title", ""),

@@ -2524,6 +2524,13 @@ def run_job(
     origin = (job.get("origin") or {}).get("platform")
     service = bool(os.environ.get("SERVICE_DIR"))
     personal = service and origin in ("api_server", "crema")
+    from crema_heartbeat import STOPPED, active, desktop_session, reference
+    heartbeat = reference(job)
+    if heartbeat is not None:
+        session = job["origin"]["session_id"] if service else desktop_session(job)
+        if (service and (origin != "api_server" or _get_hermes_home().parent.name != "profiles")
+                or not active(heartbeat, session)):
+            return False, "", "", STOPPED
     if origin == "crema" and not service:
         from agent import crema_file_turns
         return crema_file_turns.scheduled(job)
@@ -2542,6 +2549,9 @@ def run_job(
         except ProfileAPIError as error:
             if not error.policy_denial:
                 raise
+            if heartbeat and error.policy_denial == "model_assignment" and job.get("last_error") != error.detail:
+                from tools.crema_schedule_tool import post_heartbeat_notice
+                post_heartbeat_notice(job, error.detail)
             return False, "", "", error.detail
     if personal:
         from hermes_cli.config import load_config_readonly

@@ -362,11 +362,23 @@ async def execute_admission(authority, ref, row):
     # This drain, not the handler's unwind, releases the turn's crash marker (see below).
     event._turn_marker_handoff = True
     handed = False
+    heartbeat_context = []
     try:
         async with _admission_scope(authority, ref, home, row, event, captured):
             if is_api:
                 # Committed media resolves under the owning profile's home, like admission did.
                 prepared = prepare_api_execution(authority, ref, row['payload'])
+                if heartbeat := row['payload'].get('api_turn_v1', {}).get('heartbeat'):
+                    from crema_heartbeat import active, current_turn
+                    from engine_home import refresh_account_profile
+                    from hermes_constants import get_hermes_home
+                    from tools.crema_schedule_tool import _scheduled_turn
+                    # A recovered admission may have waited across a membership or assignment change.
+                    await asyncio.to_thread(refresh_account_profile, get_hermes_home())
+                    if not active(heartbeat['ref'], heartbeat['session']):
+                        raise AuthorityRefusal('heartbeat_stopped')
+                    heartbeat_context.append((_scheduled_turn, _scheduled_turn.set({})))
+                    heartbeat_context.append((current_turn, current_turn.set((heartbeat['ref'], heartbeat['session']))))
                 api_execution.set(prepared)
                 if isinstance(event.text, list):
                     # The durable transcript keeps the committed media references (the same
@@ -417,6 +429,8 @@ async def execute_admission(authority, ref, row):
             await _release_turn_marker(authority, event)
         executing_admission.reset(token)
         execution_result.reset(result_token)
+        for variable, value in reversed(heartbeat_context):
+            variable.reset(value)
         api_execution.reset(api_token)
         admission_author.reset(author_token)
         viewer_turn.reset(viewer_token)

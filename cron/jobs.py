@@ -2131,6 +2131,11 @@ def update_job(job_id: str, updates: dict[str, Any]) -> Optional[dict[str, Any]]
             updated.pop("pending_slot", None)
         _fill_missing_next_run(updated)
         _reject_terminal_activation(job, updated, job_id)
+        origin = updated.get("origin") or {}
+        if origin.get("heartbeat") and (
+            not job.get("enabled") and updated.get("enabled") or {"schedule", "prompt"}.intersection(updates)
+        ):
+            updated["origin"] = {**origin, "heartbeat": uuid.uuid4().hex}
         jobs[i] = updated
         save_jobs(jobs)
         return _normalize_job_record(updated)

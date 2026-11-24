@@ -98,6 +98,9 @@ def perform_api_call(
                 next_api_kwargs, allow_stream=False, drop_replay_item_ids=drops_replay_item_ids(agent.base_url),
                 sanitize_harmony_tokens=agent._is_codex_backend(),
             )
+        from crema_heartbeat import STOPPED, active, current_turn
+        if (heartbeat := current_turn.get()) and not active(*heartbeat):
+            raise InterruptedError(STOPPED)
         if _use_streaming:
             return agent._interruptible_streaming_api_call(
                 next_api_kwargs, on_first_delta=_stop_spinner

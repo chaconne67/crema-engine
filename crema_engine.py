@@ -112,6 +112,8 @@ async def main() -> None:
 
     settings = FastAPI()
     install_change_principles(settings)
+    from crema_heartbeat import install as install_heartbeat
+    install_heartbeat(settings)
     try:
         from crema_desktop_features import install as install_desktop_features
     except ModuleNotFoundError as error:

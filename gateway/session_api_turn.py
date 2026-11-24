@@ -58,13 +58,17 @@ def check_api_turn(authority, ref, payload):
         # 'browser_control' is accepted and ignored: admissions persisted while the removed
         # browser-extension control existed may carry it and must still recover.
         if (set(data) - {'history', 'settings', 'turn_author', 'media', 'run_owner_scope', 'browser_control',
-                         'relay_metadata', 'resume_unanswered'}
+                         'relay_metadata', 'resume_unanswered', 'heartbeat'}
                 or data.get('resume_unanswered', True) is not True
                 or not {'history', 'settings'} <= set(data)
                 or not isinstance(data.get('relay_metadata', {}), dict)
                 or (data['history'] is not None and not isinstance(data['history'], list))
                 or ('run_owner_scope' in data and not _valid_owner_scope(data['run_owner_scope']))):
             raise AuthorityRefusal('invalid_params')
+        if heartbeat := data.get('heartbeat'):
+            from crema_heartbeat import active
+            if not active(heartbeat['ref'], heartbeat['session']):
+                raise AuthorityRefusal('heartbeat_stopped')
         if set(data['settings']) - set(_SETTING_KEYS):
             raise AuthorityRefusal('invalid_params')
     settings = payload.get('api_turn_v1', {}).get('settings') or api_settings(authority, ref)
@@ -190,6 +194,8 @@ def admit_api_steps(adapter, **kwargs):
         # The session-chat door's one policy-gated re-run (#115325): its failed attempt left this text as
         # the transcript's unanswered tail, which the turn adopts instead of appending it again.
         payload['api_turn_v1']['resume_unanswered'] = True
+    if kwargs.get('heartbeat'):
+        payload['api_turn_v1']['heartbeat'] = kwargs['heartbeat']
     if kwargs.get('relay_metadata'):
         # The request's Relay metadata rides the admission to the turn it describes (main passed it
         # to ``run_conversation``); it is client JSON, so it is part of the exact-retry identity.

@@ -615,6 +615,8 @@ class _RunLaunch:
     walked_from: Optional[str] = None  # the swept stored session the chain moved past (``bind_api_steps``)
     cwd: str = ""  # Crema: the folder this run works in ("" = the engine's TERMINAL_CWD)
     scheduled: Optional[dict] = None
+    heartbeat: Optional[dict] = None
+    requested_session: Optional[str] = None
 
     @property
     def approval_session_key(self) -> str:
@@ -770,7 +772,9 @@ async def _admit_run_to_authority(
                 history_from_session=session_history_delivery,
                 session_history_delivery='1' if session_history_delivery else '',
                 bind_declared_conversation=_declared_selected, walked_from=launch.walked_from, cwd=launch.cwd,
-                **launch.agent_kwargs)
+                **({"heartbeat": {"ref": launch.heartbeat, "session": launch.requested_session}}
+               if launch.heartbeat is not None else {}),
+            **launch.agent_kwargs)
     except Exception as exc:  # health: allow BLE001 -- answered below; a committed admission is kept
         # A storage failure after the admission committed (a later media-release write) still
         # owns that run: forgetting it would let a keyed retry admit the same work twice.
@@ -882,6 +886,14 @@ async def _handle_runs(self, request: web.Request, *, _api_server) -> web.Respon
     session_id = selected_session_id or run_id
     from tools.crema_schedule_tool import is_scheduled_request
     schedule = {} if is_scheduled_request(request, request_profile) else None
+    heartbeat = body.get("crema_heartbeat")
+    if heartbeat is not None:
+        from crema_heartbeat import STOPPED, active
+        requested_session = str(body.get("session_id") or "")
+        if (request_profile and schedule is None) or not active(heartbeat, requested_session):
+            return _json_error(_openai_error, STOPPED, code="heartbeat_stopped", status=409)
+    else:
+        requested_session = None
     run_owner = self._run_idempotency_scope(request)
     if schedule is not None:
         if not selected_session_id:
@@ -936,13 +948,15 @@ async def _handle_runs(self, request: web.Request, *, _api_server) -> web.Respon
             **({"confirmed_runtime_lock": True} if schedule is not None else {}),
             **{k: agent_overrides.get(k) for k in ("requested_model", "requested_provider", "model_options")}),
         request_profile=request_profile,
-        turn_author=turn_author, cwd=cwd or "", scheduled=schedule, walked_from=walked_from if session_id == stored_session_id else None)
+        turn_author=turn_author, cwd=cwd or "", scheduled=schedule, heartbeat=heartbeat,
+        requested_session=requested_session, walked_from=walked_from if session_id == stored_session_id else None)
     # A canonical Bot Chat that a Desktop holds live is that Desktop's to run: executing here would
     # be a second writer beside its lease (#114959). The owner's mailbox takes the turn and its
     # receipt drives this run's status, so `peer run` keeps its run_id and `peer status` still works.
     # Under session authority the same call admits the turn to the Bot Chat's own FIFO, which is
     # why it is decided BEFORE ``admit_api_turn`` would bind the chat as an API conversation.
-    admitted = await self._admit_to_live_bot_chat(session_id, user_message, turn_author) if selected_session_id else None
+    admitted = (await self._admit_to_live_bot_chat(session_id, user_message, turn_author)
+                if selected_session_id and heartbeat is None else None)
     _retarget_to_delivered_chat(self, launch, admitted)
     if admitted is None and getattr(self.gateway_runner, 'session_authority', None) is not None:
         refused = await _admit_run_to_authority(
@@ -1069,6 +1083,11 @@ def _run_agent_sync(self, run: _RunLaunch, agent, approval_notify, *, _api_serve
             _api_server._publish_turn_process_ownership(agent, effective_task_id)
             # Passed only when set: a human turn keeps today's call shape.
             author_kwargs = {"turn_author": run.turn_author} if run.turn_author is not None else {}
+            if run.heartbeat is not None:
+                from crema_heartbeat import active, current_turn
+                if not active(run.heartbeat, run.requested_session):
+                    return {"interrupted": True}, {}, {}
+                resets.append((current_turn.set((run.heartbeat, run.requested_session)), current_turn.reset))
             r = agent.run_conversation(
                 user_message=run.user_message, conversation_history=run.conversation_history,
                 task_id=effective_task_id, **author_kwargs)

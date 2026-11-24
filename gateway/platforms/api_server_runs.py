@@ -140,6 +140,7 @@ def _call_id(kw: dict[str, Any]) -> dict[str, Any]:
 
 
 _FIXED_EVENT_FIELDS = {
+    "tool.progress": lambda tool, preview, kw: {"tool": tool, "preview": preview, **_call_id(kw)},
     "tool.started": lambda tool, preview, kw: {"tool": tool, "preview": preview, **_call_id(kw)},
     "tool.completed": lambda tool, preview, kw: {
         "tool": tool, "duration": round(kw.get("duration", 0), 3), "error": kw.get("is_error", False),
@@ -400,9 +401,15 @@ def _make_run_event_callback(self, run_id: str, loop: asyncio.AbstractEventLoop,
     def _callback(event_type: str, tool_name: str | None = None, preview: str | None = None, args=None, **kwargs):
         # _thinking / subagent.tool / subagent_progress are deliberately dropped (UI noise);
         # lifecycle boundaries must land so clients can observe delegate_task failures.
+        if event_type == "tool.progress":
+            from crema_startup import server_tools_use_desktop
+            if not server_tools_use_desktop():
+                return
         fields = _FIXED_EVENT_FIELDS.get(event_type)
         if fields is not None:
             event_fields = fields(tool_name, preview, kwargs)
+            if event_type == "tool.progress" and preview:
+                event_fields["preview"] = redact_sensitive_text(preview, force=True)
             if event_type == "tool.completed":
                 event_fields["preview"] = _tool_completed_preview(
                     kwargs.get("result"), redact_sensitive_text)
@@ -1363,7 +1370,7 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
                 result, usage = await observe_api_turn(
                     run.admission, stream_delta_callback=_text_cb,
                     tool_start_callback=_tool_start, tool_complete_callback=_tool_complete,
-                    reasoning_callback=_reasoning_cb, status_callback=_status_cb,
+                    tool_update_callback=_progress_cb, reasoning_callback=_reasoning_cb, status_callback=_status_cb,
                     interim_assistant_callback=_interim_cb)
             # The canonical turn has no agent object here; the served pair rides on the
             # committed usage/result runtime metadata when the turn recorded one.

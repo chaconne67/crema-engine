@@ -22,6 +22,7 @@ _AWS_SDK_CREDENTIAL_ENV_VARS = frozenset({"AWS_BEARER_TOKEN_BEDROCK"})
 _STATIC_PROVIDER_ENV_BLOCKLIST = frozenset({
     "OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_API_BASE", "OPENAI_ORG_ID",
     "OPENAI_ORGANIZATION", "OPENROUTER_API_KEY", "ANTHROPIC_BASE_URL",
+    "CREMA_NAVER_API_KEY",
     "ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN", "LLM_MODEL", "GOOGLE_API_KEY",
     # Path to a GCP service-account JSON, not a bare key, so OPTIONAL_ENV_VARS
     # marks it password=False and the registry loop skips it.

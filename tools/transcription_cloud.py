@@ -46,7 +46,8 @@ def _with_openai_client(api_key: str, base_url: Optional[str], file_path: str, l
     Errors map to the shared envelope. APIConnectionError is checked before APITimeoutError (its
     subclass) so timeouts report as connection errors, as they always have."""
     try:
-        from openai import OpenAI
+        from openai import DefaultHttpxClient, OpenAI
+        from crema_startup import server_tools_use_desktop
         from tools.transcription_common import DEFAULT_STT_TIMEOUT, _config_number
         from tools.transcription_tools import _load_stt_config
         openai_config = _get_stt_section(_load_stt_config(), "openai")
@@ -55,6 +56,8 @@ def _with_openai_client(api_key: str, base_url: Optional[str], file_path: str, l
             base_url=base_url,
             timeout=_config_number(openai_config, "timeout", DEFAULT_STT_TIMEOUT),
             max_retries=_config_number(openai_config, "max_retries", 1, cast=int),
+            # Do not forward the recording to a location named by a redirect.
+            **({"http_client": DefaultHttpxClient(follow_redirects=False)} if server_tools_use_desktop() else {}),
         )
         try:
             return body(client)
@@ -100,7 +103,9 @@ def _transcribe_groq(
 ) -> dict[str, Any]:
     """Transcribe via the Groq Whisper API; language: hook > ``stt.groq.language`` > ``stt.language`` > env > auto."""
     from tools.transcription_tools import _HAS_OPENAI, _resolve_provider_key, _resolve_stt_language
-    api_key = _resolve_provider_key("GROQ_API_KEY", "groq")
+    from tools.crema_transcription import desktop_cloud_key, server_tools_use_desktop
+    api_key = (desktop_cloud_key("groq") if server_tools_use_desktop()
+               else _resolve_provider_key("GROQ_API_KEY", "groq"))
     if not api_key:
         return _error_result("GROQ_API_KEY not set")
     if not _HAS_OPENAI:
@@ -421,6 +426,11 @@ def _resolve_openai_audio_client_config() -> tuple[str, str]:
     from tools.tool_backend_helpers import (
         NOUS_MANAGED_PROVIDER, managed_nous_tools_enabled, nous_tool_gateway_unavailable_message,
         read_selection, selection_error)
+    from tools.crema_transcription import desktop_cloud_key, server_tools_use_desktop
+    if server_tools_use_desktop():
+        if key := desktop_cloud_key("openai"):
+            return key, OPENAI_BASE_URL
+        raise ValueError("선택한 OpenAI API 키를 설정에서 다시 연결해 주세요.")
     openai_cfg = _load_stt_config().get("openai") or {}
     selected = read_selection("stt")
 

@@ -251,6 +251,10 @@ def _get_provider(stt_config: dict) -> str:
     fallback); otherwise auto-detect local > groq > openai > mistral > xai > elevenlabs > deepinfra."""
     if not is_stt_enabled(stt_config):
         return "none"
+    from tools.crema_transcription import desktop_provider
+    selected = desktop_provider()
+    if selected is not None:
+        return selected
     explicit = "provider" in stt_config
     provider = stt_config.get("provider", DEFAULT_PROVIDER)
     # The managed "Nous Subscription" selection is the OpenAI backend routed via the managed gateway.
@@ -431,7 +435,9 @@ def _read_block_error(file_path: str) -> Optional[dict[str, Any]]:
 
 
 def _transcribe_prepared_audio(
-    file_path: str, model: Optional[str] = None, source: Optional[str] = None) -> dict[str, Any]:
+    file_path: str, model: Optional[str] = None, source: Optional[str] = None,
+    *, provider: Optional[str] = None,
+) -> dict[str, Any]:
     """Transcribe a validated audio file with the configured STT provider. ``model`` overrides the
     config default; ``source`` is a caller-surface label (``"gateway"``, ``"voice_mode"``) forwarded
     to the ``pre_transcription`` hook only."""
@@ -443,7 +449,8 @@ def _transcribe_prepared_audio(
     stt_config = _load_stt_config()
     if not is_stt_enabled(stt_config):
         return _error_result("STT is disabled in config.yaml (stt.enabled: false).")
-    provider = _get_provider(stt_config)
+    if provider is None:
+        provider = _get_provider(stt_config)
     remote = not _is_local_stt_provider(provider)
     with ExitStack() as cleanup:
         # Never overwrite a neighboring WAV or leave converted voice notes behind.
@@ -570,7 +577,15 @@ def transcribe_audio(
     from tools.hosted_tool_policy import host_feature_refusal
     if refusal := host_feature_refusal("transcription", "Transcription"):
         return {"success": False, "transcript": "", "error": refusal}
+    from tools.crema_transcription import CLOUD_KEYS, PICK_METHOD, desktop_cloud_key, desktop_provider
+    provider = desktop_provider()
+    if provider == "none":
+        return _error_result(PICK_METHOD)
+    if provider in CLOUD_KEYS and (not _HAS_OPENAI or not desktop_cloud_key(provider)):
+        return _error_result("선택한 받아쓰기 연결을 사용할 수 없습니다. " + PICK_METHOD, provider=provider)
     # Secret-store refusal runs before ANY validation so the error names the real reason.
+    if not isinstance(file_path, (str, os.PathLike)):
+        return _error_result("녹음 파일 경로를 확인해 주세요.")
     blocked = _read_block_error(file_path)
     if blocked:
         return blocked
@@ -585,7 +600,7 @@ def transcribe_audio(
         return prep_error or _error_result("Audio preprocessing did not produce a file for transcription.")
     try:
         return (_validate_audio_file(prepared_path, enforce_size_limit=False)
-                or _transcribe_prepared_audio(prepared_path, model, source))
+                or _transcribe_prepared_audio(prepared_path, model, source, provider=provider))
     finally:
         if cleanup_dir:
             shutil.rmtree(cleanup_dir, ignore_errors=True)

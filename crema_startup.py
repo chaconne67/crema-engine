@@ -23,6 +23,10 @@ def engine_input(config):
     return deployment["engineInputs"][theme]
 
 
+def server_tools_use_desktop():
+    return (engine_input({}) or {}).get("serverToolsBackend") == "desktop"
+
+
 def connection_policy():
     from hermes_cli.config import load_config_readonly
     startup = engine_input(load_config_readonly()) if os.environ.get("CREMA_ENGINE_INPUT") else None

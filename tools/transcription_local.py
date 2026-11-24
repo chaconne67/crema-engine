@@ -184,6 +184,11 @@ def _create_whisper_model(model_name: str, *, device: str, compute_type: str):
             raise
         logger.info("faster-whisper model '%s' is not cached; downloading it from the Hugging Face Hub", model_name)
 
+    from agent.tool_progress_relay import current_tool_progress
+    from crema_startup import server_tools_use_desktop
+    if server_tools_use_desktop() and (report := current_tool_progress()):
+        report(0, message="받아쓰기 모델 다운로드를 시작합니다.")
+
     # huggingface_hub surfaces every Hub/network failure as an OSError subclass
     # (LocalEntryNotFoundError wrapping the ConnectTimeout, HfHubHTTPError). Anything else
     # (CUDA runtime, invalid model size) is not a download problem and propagates untouched.

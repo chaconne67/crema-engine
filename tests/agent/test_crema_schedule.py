@@ -137,18 +137,27 @@ def test_service_job_and_import_pause_keep_existing_lanes(crema, monkeypatch):
     assert dispatched == [personal["id"]]
 
 
-@pytest.mark.parametrize("project", [None, {"id": "docs", "path": "/current"},
-                                    {"id": "docs", "path": "pc://own-pc/C:/current"}])
-def test_scheduled_result_retries_the_same_occurrence_without_restarting_the_turn(tmp_path, monkeypatch, project):
+@pytest.mark.parametrize(("project", "external_worker"), [
+    (None, False),
+    ({"id": "docs", "path": "/current"}, False),
+    ({"id": "docs", "path": "pc://own-pc/C:/current"}, False),
+    pytest.param(None, True, id="external-worker-without-api"),
+])
+def test_scheduled_result_retries_the_same_occurrence_without_restarting_the_turn(
+    tmp_path, monkeypatch, project, external_worker
+):
     import sys
     from types import SimpleNamespace
+    from cron import scheduler
     from hermes_constants import set_hermes_home_override, reset_hermes_home_override
     from tools import crema_schedule_tool as schedule
 
     home = tmp_path / "profiles/own"
     home.mkdir(parents=True)
+    host = "192.0.2.23" if external_worker else "0.0.0.0"
+    request_host = host if external_worker else "127.0.0.1"
     session_api = SimpleNamespace(_port=8754)
-    monkeypatch.setattr(turns, "_api", session_api)
+    monkeypatch.setattr(turns, "_api", None if external_worker else session_api)
     sent, posted = [], []
 
     class Client:
@@ -162,7 +171,7 @@ def test_scheduled_result_retries_the_same_occurrence_without_restarting_the_tur
             pass
 
         def post(self, url, *, json):
-            assert url == "http://127.0.0.1:8754/p/own/v1/runs"
+            assert url == f"http://{request_host}:8754/p/own/v1/runs"
             assert json["session_id"] == A and json["input"] == "작업"
             assert json.get("crema_project") == project
             if project and project["path"].startswith("pc://"):
@@ -192,19 +201,42 @@ def test_scheduled_result_retries_the_same_occurrence_without_restarting_the_tur
 
     error = type("ProfileAPIError", (ValueError,), {})
     monkeypatch.setitem(sys.modules, "engine_home", SimpleNamespace(
-        ProfileAPIError=error, profile_api=call_profile))
+        HOST=host, PORT=8754, ProfileAPIError=error, profile_api=call_profile,
+        refresh_account_profile=lambda _: None))
     monkeypatch.setitem(sys.modules, "engine_keys", SimpleNamespace(engine_key=lambda _: "key"))
     monkeypatch.setattr("crema_startup.engine_input", lambda _: {
         "themeId": "test", "tools": {"chat": ["crema_schedule"]}})
     monkeypatch.setattr("httpx.Client", Client)
+    if external_worker:
+        monkeypatch.setenv("SERVICE_DIR", str(tmp_path))
+        monkeypatch.setattr("hermes_cli.config.load_config_readonly",
+                            lambda: {"crema_personal_schedule_mode": "conversation"})
+        monkeypatch.setattr("hermes_cli.plugins.discover_plugins", lambda: None)
+        monkeypatch.setattr("crema_startup.initialize", lambda: None)
+        monkeypatch.setattr("cron.executions.adopt_claimed_execution", lambda _: {"status": "running"})
+        monkeypatch.setattr(scheduler, "run_one_job", lambda job, **_: run_job(job)[0])
+
+    def fire(job):
+        if not external_worker:
+            return schedule.server_scheduled(job)[0]
+        payload = tmp_path / "worker.json"
+        payload.write_text(json.dumps({
+            "job": {**job, "execution_id": "external-worker"},
+            "profile_home": str(home),
+            "multiplex_active": True,
+        }), encoding="utf-8")
+        return scheduler._run_external_worker_payload(payload, tmp_path / "worker.ready")
+
     token = set_hermes_home_override(home)
     try:
         _seed_scheduled_session(home)
-        job = {"id": "job", "prompt": "작업", "origin": {"session_id": A, "profile": "own"},
+        job = {"id": "job", "prompt": "작업",
+               "origin": {"platform": "api_server", "session_id": A, "profile": "own"},
                "_scheduled_instant": "2026-11-20T18:00:00+09:00"}
         with pytest.raises(OSError, match="lost"):
-            schedule.server_scheduled(job)
-        assert schedule.server_scheduled(job)[0]
+            fire(job)
+        assert len(sent) == 1
+        assert fire(job)
         assert len(sent) == 1
         assert posted[0] == posted[1] == {"jobId": "job", "scheduledAt": "2026-11-20T09:00:00+00:00",
                                           "sessionId": A, "runId": "run-once", "status": "completed", "text": "끝"}
@@ -244,7 +276,7 @@ def test_scheduled_pc_offline_posts_without_starting_a_run(tmp_path, monkeypatch
 
     monkeypatch.setattr(turns, "_api", SimpleNamespace(_port=8754))
     monkeypatch.setitem(sys.modules, "engine_home", SimpleNamespace(
-        ProfileAPIError=ProfileAPIError, profile_api=profile_api))
+        HOST="0.0.0.0", PORT=8754, ProfileAPIError=ProfileAPIError, profile_api=profile_api))
     monkeypatch.setitem(sys.modules, "engine_keys", SimpleNamespace(engine_key=lambda _: "key"))
     monkeypatch.setattr("crema_startup.engine_input", lambda _: {
         "themeId": "test", "tools": {"chat": ["crema_schedule"]}})

@@ -56,11 +56,12 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
     from cron import jobs
     from crema_heartbeat import STOPPED, active, reference
     from cron.occurrences import scheduled_instant
-    from engine_home import ProfileAPIError, profile_api
+    from engine_home import HOST, PORT, ProfileAPIError, profile_api
     from engine_keys import engine_key
     from hermes_constants import get_hermes_home
     from persistence_assembly import open_persistence, profile_scope
     from gateway.platforms.api_server_run_idempotency import TERMINAL_STATUSES
+    from gateway.platforms.shared_ingress import listener_base_url
     from utils import atomic_json_write
 
     home = get_hermes_home()
@@ -109,13 +110,13 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
             body["crema_heartbeat"] = heartbeat
         headers = {"Authorization": f"Bearer {key}", "Idempotency-Key": occurrence,
                    SCHEDULED_HEADER: scheduled_signature(key, occurrence), "X-Crema-Theme": startup["themeId"]}
-        api = crema_file_turns._api
+        url = f"{listener_base_url(HOST, PORT)}/p/{home.name}/v1/runs"
         run_id = occurrence
         status = "unavailable"
         text = "예약을 시작할 수 없습니다."
         if submitted.is_file():
             body = json.loads(submitted.read_text(encoding="utf-8"))
-        elif api is not None:
+        else:
             try:
                 query = urlencode({"sessionId": session, **({"kind": "heartbeat"} if heartbeat else {})})
                 context = profile_api(home, f"/api/scheduled-context?{query}", timeout=5)
@@ -125,7 +126,7 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
                     return result("failed", MISSING_SOURCE)
                 if error.status != 409:
                     raise
-                api = None
+                url = None
                 text = "프로젝트의 현재 폴더를 확인하지 못해 예약을 맡지 못했습니다."
             else:
                 project, model = context["project"], context["model"]
@@ -153,8 +154,7 @@ def server_scheduled(job, *, cancel_event=None, extra_prompt=None):
         if heartbeat is not None and stopped():
             submitted.unlink(missing_ok=True)
             return result("failed", STOPPED)
-        if api is not None:
-            url = f"http://127.0.0.1:{api._port}/p/{home.name}/v1/runs"
+        if url is not None:
             with httpx.Client(headers=headers, timeout=15, trust_env=False) as client:
                 reply = client.post(url, json=body)
                 if reply.status_code == 202:

@@ -272,8 +272,10 @@ def start(feature: str, address: str, base: str) -> Dict[str, str]:
     address = address.strip()
     if feature not in FEATURES:
         raise ValueError(f"unknown feature {feature!r}")
-    if feature == "mail" and mail.provider_of(address) != "google":
-        raise ValueError("a Gmail address is needed")
+    # A company's Google mail (Google Workspace) has its own domain: any address but another mail company's may be
+    # Gmail, and Google's own check after the consent (_trade) settles it.
+    if feature == "mail" and ("@" not in address or mail.provider_of(address) not in (None, "google")):
+        raise ValueError("a Gmail or Google Workspace address is needed")
     kept = accounts()
     if not address and kept:
         address = kept[0]["address"]

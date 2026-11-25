@@ -205,13 +205,16 @@ def remove(address: str) -> Dict[str, Any]:
 
     address = (address or "").strip()
     config = load_config()
-    config[CONFIG_KEY] = [item for item in config.get(CONFIG_KEY) or []
-                          if isinstance(item, dict) and item.get("address", "").lower() != address.lower()]
+    kept = [item for item in config.get(CONFIG_KEY) or [] if isinstance(item, dict)]
+    # Google by the account kept, not the domain: a company's Google mail has its own domain.
+    google = provider_of(address) == "google" or any(
+        item.get("address", "").lower() == address.lower() and item.get("provider") == "google" for item in kept)
+    config[CONFIG_KEY] = [item for item in kept if item.get("address", "").lower() != address.lower()]
     if not config[CONFIG_KEY]:
         config.pop(CONFIG_KEY)
     save_config(config)
     remove_env_value(secret_name(address))
-    if provider_of(address) == "google":
+    if google:
         from tools import crema_google
 
         crema_google.drop(address, "mail")

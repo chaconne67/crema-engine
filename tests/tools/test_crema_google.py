@@ -174,6 +174,23 @@ def test_a_permission_left_unchecked_or_another_account_is_not_kept(fake):
     assert mail_tool.accounts() == [] and google.accounts() == []
     # An app password cannot connect Gmail: it goes through Google's sign-in.
     assert mail_tool.connect("me@gmail.com", "abcdabcdabcdabcd") == {"ok": False, "reason": "unknown"}
+
+
+def test_a_companys_google_mail_connects_and_leaves_like_gmail(fake):
+    found, _ = fake
+    found.allowed_by = "cto@company.kr"
+    _, query, how = sign_in(address="cto@company.kr")
+    assert how == "done" and query["login_hint"] == "cto@company.kr"
+    assert mail_tool.accounts() == [{"address": "cto@company.kr", "provider": "google"}]
+    assert google.accounts() == [{"address": "cto@company.kr", "features": ["mail"]}]
+    # Leaving the mail list takes Google's mail permission with it, as for a gmail.com address.
+    mail_tool.remove("cto@company.kr")
+    assert mail_tool.accounts() == [] and google.accounts() == []
+    # Another mail company's address still connects with its app password, not Google.
+    with pytest.raises(ValueError):
+        google.start("mail", "me@naver.com", "http://127.0.0.1:5555/")
+
+
 def test_gmail_is_the_mail_tool_over_gmails_api(fake):
     found, asked = fake
     sign_in()

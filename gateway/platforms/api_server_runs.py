@@ -28,6 +28,8 @@ except ImportError:
     RequestKey = None  # type: ignore[assignment,misc]
 
 from gateway.platforms.api_server_room_grants import _json_error, _room_grant_error_response, room_run_claims
+from gateway.session_api_media import commit_api_images, restore_api_images
+from gateway.session_ingress_media import capture_lease
 from gateway.turn_executor import _UnboundedThreadExecutor
 from gateway.platforms.api_server_run_idempotency import TERMINAL_STATUSES
 from persistence import AuthorityRefusal
@@ -608,7 +610,7 @@ class _RunLaunch:
     session_id: str
     gateway_session_key: Optional[str]
     declared_selected: bool
-    user_message: str
+    user_message: str | list[dict[str, Any]]
     conversation_history: list[dict[str, str]]
     # #98619: only continuation paths that reload session history may grant wake authority —
     # a previous_response_id continuation consumes its ResponseStore snapshot instead, and a
@@ -1048,7 +1050,7 @@ def _run_agent_sync(self, run: _RunLaunch, agent, approval_notify, *, _api_serve
     effective_task_id = session_id or run.run_id
     # (token, reset) pairs unwound in the finally block; bound only once each step succeeds.
     resets: list[tuple[Any, Callable]] = []
-    with self._profile_scope(run.request_profile):
+    with self._profile_scope(run.request_profile), capture_lease():
         try:
             if run.scheduled is not None:
                 resets.append((_scheduled_turn.set(run.scheduled), _scheduled_turn.reset))
@@ -1095,8 +1097,13 @@ def _run_agent_sync(self, run: _RunLaunch, agent, approval_notify, *, _api_serve
                 if not active(run.heartbeat, run.requested_session):
                     return {"interrupted": True}, {}, {}
                 resets.append((current_turn.set((run.heartbeat, run.requested_session)), current_turn.reset))
+            user_message = run.user_message
+            # Standalone runs have no durable API admission to retain their images. Keep
+            # the existing capture lease until the agent has written the path to history.
+            if isinstance(user_message, list) and (media := commit_api_images(user_message, max_images=None)):
+                user_message = restore_api_images(user_message, media)
             r = agent.run_conversation(
-                user_message=run.user_message, conversation_history=run.conversation_history,
+                user_message=user_message, conversation_history=run.conversation_history,
                 task_id=effective_task_id, **author_kwargs)
         finally:
             # Clear ownership now so a later stop can't reap work this run left running.

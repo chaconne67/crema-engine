@@ -3,6 +3,7 @@ import base64
 import hashlib
 import os
 from pathlib import Path
+import tempfile
 
 from session_rules.api_payloads import MIME_EXT, RETAINED, data_url_bytes
 
@@ -16,7 +17,7 @@ def _image_urls(content):
             yield (part.get('image_url') or {}).get('url', '')
 
 
-def commit_api_images(content):
+def commit_api_images(content, *, max_images=_IMAGE_LIMIT):
     """Stage every inline ``data:`` image deterministically (same bytes -> same path, so an
     exact retry keeps its admission digest) and commit the bytes as immutable media."""
     from gateway.platforms.base import get_image_cache_dir
@@ -30,16 +31,21 @@ def commit_api_images(content):
     # Validate the whole batch before one byte lands on disk: a refused request must not
     # leave staged or committed bytes behind.
     limit = max(0, get_inbound_media_max_bytes())
-    if (len(images) > _IMAGE_LIMIT or (limit and sum(len(data) for _, data in images) > limit)
+    if ((max_images is not None and len(images) > max_images)
+            or (limit and sum(len(data) for _, data in images) > limit)
             or any(mime is None for mime, _ in images)):
         raise AuthorityRefusal('invalid_params')
     staged = []
     for mime, data in images:
         path = Path(get_image_cache_dir()).resolve() / ('api_' + hashlib.sha256(data).hexdigest()[:32] + MIME_EXT[mime])
         if not path.exists():
-            temporary = path.with_name(f'{path.name}.{os.getpid()}.tmp')
-            temporary.write_bytes(data)
-            os.replace(temporary, path)
+            fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=path.name + '.', suffix='.tmp')
+            try:
+                with os.fdopen(fd, 'wb') as output:
+                    output.write(data)
+                os.replace(temporary, path)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
         staged.append(path)
     return capture_native_media(staged)
 
@@ -54,6 +60,9 @@ def restore_api_images(content, media):
     for url in _image_urls(content):
         if data_url_bytes(url) is not None:
             hints.append(f'[Image attached at: {next(paths)}]')
+        elif url.lower().startswith('data:'):
+            # Reserve the image's position without storing unsupported inline bytes as text.
+            hints.append('[Image attached: inline image]')
         else:
             hints.append(f'[Image attached: {url}]')
     if not hints:

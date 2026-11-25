@@ -10,10 +10,13 @@ Covers:
 """
 
 import asyncio
+import base64
 import hashlib
 import json
+from pathlib import Path
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,6 +24,9 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from gateway.config import PlatformConfig
+from gateway.session_ingress_media import native_inputs_root
+from hermes_constants import get_hermes_home
+from run_agent import AIAgent
 from gateway.platforms.api_server_runs import _RunStream
 from gateway.platforms.api_server import (
     APIServerAdapter,
@@ -210,6 +216,80 @@ def auth_adapter():
 
 
 class TestStartRun:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("replay_window", [3, 0])
+    async def test_standalone_run_retains_images_for_followup(self, adapter, monkeypatch, replay_window):
+        (get_hermes_home() / "config.yaml").write_text(json.dumps({
+            "agent": {"image_input_mode": "native"},
+            "model": {"supports_vision": True, "context_length": 128_000},
+            "auxiliary": {"title_generation": {"enabled": False}},
+            "vision": {"replay_recent_images": replay_window},
+        }), encoding="utf-8")
+        model = "gpt-4o"
+        assert adapter.gateway_runner is None
+        monkeypatch.setattr("gateway.run._resolve_runtime_agent_kwargs", lambda: {
+            "model": model, "provider": "custom", "base_url": "http://127.0.0.1:1/v1",
+            "api_key": "test-key",
+        })
+        requests = []
+
+        def reply(_agent, kwargs, **_callbacks):
+            requests.append([row["content"] for row in kwargs["messages"] if row["role"] == "user"])
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content="OK", tool_calls=None, reasoning=None, reasoning_content=None),
+                finish_reason="stop",
+            )], model=model, usage=None)
+
+        monkeypatch.setattr(AIAgent, "_interruptible_streaming_api_call", reply)
+        png = bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108020000009077"
+            "53de0000000c4944415408d763f8cfc0f00f00050201ff2ecf3ca10000000049454e44ae426082")
+        url = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+        image = {"type": "image_url", "image_url": {"url": url, "detail": "low"}}
+        session_id = "pc-image-replay"
+        app = _create_runs_app(adapter)
+        app.router.add_post("/api/sessions", adapter._handle_create_session)
+        app.router.add_delete("/api/sessions/{session_id}", adapter._handle_delete_session)
+        async with TestClient(TestServer(app)) as cli:
+            created = await cli.post("/api/sessions", json={"id": session_id, "title": "PC image replay"})
+            assert created.status == 201
+
+            async def send(content):
+                response = await cli.post("/v1/runs", json={
+                    "session_id": session_id, "no_tools": True,
+                    "input": [{"role": "user", "content": content}],
+                })
+                assert response.status == 202
+                run_id = (await response.json())["run_id"]
+                async with cli.get(f"/v1/runs/{run_id}/events", timeout=20) as stream:
+                    body = await stream.text()
+                    events = [json.loads(line.removeprefix("data: ")) for line in body.splitlines()
+                              if line.startswith("data: ")]
+                    assert any(event["event"] == "run.completed" for event in events)
+
+            await send([{"type": "text", "text": "Look at this."}, image])
+            rows = await adapter._conversation_history_for_session(session_id)
+            saved = next(row["content"] for row in rows if row["role"] == "user")
+            hints = [line for line in saved.splitlines() if line.startswith("[Image attached at: ")]
+            assert len(hints) == 1
+            retained = Path(hints[0].removeprefix("[Image attached at: ").removesuffix("]"))
+            assert retained.parent.parent == native_inputs_root()
+            assert retained.parent.name == hashlib.sha256(png).hexdigest()
+            assert retained.read_bytes() == png
+            assert requests[0][0][1] == image
+
+            await send("What color was it?")
+            assert len(requests) == 2
+            if replay_window:
+                assert requests[1][0] == requests[0][0]
+            else:
+                assert requests[1][0] == saved
+            assert requests[1][-1] == "What color was it?"
+
+            deleted = await cli.delete(f"/api/sessions/{session_id}")
+            assert (await deleted.json())["deleted"]
+            assert not retained.exists()
+
     @pytest.mark.asyncio
     async def test_room_auth_is_validated_before_body_parse_or_work_reservation(
         self, auth_adapter

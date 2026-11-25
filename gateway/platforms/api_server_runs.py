@@ -1700,11 +1700,14 @@ def _crema_control_event(run_id: str, event_type: str, prompt: dict[str, Any]) -
     keyed by the prompt id (``clarify_id``, ``questions``), ``approval.request`` as the runs bridge sends it
     (``request_id``, Korean description, ``pattern_key``); the app answers with those ids
     (_respond_authority_run). Other control events pass as they are."""
+    from agent.i18n import t
     from gateway.platforms import api_server as _api_server
     from tools.clarify_tool import strip_recommended
     if event_type == "clarify.request":
+        # The app's card has its own skip control; the typed-"skip" hint is for messaging adapters.
+        question = prompt["question"].removesuffix(f"\n{t('gateway.clarify.skip_hint')}")
         return _run_event(run_id, event_type, **prompt, clarify_id=prompt["prompt_id"], title="", questions=[{
-            "qid": prompt["prompt_id"], "question": prompt["question"], "context": "",
+            "qid": prompt["prompt_id"], "question": question, "context": "",
             "choices": [strip_recommended(choice) for choice in prompt["choices"]], "descriptions": [],
             "multi_select": prompt["multi_select"]}])
     if event_type == "approval.request":

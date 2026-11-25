@@ -27,6 +27,14 @@ def test_a_clarify_prompt_reaches_the_app_as_one_question_with_bare_choices():
                                    "multi_select": False}]
 
 
+def test_the_app_card_drops_the_messaging_skip_hint():
+    from agent.i18n import t
+    prompt = {**CLARIFY, "question": CLARIFY["question"] + "\n" + t("gateway.clarify.skip_hint")}
+    event = runs._crema_control_event("run-1", "clarify.request", prompt)
+    assert event["questions"][0]["question"] == "이 범위로 진행할까요?"
+    assert event["question"] == prompt["question"]
+
+
 def test_an_approval_prompt_keeps_its_id_kind_and_choices():
     event = runs._crema_control_event("run-1", "approval.request", APPROVAL)
     assert (event["event"], event["request_id"], event["pattern_key"]) == ("approval.request", "a1", "mail_send")

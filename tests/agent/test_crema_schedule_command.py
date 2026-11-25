@@ -1,5 +1,6 @@
 """Crema: /once and /repeat make the chat's scheduled task from a fixed time form (crema_schedule_command.py)."""
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -109,3 +110,36 @@ def test_commands_refuse_bad_input_a_foreign_session_and_a_theme_without_tasks(c
                                    "engineInputs": {"test": {"tools": {"chat": []}, "schedules": {}}}}))
     monkeypatch.setenv("CREMA_ENGINE_INPUT", str(without))
     assert command(session=A, kind="once", arg="30m 할 일") == {"error": "이 대화에서 예약을 사용할 수 없습니다."}
+
+
+def test_on_a_server_the_account_server_must_know_the_chat_first(crema, monkeypatch):
+    """A chat with no message yet is unknown to the account server, and its task would stop as MISSING_SOURCE."""
+    import types
+
+    from tools import crema_schedule_tool
+
+    class ProfileAPIError(ValueError):
+        def __init__(self, status, detail):
+            super().__init__(detail)
+            self.status, self.detail = status, detail
+
+    known = {A}
+    asked = []
+
+    def profile_api(home, path, timeout=30):
+        asked.append(path)
+        if B in path and B not in known:
+            raise ProfileAPIError(404, "그런 대화가 없습니다.")
+        return {"project": None, "model": None}
+
+    monkeypatch.setitem(sys.modules, "engine_home",
+                        types.SimpleNamespace(ProfileAPIError=ProfileAPIError, profile_api=profile_api))
+    monkeypatch.setattr(crema_schedule_tool, "PLATFORM", "api_server")
+    made = command(session=A, kind="once", arg="30m 회의 자료 확인해 줘")["created"]
+    assert jobs.get_job(made["id"])["origin"]["session_id"] == A
+    assert command(session=B, kind="repeat", arg="매일 09:00 할 일") == {
+        "error": "이 대화에서 메시지를 한 번 보낸 뒤 예약해 주세요."}
+    assert len(jobs.list_jobs(include_disabled=True)) == 1
+    asked.clear()
+    assert "tasks" in command(session=B, kind="once", arg="")
+    assert asked == []

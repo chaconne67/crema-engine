@@ -81,6 +81,28 @@ def repeat(text):
     raise ValueError("요일과 시각, 할 일을 적어 주세요.")
 
 
+def _server_chat_refused(session):
+    """On a server, the account server must know the chat before its task is made, as /heartbeat checks: a chat
+    with no message yet is unknown there, and its task would later stop as MISSING_SOURCE (2026-11-26 후보 확인)."""
+    from tools import crema_schedule_tool
+
+    if crema_schedule_tool.PLATFORM != "api_server":
+        return ""
+    from urllib.parse import urlencode
+    from engine_home import ProfileAPIError, profile_api
+    from hermes_constants import get_hermes_home
+
+    try:
+        profile_api(get_hermes_home(), "/api/scheduled-context?" + urlencode({"sessionId": session}), timeout=5)
+    except ProfileAPIError as error:
+        if error.status == 404:
+            return "이 대화에서 메시지를 한 번 보낸 뒤 예약해 주세요."
+        if error.status in {403, 409}:
+            return error.detail
+        raise
+    return ""
+
+
 def command(*, session, kind, arg):
     from crema_startup import engine_input
     from cron import jobs
@@ -106,6 +128,9 @@ def command(*, session, kind, arg):
         when, task = once(text, jobs._hermes_now()) if kind == "once" else repeat(text)
     except ValueError as error:
         return {"error": f"{error} {USAGE[kind]}"}
+    refused = _server_chat_refused(session)
+    if refused:
+        return {"error": refused}
     made = json.loads(crema_schedule({"action": "create", "when": when, "task": task}, session_id=session))
     if "error" in made:
         return {"error": "예약을 만들지 못했습니다: " + made["error"]}

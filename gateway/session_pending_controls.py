@@ -29,6 +29,8 @@ class PendingControls:
                       'command': _redact_approval_command(data.get('command', '')),
                       'description': _redact_approval_command(data.get('description', '')),
                       'choices': choices}
+            if data.get('pattern_key'):
+                prompt['pattern_key'] = data['pattern_key']  # Crema: the app titles mail and screen approvals by it
             if 'edit' in data:
                 prompt['edit'] = deepcopy(data['edit'])
                 prompt['choices'] = ['once', 'deny']

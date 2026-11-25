@@ -497,6 +497,13 @@ def _durable_run_status(self, request: web.Request, run_id: str) -> dict[str, An
         # The documented poll shape: the canonical projection decides status/output/usage; the
         # retained run record still names the object, the requested model and the served runtime.
         retained = self._run_statuses.get(run_id) or {}
+        # The prompt the run waits on, as its stream showed it (the app reads it from here after a reconnect).
+        for prompt in canonical["pending_controls"][:1]:
+            kind = prompt["kind"]
+            shown = retained.get(kind) or {}
+            if shown.get("clarify_id" if kind == "clarify" else "request_id") != prompt["prompt_id"]:
+                shown = _crema_control_event(run_id, f"{kind}.request", prompt)
+            canonical = {**canonical, "status": f"waiting_for_{kind}", kind: shown}
         return {"object": "hermes.run", **{key: retained[key] for key in ("model", "runtime", "created_at")
                                            if key in retained}, **canonical}
     status = self._run_statuses.get(run_id)
@@ -1267,7 +1274,10 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
             return
 
         def _translate() -> None:
-            _put_thought(step, crema_thinking.translate(text) or text)
+            # A new thread starts outside the run's profile scope: on a multiplexed gateway (Krema, Jabis) the
+            # model call could not read that profile's credentials (UnscopedSecretError) and the English stayed.
+            with self._profile_scope(run.request_profile):
+                _put_thought(step, crema_thinking.translate(text) or text)
 
         worker = threading.Thread(target=_translate, name=f"crema-thinking-{run_id}", daemon=True)
         worker.start()
@@ -1359,10 +1369,17 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
             tool_cb = _progress_cb
 
             def _control_cb(event_type, prompt):
-                # Same authority prompt the WS viewer and GET pending_controls expose, on the
-                # run's own stream so a streaming-only client learns it must respond.
+                # Same authority prompt the WS viewer and GET pending_controls expose, on the run's own
+                # stream in the app's shape, and parked on the run status as the legacy bridges do.
+                event = _crema_control_event(run_id, event_type, prompt)
+                kind = event_type.removesuffix(".request")
+
+                def publish():
+                    if kind != event_type:
+                        self._set_run_status(run_id, f"waiting_for_{kind}", last_event=event_type, **{kind: event})
+                    run.put_event(event)
                 with suppress(Exception):
-                    loop.call_soon_threadsafe(run.put_event, _run_event(run_id, event_type, **prompt))
+                    loop.call_soon_threadsafe(publish)
 
             def _tool_start(call_id, name, args):
                 from agent.display import build_tool_preview
@@ -1678,9 +1695,43 @@ async def _handle_run_approval(self, request: web.Request, *, _api_server) -> we
         "resolved": resolved})
 
 
+def _crema_control_event(run_id: str, event_type: str, prompt: dict[str, Any]) -> dict[str, Any]:
+    """The authority prompt's run event with the fields the app reads added: ``clarify.request`` as one question
+    keyed by the prompt id (``clarify_id``, ``questions``), ``approval.request`` as the runs bridge sends it
+    (``request_id``, Korean description, ``pattern_key``); the app answers with those ids
+    (_respond_authority_run). Other control events pass as they are."""
+    from gateway.platforms import api_server as _api_server
+    from tools.clarify_tool import strip_recommended
+    if event_type == "clarify.request":
+        return _run_event(run_id, event_type, **prompt, clarify_id=prompt["prompt_id"], title="", questions=[{
+            "qid": prompt["prompt_id"], "question": prompt["question"], "context": "",
+            "choices": [strip_recommended(choice) for choice in prompt["choices"]], "descriptions": [],
+            "multi_select": prompt["multi_select"]}])
+    if event_type == "approval.request":
+        choices = prompt["choices"]
+        return {**prompt, **_api_server._approval_request_event(run_id, {
+            **{key: prompt[key] for key in ("command", "description", "pattern_key") if key in prompt},
+            "allow_session": "session" in choices, "allow_permanent": "always" in choices}, request_id=prompt["prompt_id"])}
+    return _run_event(run_id, event_type, **prompt)
+
+
 async def _respond_authority_run(self, run_id, body, *, kind, _api_server):
-    from gateway.platforms.api_server_authority_runs import respond_run, store_error_response
+    from gateway.platforms.api_server_authority_runs import respond_run, run_admission, store_error_response
+    # The app answers without a generation (``{request_id, choice}``, or ``{clarify_id, answers | text}`` for
+    # the one question _crema_control_event showed): it answers the prompt of the run's current generation.
+    # A body that names its generation is the authority's own shape and goes as it is.
     try:
+        if "execution_generation" not in body:
+            owned = run_admission(self, run_id)
+            generation = owned[1]["generation"] if owned is not None else None
+            if kind == "clarify":
+                answers = body.get("answers")
+                answer = next(iter(answers.values()), None) if isinstance(answers, dict) else body.get("text")
+                body = {"request_id": body.get("clarify_id"), "execution_generation": generation,
+                        "answer": json.dumps(answer, ensure_ascii=False) if isinstance(answer, list) else answer}
+            else:
+                body = {"request_id": body.get("request_id"), "execution_generation": generation,
+                        "choice": body.get("choice")}
         result = await respond_run(self, run_id, body, kind=kind)
         return web.json_response({'run_id': run_id, **result})
     except AuthorityRefusal as exc:

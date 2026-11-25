@@ -114,6 +114,8 @@ async def main() -> None:
     install_change_principles(settings)
     from crema_heartbeat import install as install_heartbeat
     install_heartbeat(settings)
+    from crema_schedule_command import install as install_schedule_command
+    install_schedule_command(settings)
     try:
         from crema_desktop_features import install as install_desktop_features
     except ModuleNotFoundError as error:

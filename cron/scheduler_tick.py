@@ -3,6 +3,7 @@
 import concurrent.futures
 import contextlib
 import logging
+import os
 import time
 
 from cron import store_health
@@ -34,13 +35,17 @@ def tick(verbose=True, adapters=None, loop=None, sync=True, *, can_dispatch=None
          headless: bool = False):
     from hermes_cli.backend_retirement import retirement
 
+    gate = contextlib.nullcontext((True, None))
+    if os.environ.get("CREMA_ROLLOUT_DIR"):
+        from rollout_gate import work
+        gate = work()
     # Hold admission through the entire scan/advance/submit handoff. A predicate alone races
     # prepare after the check but before a due job enters the running-job ledger.
-    with retirement.work() as admitted:
-        if not admitted:
+    with gate as (open_for_work, rollout_fd), retirement.work() as admitted:
+        if not open_for_work or not admitted:
             return 0
         return _tick_admitted(verbose, adapters, loop, sync, can_dispatch=can_dispatch,
-                              headless=headless)
+                              headless=headless, rollout_fd=rollout_fd)
 
 
 def _acquire_tick_lock_or_degrade(_sched):
@@ -91,7 +96,7 @@ def _pre_dispatch_housekeeping(_sched, headless: bool) -> None:
 
 def _tick_admitted(
     verbose: bool = True, adapters=None, loop=None, sync: bool = True, *, can_dispatch=None,
-    headless: bool = False):
+    headless: bool = False, rollout_fd: int | None = None):
     """Check and run all due jobs. File-locked so only one tick runs at a time (gateway ticker vs
     standalone daemon / manual tick). ``can_dispatch``: optional gate; false leaves due jobs for the
     next allowed tick. ``headless``: the tick runs outside any gateway (system crontab, ``hermes
@@ -184,6 +189,10 @@ def _tick_admitted(
             fut = _sched._submit_with_guard(job, pool, _process_job)
             if fut is None:
                 continue
+            if rollout_fd is not None and not sync:
+                # Keep the service lease through the future and any detached worker it waits for.
+                fd = os.dup(rollout_fd)
+                fut.add_done_callback(lambda _, retained_fd=fd: os.close(retained_fd))
             _all_futures.append(fut)
             if not sync:
                 _results.append(True)  # optimistically counted

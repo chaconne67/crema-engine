@@ -1269,6 +1269,30 @@ class TestSteerRun:
         assert event["accepted"] is True
 
     @pytest.mark.asyncio
+    async def test_collaboration_steer_replay(self, adapter):
+        from gateway.platforms.api_server_runs import work_run_receipt
+        app = _create_runs_app(adapter)
+        agent = MagicMock()
+        agent.steer.return_value = True
+        adapter._active_run_agents["run_123"] = agent
+        initial = adapter._set_run_status("run_123", "running", session_id="review-chat")
+        _claim_run(adapter, "run_123")
+        adapter._run_idempotency_store.reserve(adapter._run_owners["run_123"], "krema-work:one:first",
+                                               "fingerprint", "run_123", initial)
+        adapter._run_idempotency_ids.add("run_123")
+        delivery = {"input": "review the new section", "delivery_key": "krema-work:one:two"}
+        async with TestClient(TestServer(app)) as cli:
+            url = "/v1/runs/run_123/steer"
+            assert (await cli.post(url, json=delivery)).status == 200
+            assert (await cli.post(url, json=delivery)).status == 200
+            assert (await cli.post(url, json={**delivery, "input": "another request"})).status == 409
+        agent.steer.assert_called_once_with(delivery["input"])
+        work = dict(attempt_id="one", message_id="two", recipient="review-chat", mode="steer")
+        assert work_run_receipt(adapter, work)["run_id"] == "run_123"
+        assert work_run_receipt(adapter, {**work, "recipient": "another-chat"}) is None
+        assert work_run_receipt(adapter, {**work, "mode": "queue"}) is None
+
+    @pytest.mark.asyncio
     async def test_steer_nonexistent_run_returns_404(self, adapter):
         app = _create_runs_app(adapter)
         async with TestClient(TestServer(app)) as cli:
@@ -1847,6 +1871,59 @@ class TestRunIdempotency:
                     )
         assert rejected.status == 429
         assert accepted.status == 202
+
+    @pytest.mark.asyncio
+    async def test_desktop_restart_recovers_only_work_admissions(self, tmp_path, monkeypatch):
+        from gateway.platforms.api_server_runs import work_run_receipt
+        from crema_engine import create_local_api
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        db = tmp_path / "admissions.db"
+        work = {"recipient": "agent-client-worker", "attempt_id": "one", "message_id": "delivery"}
+        request = {"input": "status", "session_id": work["recipient"]}
+        keys = ["krema-work:one:delivery", "normal-delivery"]
+        ids = []
+        for index, token in enumerate(("first-install-token", "second-install-token", "third-install-token")):
+            if index == 2:
+                monkeypatch.setenv("HERMES_HOME", str(tmp_path / "other-home"))
+            adapter = create_local_api(token)
+            _use_idempotency_db(adapter, db)
+            headers = {"Authorization": f"Bearer {token}"}
+            fake_agent = MagicMock()
+            fake_agent.run_conversation.return_value = {"final_response": "correct answer"}
+            fake_agent.session_prompt_tokens = fake_agent.session_completion_tokens = fake_agent.session_total_tokens = 0
+            monkeypatch.setattr(adapter, "_create_agent", lambda *args, **kwargs: fake_agent)
+            async with TestClient(TestServer(_create_runs_app(adapter))) as cli:
+                if index == 2:
+                    assert (await cli.get("/v1/runs/" + ids[0], headers=headers)).status == 404
+                    assert work_run_receipt(adapter, work) is None
+                elif not ids:
+                    agent = MagicMock()
+                    agent.run_conversation.side_effect = [{"final_response": "work answer A"}, {"final_response": "normal answer B"}]
+                    agent.session_prompt_tokens = agent.session_completion_tokens = agent.session_total_tokens = 0
+                    with patch.object(adapter, "_create_agent", return_value=agent):
+                        for key in keys:
+                            response = await cli.post("/v1/runs", json=request, headers={**headers, "Idempotency-Key": key})
+                            assert response.status == 202
+                            run_id = (await response.json())["run_id"]
+                            ids.append(run_id)
+                            task = adapter._active_run_tasks.get(run_id)
+                            if task is not None:
+                                await asyncio.wait_for(task, 10)
+                        assert agent.run_conversation.call_count == 2
+                else:
+                    known = await cli.get("/v1/runs/" + ids[0], headers=headers)
+                    assert known.status == 200
+                    status = await known.json()
+                    assert (status["status"], status["output"]) == ("completed", "work answer A")
+                    replay = await cli.post("/v1/runs", json=request, headers={**headers, "Idempotency-Key": keys[0]})
+                    assert replay.status == 202
+                    replayed = await replay.json()
+                    assert replayed["run_id"] == ids[0] and replayed["replayed"] is True
+                    assert fake_agent.run_conversation.call_count == 0
+                    assert (await cli.get("/v1/runs/" + ids[0], headers=headers)).status == 200
+                    assert (await cli.get("/v1/runs/" + ids[1], headers=headers)).status == 404
+                    assert work_run_receipt(adapter, work)["run_id"] == ids[0]
+                    assert work_run_receipt(adapter, {**work, "recipient": "other"}) is None
 
     @pytest.mark.asyncio
     async def test_sequential_duplicate_reuses_original(self, adapter, tmp_path):

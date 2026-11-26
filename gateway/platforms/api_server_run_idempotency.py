@@ -66,6 +66,7 @@ class RunIdempotencyStore:
     def durable(self) -> bool:
         """Whether reservations survive this process."""
         return self._db_path is not None
+
     def __init__(self, db_path: str | None = None):
         if db_path is None:
             try:
@@ -214,6 +215,19 @@ class RunIdempotencyStore:
             if terminal:
                 self._conn.execute(
                     "DELETE FROM run_idempotency WHERE scope=? AND idempotency_key=?", (stale_scope, stale_key))
+
+    def status_for_key(self, scope: str, key: str, *, include_steer: bool = False) -> dict[str, Any] | None:
+        """Recover a work admission after its caller lost the run ID."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT run_id, status_json, owner_pid, owner_started, updated_at "
+                "FROM run_idempotency WHERE scope=? AND idempotency_key=?", (scope, key)).fetchone()
+            if row is None and include_steer:
+                row = self._conn.execute(
+                    "SELECT run_id, status_json, owner_pid, owner_started, updated_at FROM run_idempotency "
+                    "WHERE scope=? AND EXISTS (SELECT 1 FROM json_each(status_json, '$.steer_receipts') "
+                    "WHERE key=?)", (scope, key)).fetchone()
+        return _record(*row) if row else None
 
     def status_for_run(self, scope: str, run_id: str, *, retention_until: float = 0) -> dict[str, Any] | None:
         """Load one durable run status inside its authenticated scope."""

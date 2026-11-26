@@ -495,6 +495,33 @@ def test_a_started_chat_gets_the_model_and_reasoning_its_starter_gives(api, side
     assert "model" not in plain and "reasoning" not in plain
 
 
+def test_collaborative_start_persists_the_first_instruction_as_work(api, new_ids, monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    turns.set_chats([{"id": "a", "session": A, "title": "기획", "project": "회사",
+                      "project_id": "project-1", "collaboration": 1}])
+    turns.set_models([{"model": "gpt-6-luna", "provider": "openai-codex"}])
+    started = turns.start(A, "자료 조사", "자료를 모아 주세요", "gpt-6-luna")
+    [recipient_row] = [row for row in turns.state()["messages"] if any(
+        item.get("work", {}).get("direction") == "inbound" for item in row["items"])]
+    [incoming] = [item for item in recipient_row["items"]
+                  if item.get("work", {}).get("direction") == "inbound"]
+    work = incoming["work"]
+    assert work["kind"] == "request" and work["text"] == "자료를 모아 주세요"
+    assert work["start"]["model"] == "gpt-6-luna"
+    assert work["start"]["project_id"] == "project-1"
+    assert work["recipient"] == recipient_row["session_id"]
+    assert started["number"] == work["recipient"].removeprefix(turns.CHAT_PREFIX)[:8]
+
+
+def test_server_without_collaboration_capability_does_not_store_chat_flag(api, monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(turns, "_collaboration_enabled", lambda: False)
+    turns.set_chats([{"id": "a", "session": A, "title": "기획", "project": "회사",
+                      "project_id": "project-1", "collaboration": 1}])
+    [row] = turns._directory()
+    assert "collaboration" not in row
+
+
 def test_chats_work_along_the_chain_of_command(api, sidebar, new_ids):
     # 주인님 2026-10-31: a chat another chat started reports to that chat alone, and once the work it sent on is
     # finished too; the top chat hears the result through the chat between, never from below it.

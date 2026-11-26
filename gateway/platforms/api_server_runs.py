@@ -349,7 +349,7 @@ def _set_run_status(self, run_id: str, status: str, **fields: Any) -> dict[str, 
         status != previous_status
         or status in TERMINAL_STATUSES
         or bool(field_names & {
-            "output", "error", "usage", "pending_steer", "session_id", "shutdown_requested_at"}))
+            "output", "error", "usage", "pending_steer", "steer_receipts", "session_id", "shutdown_requested_at"}))
     if run_id in self._run_idempotency_ids and should_persist:
         try:
             # The question is live control state, just like the waiter that can accept its answer.
@@ -455,9 +455,69 @@ def _run_idempotency_scope(self, request: web.Request, *, _api_server) -> str:
         claims = room_run_claims(self, request, permission=_room_permission_for(request))
         _remember_room_retention(request, claims)
         return room_run_scope(claims)
+    return _credential_scope(self, _api_server)
+
+
+def _credential_scope(self, _api_server) -> str:
     parts = (_api_server._api_request_profile.get() or "default",
              self._expected_api_key() or "unauthenticated-test-listener")
     return hashlib.sha256("\0".join(map(str, parts)).encode()).hexdigest()
+
+
+def _local_work_scope(api):
+    home = getattr(api, "_crema_local_work_home", None)
+    if isinstance(home, str) and home:
+        return hashlib.sha256(f"crema-desktop-work\0{home}".encode()).hexdigest()
+    return None
+
+
+def work_run_receipt(api, work) -> dict[str, Any] | None:
+    """Resolve only this delivery in the current authenticated account's run store."""
+    from gateway.platforms import api_server
+    if not api:
+        return None
+    key = f"krema-work:{work['attempt_id']}:{work['message_id']}"
+    scope = _local_work_scope(api) or _credential_scope(api, api_server)
+    record = api._run_idempotency_store.status_for_key(scope, key, include_steer=work.get("mode") == "steer")
+    if not record or record["status"].get("session_id") != work["recipient"]:
+        return None
+    status = dict(record["status"])
+    status["run_id"] = record["run_id"]
+    return status
+
+
+async def stop_run(self, run_id: str, status: dict[str, Any], agent, task, *, _api_server) -> dict[str, Any] | None:
+    """Apply the normal authenticated /stop behavior after the caller verifies run ownership."""
+    # Live Bot Chat turns are controlled by the local task below. All other authority-owned runs
+    # use the authority's admission/generation checks, exactly as the HTTP stop route does.
+    if (getattr(getattr(self, "gateway_runner", None), "session_authority", None) is not None
+            and not (task is not None and status.get("delivery_id"))):
+        from gateway.platforms.api_server_authority_runs import stop_run as stop_authority_run
+        return await stop_authority_run(self, run_id)
+    if status.get("status") in TERMINAL_STATUSES:
+        return status
+    if agent is None and task is None:
+        return None
+    self._set_run_status(run_id, "stopping", last_event="run.stopping")
+    self._stopping_run_ids.add(run_id)
+    if agent is not None:
+        with suppress(Exception):
+            _api_server.request_hard_interrupt(agent, "Stop requested via API")
+        _api_server._reap_disconnected_agent_processes(agent, source="api_server_run_stop")
+    return {"run_id": run_id, "status": "stopping"}
+
+
+async def stop_work_run(self, work: dict, *, _api_server) -> dict[str, Any] | None:
+    """Stop only the run proven by one collaboration delivery receipt."""
+    receipt = work_run_receipt(self, work)
+    run_id = str(work.get("run_id") or "")
+    if (not receipt or not receipt.get("run_id") or str(receipt["run_id"]) != run_id
+            or str(receipt.get("session_id") or "") != str(work.get("recipient") or "")):
+        return None
+    status = dict(self._run_statuses.get(run_id) or receipt)
+    agent = self._active_run_agents.get(run_id)
+    task = self._active_run_tasks.get(run_id)
+    return await stop_run(self, run_id, status, agent, task, _api_server=_api_server)
 
 
 def room_run_scope(claims: dict[str, Any]) -> str:
@@ -515,6 +575,8 @@ def _durable_run_status(self, request: web.Request, run_id: str) -> dict[str, An
     scope = self._run_idempotency_scope(request)
     record = self._run_idempotency_store.status_for_run(
         scope, run_id, retention_until=_room_retention_until(request))
+    if record is None and not self._room_grant_token(request) and (work_scope := _local_work_scope(self)):
+        record = self._run_idempotency_store.status_for_run(work_scope, run_id)
     if record is None:
         return None
     status = dict(record["status"])
@@ -752,7 +814,10 @@ def _run_idempotency_identity(self, request, body, gateway_session_key, idempote
     """``(principal scope, request fingerprint)`` for a keyed POST /v1/runs; ``("", "")`` unkeyed."""
     if not idempotency_key:
         return "", ""
-    return self._run_idempotency_scope(request), hashlib.sha256(json.dumps(
+    scope = self._run_idempotency_scope(request)
+    if idempotency_key.startswith("krema-work:") and not self._room_grant_token(request):
+        scope = _local_work_scope(self) or scope
+    return scope, hashlib.sha256(json.dumps(
         {"body": body, "gateway_session_key": gateway_session_key or ""},
         sort_keys=True, separators=(",", ":"), ensure_ascii=False,
     ).encode()).hexdigest()
@@ -833,6 +898,9 @@ async def _handle_runs(self, request: web.Request, *, _api_server) -> web.Respon
         return _json_error(
             _openai_error, "Idempotency-Key must be 1-255 visible ASCII characters",
             code="invalid_idempotency_key", status=400)
+    if idempotency_key.startswith("krema-work:") and not self._run_idempotency_store.durable:
+        return _json_error(_openai_error, "Work admission requires durable storage",
+                           code="collab_unconfirmed", status=503)
     idempotency_scope, idempotency_fingerprint = _run_idempotency_identity(
         self, request, body, gateway_session_key, idempotency_key)
     raw_input = body.get("input")
@@ -1504,6 +1572,9 @@ def _request_owns_run(self, request: web.Request, run_id: str) -> bool:
     # would make the boundary allow-all (#93689).
     if self._run_idempotency_store.owns_run(scope, run_id):
         return True
+    if not self._room_grant_token(request) and (work_scope := _local_work_scope(self)):
+        if self._run_idempotency_store.owns_run(work_scope, run_id):
+            return True
     from gateway.session_api_turn import owns_api_run
     return owns_api_run(self, run_id, scope)
 
@@ -1782,6 +1853,35 @@ async def _handle_steer_run(self, request: web.Request, *, _api_server) -> web.R
         self, request, _api_server=_api_server, permission=None, active_fallback=False)
     if err is not None:
         return err
+    body, err = await self._read_json_body(request)
+    if err:
+        return err
+    raw_text = body.get("input") or body.get("message") or body.get("text") or ""
+    steer_text = _api_server._normalize_chat_content(raw_text).strip()
+    if not steer_text:
+        return _json_error(
+            _openai_error, "Missing non-empty steer text; expected 'input', 'message', or 'text'.",
+            code="invalid_steer_input", status=400)
+    delivery_key = body.get("delivery_key")
+    if delivery_key is not None:
+        if not isinstance(delivery_key, str) or not re.fullmatch(r"krema-work:[A-Za-z0-9_-]{1,120}:[A-Za-z0-9_-]{1,120}", delivery_key):
+            return _json_error(_openai_error, "Invalid work delivery key", status=400)
+        fingerprint = hashlib.sha256(steer_text.encode()).hexdigest()
+        receipts = self._run_statuses.get(run_id, status).get("steer_receipts", {})
+        previous = receipts.get(delivery_key)
+        if previous is not None:
+            if previous != fingerprint:
+                return _json_error(_openai_error, "Delivery was already used with different input", status=409)
+            return web.json_response({"object": "hermes.run.steer", "run_id": run_id, "accepted": True})
+
+    def delivered():
+        if delivery_key is not None:
+            # A run's active agent is owned by this process. There is no await between its
+            # steer call and this receipt, so concurrent reads cannot inject the same input.
+            self._set_run_status(run_id, "running", steer_receipts={**receipts, delivery_key: fingerprint})
+        _mark_run_event(self, run_id, "run.steered", accepted=True)
+        return web.json_response({"object": "hermes.run.steer", "run_id": run_id, "accepted": True})
+
     owned = None
     if getattr(self.gateway_runner, 'session_authority', None) is not None:
         from gateway.platforms.api_server_authority_runs import run_admission
@@ -1792,15 +1892,6 @@ async def _handle_steer_run(self, request: web.Request, *, _api_server) -> web.R
     # agent ref) is what rejects stop-then-steer.
     if status.get("status") != "running" or (owned is None and not hasattr(agent, "steer")):
         return _steer_refused(_openai_error, run_id)
-    body, err = await self._read_json_body(request)
-    if err:
-        return err
-    raw_text = body.get("input") or body.get("message") or body.get("text") or ""
-    steer_text = _api_server._normalize_chat_content(raw_text).strip()
-    if not steer_text:
-        return _json_error(
-            _openai_error, "Missing non-empty steer text; expected 'input', 'message', or 'text'.",
-            code="invalid_steer_input", status=400)
     if owned is not None:
         from gateway.session_contract import SessionRef
         authority, row = owned
@@ -1815,8 +1906,7 @@ async def _handle_steer_run(self, request: web.Request, *, _api_server) -> web.R
         if not latched and not hasattr(agent, "steer"):
             return _steer_refused(_openai_error, run_id)
         if latched:
-            _mark_run_event(self, run_id, "run.steered", accepted=True)
-            return web.json_response({"object": "hermes.run.steer", "run_id": run_id, "accepted": True})
+            return delivered()
     try:
         accepted = bool(agent.steer(steer_text))
     except Exception as exc:
@@ -1825,8 +1915,7 @@ async def _handle_steer_run(self, request: web.Request, *, _api_server) -> web.R
     if not accepted:
         return _json_error(
             _openai_error, f"Run did not accept steer text: {run_id}", code="steer_not_accepted", status=409)
-    _mark_run_event(self, run_id, "run.steered", accepted=True)
-    return web.json_response({"object": "hermes.run.steer", "run_id": run_id, "accepted": True})
+    return delivered()
 
 
 async def _handle_stop_run(self, request: web.Request, *, _api_server) -> web.Response:
@@ -1836,30 +1925,16 @@ async def _handle_stop_run(self, request: web.Request, *, _api_server) -> web.Re
         self, request, _api_server=_api_server, permission="stop", active_fallback=True)
     if err is not None:
         return err
-    # A run whose turn a live Bot Chat owns (``_execute_run_via_live_owner``) is not an API
-    # admission: its stop is the legacy in-process task cancel below, never ``stop_run``.
-    if (getattr(self.gateway_runner, 'session_authority', None) is not None
-            and not (task is not None and status.get("delivery_id"))):
-        from gateway.platforms.api_server_authority_runs import stop_run, store_error_response
-        try:
-            return web.json_response(await stop_run(self, run_id))
-        except AuthorityRefusal as exc:
-            return store_error_response(_openai_error, exc)
-    if status.get("status") in TERMINAL_STATUSES:
-        return web.json_response(status)
-    if agent is None and task is None:
+    try:
+        result = await stop_run(self, run_id, status, agent, task, _api_server=_api_server)
+    except AuthorityRefusal as exc:
+        from gateway.platforms.api_server_authority_runs import store_error_response
+        return store_error_response(_openai_error, exc)
+    if result is None:
         return _json_error(
             _openai_error, f"Run is not active in this gateway process: {run_id}",
             code="run_not_active", status=409)
-    self._set_run_status(run_id, "stopping", last_event="run.stopping")
-    self._stopping_run_ids.add(run_id)
-    if agent is not None:
-        with suppress(Exception):
-            _api_server.request_hard_interrupt(agent, "Stop requested via API")
-        # Reap only this run's background processes (epoch-gated inside, so a concurrent
-        # run on the same session_id keeps its own); no-op if the run already finished.
-        _api_server._reap_disconnected_agent_processes(agent, source="api_server_run_stop")
-    return web.json_response({"run_id": run_id, "status": "stopping"})
+    return web.json_response(result)
 
 
 async def _handle_resolve_unknown_run(

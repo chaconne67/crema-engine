@@ -23,6 +23,55 @@ from pathlib import Path
 SIGN_IN_RETURN = "/api/mcp/oauth/callback/{server_name:path}"
 
 
+def install_turn_collaboration_route(settings) -> None:
+    """Expose work lifecycle actions to the PC app; user grant changes stay server-authenticated."""
+    from fastapi import HTTPException
+    from agent import crema_file_turns
+
+    @settings.post("/api/crema/turns/collab")
+    async def turn_collaboration(body: dict):
+        action = body.get("action")
+        if isinstance(action, str) and action in {"grant", "revoke"}:
+            raise HTTPException(status_code=403, detail="only a directly authenticated user can change collaboration grants")
+        if not isinstance(action, str) or action not in {"claim", "validate", "accepted", "report"}:
+            raise HTTPException(status_code=400, detail="unsupported collaboration action")
+        try:
+            return await asyncio.to_thread(crema_file_turns.collaborate, body, trusted_user=False)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def install_user_collaboration_route(settings, consent_token: str) -> None:
+    """Accept grant changes only from the native UI's one-run consent capability."""
+    from fastapi import HTTPException, Request
+    from agent import crema_file_turns
+
+    @settings.post("/api/crema/turns/user-collab")
+    async def user_collaboration(request: Request, body: dict):
+        given = request.headers.get("X-Crema-Collaboration-Consent", "")
+        if not consent_token or not hmac.compare_digest(given, consent_token):
+            raise HTTPException(status_code=403, detail="native user confirmation is required")
+        action = body.get("action")
+        required = {"action", "session_id", "peer_session_id", "project_id", "message_id"}
+        fields = set(body)
+        if not isinstance(action, str) or action not in {"grant", "revoke"}:
+            raise HTTPException(status_code=400, detail="only grant and revoke are accepted here")
+        if (not required <= fields or fields - (required | {"request_id"})
+                or not all(isinstance(body.get(key), str) and body[key] and "\0" not in body[key]
+                           for key in required - {"action"})
+                or "request_id" in body and (not isinstance(body["request_id"], str)
+                                              or not body["request_id"] or "\0" in body["request_id"])):
+            raise HTTPException(status_code=400, detail="collaboration assignment fields are invalid")
+        try:
+            return await asyncio.to_thread(crema_file_turns.collaborate, body, trusted_user=True)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 # What the Crema app itself sets when it starts the engine (src-tauri/src/lib.rs).
 APP_SET = frozenset({"HERMES_HOME", "HERMES_DASHBOARD_SESSION_TOKEN", "HERMES_FTS5_CJK_SO"})
 
@@ -55,7 +104,18 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
+def create_local_api(token):
+    from gateway.config import PlatformConfig
+    from gateway.platforms.api_server import APIServerAdapter
+
+    api = APIServerAdapter(PlatformConfig(enabled=True, extra={"key": token, "host": "127.0.0.1", "port": free_port()}))
+    api._crema_local_work_home = str(Path(os.environ["HERMES_HOME"]).resolve())
+    return api
+
+
 async def main() -> None:
+    # Rust passes a one-run user-confirmation capability. Remove it before startup hooks can spawn children.
+    native_consent_token = os.environ.pop("CREMA_COLLAB_CONSENT_TOKEN", "")
     token = os.environ.get("HERMES_DASHBOARD_SESSION_TOKEN", "")
     if len(token) < 16:
         sys.exit("HERMES_DASHBOARD_SESSION_TOKEN is missing or too short")
@@ -83,10 +143,7 @@ async def main() -> None:
     except Exception:
         logging.getLogger(__name__).warning("syncing the built-in skills failed", exc_info=True)
 
-    from gateway.config import PlatformConfig
-    from gateway.platforms.api_server import APIServerAdapter
-
-    api = APIServerAdapter(PlatformConfig(enabled=True, extra={"key": token, "host": "127.0.0.1", "port": free_port()}))
+    api = create_local_api(token)
     if not await api.connect():
         sys.exit("the run API did not start")
     from agent import crema_file_turns
@@ -209,6 +266,9 @@ async def main() -> None:
     async def turns():
         await asyncio.to_thread(crema_file_turns.settle)
         return await asyncio.to_thread(crema_file_turns.state)
+
+    install_turn_collaboration_route(settings)
+    install_user_collaboration_route(settings, native_consent_token)
 
     @settings.post("/api/crema/turns/woken")
     async def turns_woken(body: dict):

@@ -586,6 +586,7 @@ def before_tool(tool_name: str = "", args: Optional[dict] = None, session_id: st
 
 def _turn_for(path: str, session_id: str, tool_name: str, args: dict) -> Optional[str]:
     """None when this chat may write ``path`` now; otherwise why it waits (also recorded on the board)."""
+    from agent.crema_work_contacts import ask_file_holder
     conn = _board()
     try:
         for holder in _holders(conn, path, session_id):
@@ -599,6 +600,9 @@ def _turn_for(path: str, session_id: str, tool_name: str, args: dict) -> Optiona
                 _note(conn, holder.id, f"[Crema] The chat '{_title(session_id)}' went on changing {path}, which this "
                                        "chat changed before. Read it again before changing it.")
                 continue
+            inquiry = ask_file_holder(conn, me, holder, path)
+            if inquiry and inquiry.get("status") != "completed":
+                return _wait(conn, me, holder, path, "Waiting for the file holder's answer.", ask=False, inquiry=inquiry)
             try:
                 verdict = judge(conn, holder, session_id, path, tool_name, args)
             except JudgeError as exc:
@@ -626,13 +630,18 @@ def _turn_for(path: str, session_id: str, tool_name: str, args: dict) -> Optiona
         conn.close()
 
 
-def _wait(conn, me, holder, path: str, reason: str, *, ask: bool) -> str:
+def _wait(conn, me, holder, path: str, reason: str, *, ask: bool, inquiry=None) -> str:
+    from agent.crema_work_contacts import ask_file_holder
+    contacted = inquiry or ask_file_holder(conn, me, holder, path)
     _add_event(conn, me.id, "crema_waiting", {"holder": holder.id, "holder_session": holder.session_id,
-                                              "path": path, "reason": reason, "ask": ask})
+                                              "path": path, "reason": reason, "ask": ask,
+                                              **({"file_question": contacted["message_id"]} if contacted else {})})
     other = _title(holder.session_id)
     why = f"the user is asked whether this chat or '{other}' changes it first" if ask else f"the chat '{other}' changes it first"
     return " ".join(part for part in (
-        f"Not written: {path} — {why}.", reason, "Crema starts this chat again when it is this chat's turn.",
+        f"Not written: {path} — {why}.", reason,
+        f"Crema asked '{other}' what it is changing and when it expects to finish." if contacted else "",
+        "Crema starts this chat again when it is this chat's turn.",
         f"Until then do not change {path} in any other way (terminal, scripts). Finish other work that does not "
         f"touch it, tell the user this chat is waiting for '{other}', and end your turn.") if part)
 
@@ -794,14 +803,33 @@ def set_chats(chats: list) -> None:
     """The app's sidebar chats that can get messages: id, engine session, title, project, and the chat's role and the
     chat that started it when it has them; and the archived chats another chat started, which only that chat can
     send work to again (주인님 2026-11-03)."""
+    collaboration_enabled = _collaboration_enabled()
     rows = [{"id": str(c["id"]), "session": str(c["session"]), "title": str(c.get("title") or ""),
              "project": str(c.get("project") or ""),
+             **({"project_id": str(c["project_id"])} if c.get("project_id") else {}),
+             **({"collaboration": 1} if collaboration_enabled and c.get("collaboration") == 1 else {}),
              **{key: str(c[key]) for key in ("role", "parent") if c.get(key)},
              **({"archived": True} if c.get("archived") else {})}
             for c in chats if c.get("id") and c.get("session")]
     # A chat just started here (``start``) that the app has not made yet stays: its starter waits for it.
     known = {row["id"] for row in rows}
     _write_json(CHATS_FILE, rows + [row for row in _directory() if row.get("pending") and row["id"] not in known])
+
+
+def _collaboration_enabled() -> bool:
+    """Server profiles require the explicit capability; standalone Crema keeps the shared PC feature."""
+    try:
+        import engine_home
+    except ModuleNotFoundError as exc:
+        if exc.name == "engine_home":
+            return True
+        raise
+    try:
+        return bool(engine_home.profile_has(engine_home.HOME, "session_collaboration"))
+    except Exception:
+        # A server profile with unreadable policy must fail closed.
+        logger.exception("Unable to read server collaboration capability")
+        return False
 
 
 def set_models(rows: list) -> None:
@@ -1000,13 +1028,27 @@ def start(session_id: str, role: str, message: str, model: str = "", reasoning: 
         return {"error": "Only a chat in the sidebar (not archived) can start another chat."}
     chat = str(uuid.uuid4())
     # Known at once, so the message can be left for it before the app makes it.
-    _write_json(CHATS_FILE, [*_read_json(CHATS_FILE), {"id": chat, "session": CHAT_PREFIX + chat, "title": "", "project": mine["project"],
-                                     "role": role, "parent": mine["id"], "pending": True}])
+    collaborative_start = mine.get("collaboration") == 1 and bool(mine.get("project_id"))
+    pending = {"id": chat, "session": CHAT_PREFIX + chat, "title": "", "project": mine["project"],
+               "role": role, "parent": mine["id"], "pending": True}
+    if collaborative_start:
+        pending.update(collaboration=1, project_id=mine["project_id"])
+    _write_json(CHATS_FILE, [*_read_json(CHATS_FILE), pending])
     chosen = {key: value for key, value in (("model", model), ("reasoning", reasoning)) if value}
-    _, problem = _leave(session_id, chat, message, MESSAGE_HEAD, start={"id": chat, "role": role, "parent": mine["id"],
-                                                                       **chosen, **({"provider": provider} if model else {})})
-    if problem:
-        return {"error": problem}
+    start = {"id": chat, "role": role, "parent": mine["id"], **chosen,
+             **({"provider": provider} if model else {})}
+    if collaborative_start:
+        from agent.crema_collaboration import create
+        result = create(session_id, chat, message, model=model,
+                        start={**start, "project_id": mine["project_id"], "collaboration": 1})
+        if "error" in result:
+            rows = [row for row in _read_json(CHATS_FILE) if row.get("id") != chat]
+            _write_json(CHATS_FILE, rows)
+            return result
+    else:
+        _, problem = _leave(session_id, chat, message, MESSAGE_HEAD, start=start)
+        if problem:
+            return {"error": problem}
     return {"started": role, "number": chat[:8], **chosen,
             "delivery": "The app makes the chat under this one and it starts with the message; Crema tells this "
                         "chat when it finishes."}
@@ -1113,8 +1155,11 @@ def _still_doing(conn, sender: str, skip: set) -> list[dict]:
     return rows
 
 
-def read(session_id: str, to: str) -> dict:
+def read(session_id: str, to: str, request_id: str = "") -> dict:
     """The latest reply of chat ``to``, for this chat to use what that chat found."""
+    if request_id:
+        from agent.crema_collaboration import read_request
+        return read_request(session_id, to, request_id)
     _, target, problem = _addressed(session_id, to)
     if problem:
         return {"error": problem}
@@ -1129,10 +1174,11 @@ def read(session_id: str, to: str) -> dict:
 
 
 def _pending(conn, session_id: str) -> list:
-    """The chat's messages from other chats that the app has not handed over yet, oldest first."""
+    """Legacy messages not handed over; work records have their own claim lifecycle."""
     events = _session_events(conn, session_id)
     done = _upto(events, "crema_messages_handed")
-    return sorted((e for e in events if e.kind == "crema_note" and e.id > done and (e.payload or {}).get("handed")),
+    return sorted((e for e in events if e.kind == "crema_note" and e.id > done and (e.payload or {}).get("handed")
+                   and not (e.payload or {}).get("work")),
                   key=lambda e: e.id)
 
 
@@ -1174,6 +1220,8 @@ def settle() -> None:
 def state() -> dict:
     """Chats that wait (and why), chats the user must order, chats whose turn came, and the messages the app is to
     hand over."""
+    from agent.crema_collaboration import reconcile_stopping
+    reconcile_stopping()
     conn = _board()
     try:
         kb = _kb()
@@ -1191,6 +1239,14 @@ def state() -> dict:
             holder = info.get("holder") or ""
             answered = _last(events, ("crema_waiting", "crema_released")).kind == "crema_released" or any(
                 _linked(conn, a, b) for a, b in ((task.id, holder), (holder, task.id)))
+            if info.get("file_question") and not answered:
+                holder_task = kb.get_task(conn, holder)
+                records = [(event.payload or {}).get("work") or {} for event in events if event.kind == "crema_note"]
+                inquiry = next((work for work in reversed(records) if work.get("message_id") == info["file_question"]), {})
+                if holder_task and holder_task.status not in _OPEN and _holds(conn, holder_task, info["path"]) and inquiry.get("status") != "completed":
+                    target = ask if inquiry.get("status") in {"failed", "cancelled", "check_required"} else waiting
+                    target.append(info)
+                    continue
             if info.get("ask") and not answered:
                 ask.append(info)
             elif ahead:  # the chat it waits for now (the first holder may have finished meanwhile)
@@ -1202,20 +1258,51 @@ def state() -> dict:
                 wake.append(info)
         # A chat that waits for a file gets its messages too: one may be what lets it go on (2026-10-30, a message
         # to work in another file was held until the user let the chat go).
-        for session in dict.fromkeys(t.session_id for t in tasks if t.session_id):
+        active_rows = _directory()
+        archived_rows = [row for row in _directory(archived=True)
+                         if row.get("collaboration") == 1 and row.get("project_id")
+                         and any(parent["id"] == row.get("parent") and parent.get("collaboration") == 1
+                                 and parent.get("project_id") == row.get("project_id") for parent in active_rows)]
+        all_rows = [*active_rows, *archived_rows]
+        rows_by_session = {row["session"]: row for row in all_rows}
+        archived_by_session = {row["session"]: row for row in archived_rows}
+        collaboration_sessions = {row["session"] for row in all_rows
+                                  if row.get("collaboration") == 1 and row.get("project_id")}
+        sessions = [t.session_id for t in tasks if t.session_id]
+        sessions.extend(row["session"] for row in archived_rows)
+        for session in dict.fromkeys(sessions):
             from crema_heartbeat import active as heartbeat_active
             pending = [event for event in _pending(conn, session)
                        if not (ref := (event.payload.get("scheduled") or {}).get("heartbeat"))
                        or heartbeat_active(ref, session)]
-            if pending:
-                messages.append({"session_id": session, "upto": pending[-1].id, "items": [
+            all_events = _session_events(conn, session)
+            work_by_message = {}
+            for event in all_events:
+                work = (event.payload or {}).get("work")
+                if work and work.get("message_id"):
+                    work_by_message[work["message_id"]] = (event, work)
+            work_items = [{"work": {**work, "direction": work.get("direction") or
+                                     ("inbound" if work.get("recipient") == session else "outbound")},
+                           "from_chat": work.get("sender", ""),
+                           "from_title": _title(work.get("sender", "")), "text": work.get("text", ""),
+                           "prompt": work.get("text", "")}
+                          for _, work in work_by_message.values()
+                          if session in collaboration_sessions
+                          and session in {work.get("sender"), work.get("recipient")}
+                          and (session not in archived_by_session
+                               or (counterpart := work.get("sender") if work.get("recipient") == session
+                                   else work.get("recipient")) in rows_by_session
+                               and _works_with(archived_by_session[session], rows_by_session[counterpart]))]
+            if pending or work_items:
+                messages.append({"session_id": session, "upto": pending[-1].id if pending else _upto(all_events, "crema_messages_handed"),
+                                 "items": [
                     {"from_chat": e.payload.get("sender_chat", ""), "from_title": e.payload.get("sender_title", ""),
                      "from_project": e.payload.get("sender_project", ""), "text": e.payload["message"],
                      "prompt": e.payload["text"], **({"finished": True} if e.payload.get("finished") else {}),
                      **({"start": e.payload["start"]} if e.payload.get("start") else {}),
                      **({"scheduled": e.payload["scheduled"]} if e.payload.get("scheduled") else {}),
                      **({"close": e.payload["close"]} if e.payload.get("close") else {})}
-                    for e in pending]})
+                    for e in pending] + work_items})
         # ``messages`` only when there is something, so the shape stays what it was without them.
         return {"waiting": waiting, "ask": ask, "wake": wake, **({"messages": messages} if messages else {})}
     finally:
@@ -1267,6 +1354,12 @@ def handed(session_id: str, upto: int) -> None:
         _add_event(conn, _task_for(conn, session_id).id, "crema_messages_handed", {"upto": int(upto)})
     finally:
         conn.close()
+
+
+def collaborate(body: dict, *, trusted_user: bool = False) -> dict:
+    """The account-scoped app adapter for request, attempt and grant updates."""
+    from agent.crema_collaboration import collaborate as apply
+    return apply(body, trusted_user=trusted_user)
 
 
 def order(first_session: str, second_session: str) -> None:

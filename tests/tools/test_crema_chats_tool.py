@@ -35,3 +35,27 @@ def test_the_tool_lists_and_sends_through_the_registry(monkeypatch):
 
 def test_crema_offers_the_tool():
     assert "crema_chats" in resolve_toolset("hermes-api-server")
+
+
+def test_work_action_dispatches_request_ids_without_exposing_grant_actions(monkeypatch):
+    import tools.crema_chats_tool as tool
+    from agent import crema_collaboration
+
+    seen = {}
+
+    def create(session_id, to, message, **kwargs):
+        seen.update(session_id=session_id, to=to, message=message, **kwargs)
+        return {"ok": True, "work": {"request_id": kwargs["request_id"], "message_id": kwargs["message_id"]}}
+
+    monkeypatch.setattr(crema_collaboration, "create", create)
+    reply = json.loads(tool.crema_chats({"action": "work", "to": "b", "message": "확인",
+                                         "request_id": "r1", "attempt_id": "a1", "message_id": "m1",
+                                         "mode": "steer", "kind": "question"}, session_id=A))
+    assert reply == {"ok": True, "work": {"request_id": "r1", "message_id": "m1"}}
+    assert seen == {"session_id": A, "to": "b", "message": "확인", "mode": "steer", "kind": "question",
+                    "request_id": "r1", "attempt_id": "a1", "message_id": "m1", "model": "", "revision": None,
+                    "requirements": "", "parent_request_id": "", "target_request_id": "",
+                    "target_attempt_id": "", "target_message_id": ""}
+    actions = registry._tools["crema_chats"].schema["parameters"]["properties"]["action"]["enum"]
+    assert "grant" not in actions and "revoke" not in actions
+    assert "contacts" in actions and "work" in actions

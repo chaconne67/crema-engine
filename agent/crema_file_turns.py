@@ -15,6 +15,7 @@ wrote (the ``pre_tool_call`` hook):
 A refused write costs nothing while it waits. ``settle`` (on each ``GET /api/crema/turns`` from the
 app) completes the task of a chat that others wait on once it is not replying and has nothing
 uncommitted in its files; the board then promotes the waiting chats and the app starts them again.
+The chat holding the file can also hand it over uncommitted (``hand_over``), as the user can (``release``).
 Terminal commands are not refused (the files they touch are known only afterwards): in a Git folder
 the files of the chat's own folder whose content a command changed are recorded after it (not a file another chat
 holds whose own step ran meanwhile), and an overlap is told to both chats.
@@ -1206,8 +1207,15 @@ def settle() -> None:
                 events = kb.list_events(conn, task.id)
                 if not _last(events, ("crema_nudged",)):
                     _add_event(conn, task.id, "crema_nudged", {"files": dirty})
-                    _note(conn, task.id, "[Crema] Another chat waits for " + ", ".join(dirty) + ". When this chat's "
-                                         "work on them is finished, commit them so the other chat can go on.")
+                    rows = {row["session"]: row for row in _directory()}
+                    sessions = [kb.get_task(conn, c).session_id for c in waiting]
+                    who = ", ".join(f"'{_title(s)}'" + (f" (number {_number(rows[s])})" if s in rows else "")
+                                    for s in sessions)
+                    _note(conn, task.id, f"[Crema] The chat {who} waits for " + ", ".join(dirty) + ". When this "
+                                         "chat's work on them is finished, commit them so the other chat can go on. "
+                                         "If they stay uncommitted on purpose and this chat will not change them "
+                                         "again, hand them over with crema_chats (action hand_over, to: that "
+                                         "number) instead.")
                 continue
             commits = sorted({head.strip() for head in (_git(_folder(p), "rev-parse", "--short", "HEAD") for p in files) if head})
             kb.complete_task(conn, task.id, result=f"files: {', '.join(files) or '-'}; commits: {', '.join(commits) or '-'}",
@@ -1375,9 +1383,10 @@ def order(first_session: str, second_session: str) -> None:
         conn.close()
 
 
-def release(session_id: str) -> None:
+def release(session_id: str, holder_session: str = "") -> None:
     """The user lets the chat go on without waiting: its orders are removed and the files it waits for
-    are handed over to it."""
+    are handed over to it. With ``holder_session``, the chat holding the file hands it over (``hand_over``):
+    only that chat's order is removed, and its changes stay uncommitted for this chat to build on."""
     conn = _board()
     try:
         kb = _kb()
@@ -1386,13 +1395,36 @@ def release(session_id: str) -> None:
             return
         wait = _last(kb.list_events(conn, task.id), ("crema_waiting",))
         for parent in kb.parent_ids(conn, task.id):
-            kb.unlink_tasks(conn, parent, task.id)
+            if not holder_session or kb.get_task(conn, parent).session_id == holder_session:
+                kb.unlink_tasks(conn, parent, task.id)
         payload = (wait.payload or {}) if wait else {}
         holder = kb.get_task(conn, payload["holder"]) if payload.get("holder") else None
         if holder and _holds(conn, holder, payload["path"]):
             _add_event(conn, holder.id, "crema_let_go", _file_event(payload["path"], to=session_id))
-            _note(conn, holder.id, f"[Crema] The user let the chat '{_title(session_id)}' change {payload['path']} "
-                                   "without waiting. Read it again before changing it.")
+            if not holder_session:
+                _note(conn, holder.id, f"[Crema] The user let the chat '{_title(session_id)}' change "
+                                       f"{payload['path']} without waiting. Read it again before changing it.")
         _add_event(conn, task.id, "crema_released", {})
     finally:
         conn.close()
+
+
+def hand_over(session_id: str, to: str) -> dict:
+    """This chat lets chat ``to``, which waits for a file this chat changed, change it now, committed or not
+    (2026-11-27: a chat that kept its work uncommitted on purpose had no way to let a waiting chat go on)."""
+    me, target, problem = _addressed(session_id, to)
+    if problem:
+        return {"error": problem}
+    conn = _board()
+    try:
+        kb = _kb()
+        task = _open_task(conn, target["session"])
+        wait = _last(kb.list_events(conn, task.id), ("crema_waiting", "crema_woken", "crema_released")) if task else None
+    finally:
+        conn.close()
+    payload = (wait.payload or {}) if wait and wait.kind == "crema_waiting" else {}
+    if payload.get("holder_session") != me:
+        return {"error": f"'{target['title']}' is not waiting for a file this chat changed."}
+    release(target["session"], holder_session=me)
+    return {"handed_over": payload["path"], "to": target["title"],
+            "note": f"Do not change {payload['path']} again until '{target['title']}' is done with it."}

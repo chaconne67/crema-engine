@@ -702,6 +702,27 @@ def test_a_chat_waiting_for_a_file_gets_its_messages_at_once(api, judge, repo, s
     assert [w["session_id"] for w in state["waiting"]] == [B] and state["messages"][0]["session_id"] == B
 
 
+def test_the_chat_holding_a_file_hands_it_over_uncommitted(api, judge, repo, sidebar):
+    # 2026-11-27: a lead chat kept its work uncommitted on purpose and told the waiting chat in words that the file
+    # was its now; the order stood until a commit, so the waiting chat ended without finishing.
+    from tools.crema_chats_tool import crema_chats
+    report = repo.path / "report.py"
+    write(A, report, "v2\n")
+    api.replying(A)
+    judge.replies.append({"decision": "a_first", "reason": "A 먼저."})
+    assert write(B, report, "v3\n")
+    assert "not waiting for a file this chat changed" in json.loads(crema_chats({"action": "hand_over", "to": "b"}, session_id=C))["error"]
+    assert [w["session_id"] for w in turns.state()["waiting"]] == [B]
+    api.replying(A, False)
+    turns.settle()  # A stays uncommitted: it is told which chat waits, by the number hand_over takes
+    assert "'메일' (number b) waits for" in turns.notes_for_turn(session_id=A)["context"]
+    handed = json.loads(crema_chats({"action": "hand_over", "to": "b"}, session_id=A))
+    assert handed["to"] == "메일" and handed["handed_over"].endswith("report.py")
+    assert [w["session_id"] for w in turns.state()["wake"]] == [B]
+    assert write(B, report, "v3\n") is None
+    assert "let the chat" not in (turns.notes_for_turn(session_id=A) or {}).get("context", "")
+
+
 def test_read_gives_the_other_chats_latest_reply(api, sidebar, monkeypatch):
     conversation = [{"role": "user", "content": "요청"}, {"role": "assistant", "content": "첫 답"},
                     {"role": "user", "content": "또"}, {"role": "assistant", "content": "마지막 답"},

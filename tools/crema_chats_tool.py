@@ -48,8 +48,10 @@ def crema_chats(args: Dict[str, Any], session_id: str = "", **_: Any) -> str:
         result = crema_file_turns.read(session_id, args.get("to", ""), args.get("request_id", ""))
     elif action == "close":
         result = crema_file_turns.close(session_id, args.get("to", ""))
+    elif action == "hand_over":
+        result = crema_file_turns.hand_over(session_id, args.get("to", ""))
     else:
-        return tool_error("action must be list, models, contacts, send, work, start, read or close")
+        return tool_error("action must be list, models, contacts, send, work, start, read, close or hand_over")
     return tool_error(result["error"]) if "error" in result else json.dumps(result, ensure_ascii=False)
 
 
@@ -83,6 +85,10 @@ registry.register(
                            "read: the latest reply of the chat with that number, or the durable result for request_id. close: a chat this chat "
                            "started, with the chats it started, goes to the archive, where the user can still open "
                            "it; it must not be replying. Sending it work again brings it back out. "
+                           "hand_over: a chat (to) waits for a file this chat changed, and this chat will not change "
+                           "that file again: let that chat change it now, even if this chat's changes are not "
+                           "committed; telling it so in a message does not end its wait. Do not change that file "
+                           "again until that chat is done with it. "
                            "When work goes on from what a chat this chat started did (a fix, more of the same, the "
                            "next step on the same files or data), send it to that chat: it already knows that work, so "
                            "say only what is new. Start a chat for a new piece of work: when the user asks for one, "
@@ -100,8 +106,8 @@ registry.register(
                            "it. The user's own chats can work together. A delegated chat can contact its parent and the chats it starts; "
                            "a user grant can also connect it to another chat for the specified task.",
             "parameters": {"type": "object", "properties": {
-                "action": {"type": "string", "enum": ["list", "models", "contacts", "send", "work", "start", "read", "close"]},
-                "to": {"type": "string", "description": "The chat number from list. For work, also use a number returned by contacts when can_contact is true."},
+                "action": {"type": "string", "enum": ["list", "models", "contacts", "send", "work", "start", "read", "close", "hand_over"]},
+                "to": {"type": "string", "description": "The chat number from list. For work, also use a number returned by contacts when can_contact is true. hand_over: the chat that waits for this chat's file."},
                 "topic": {"type": "string", "description": "contacts: describe the overlapping work or decision area"},
                 "path": {"type": "string", "description": "contacts: identify a file whose current owner should be checked"},
                 "role": {"type": "string", "description": "start: the new chat's role, the part of the work it does, in the user's language, up to 20 characters (e.g. '자료 조사', 'c 담당')"},

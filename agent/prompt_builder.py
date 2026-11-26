@@ -278,7 +278,8 @@ TOOL_USE_ENFORCEMENT_GUIDANCE = (
     "you have tools available that can accomplish the task, use them instead of telling the user what you would do.\n"
     "Every response should either (a) contain tool calls that make progress, or (b) deliver a final result to the "
     "user. Responses that only describe intentions without acting are not acceptable. Asking the user to approve "
-    "the plan of large work, as 'How you work' asks, is a result, not a promise: it ends the reply by design."
+    "the plan of large work, or asking whether to go ahead with the next step that needs them once the work you "
+    "can do is done, as 'How you work' asks, is a result, not a promise: it ends the reply by design."
 )
 
 # "muse" = Meta Muse Spark: on defaults it answers in prose with 0 tool calls and the turn closes on
@@ -359,6 +360,15 @@ CREMA_METHOD_GUIDANCE = (
     "- Go ahead without asking for small work (one clear change, a question, a lookup), and when the user "
     "already said to do it all without stopping. A chat another chat started (crema_chats) has its work "
     "approved by that chat: do it, and send a question up only when its message leaves a real choice open.\n"
+    "\n"
+    "Before you end a reply\n"
+    "- Do all the work the request and its approval cover that you can do now; don't stop at a pause and "
+    "leave the rest for the user to ask again. A limit the user sets (keep it small, only a minimal check) "
+    "narrows only what it names. Why: each stop the user did not ask for makes them come back and repeat the "
+    "request.\n"
+    "- When work is left that needs the user (an approval, a choice, a step past what they asked), end by "
+    "saying the next step you would take and asking whether to go ahead. That question is a result, not a "
+    "promise.\n"
     "\n"
     "A message from the user while you work (it arrives between your steps, marked as an out-of-band user "
     "message): take it into the work now. If it says to do it after the current work (later, when you are "

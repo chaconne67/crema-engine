@@ -146,6 +146,28 @@ def test_each_feature_asks_only_its_permission_and_the_account_keeps_what_it_has
     assert [c[2] for c in FAKE.calls if c[1] == google.REVOKE] == [{"token": "1//refresh"}]
 
 
+def test_coming_back_in_a_browser_of_another_account_keeps_nothing_and_says_why(fake, tmp_path):
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    started = google.start("mail", "me@gmail.com", "http://127.0.0.1:5555/")
+    FAKE.consent = started["url"]
+    state = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(started["url"]).query))["state"]
+    other = set_hermes_home_override(tmp_path / "other")
+    try:
+        assert google.finish("code-1", state, "") == "other_account"
+        assert google.status(started["flow"]) == {"status": "failed", "reason": "expired"}  # not that account's
+        assert google.accounts() == []
+    finally:
+        reset_hermes_home_override(other)
+    assert FAKE.calls == []  # the code was never traded
+    assert google.status(started["flow"]) == {"status": "pending", "reason": "other_account", "address": "me@gmail.com",
+                                              "feature": "mail"}
+    assert google.accounts() == []
+    # The right browser can still finish it, and the reason goes.
+    assert google.finish("code-1", state, "") == "done"
+    assert google.status(started["flow"]) == {"status": "done", "address": "me@gmail.com", "feature": "mail"}
+
+
 def test_drive_alone_takes_the_account_that_allowed_it(fake):
     found, _ = fake
     found.allowed_by = "work@gmail.com"

@@ -301,7 +301,8 @@ def start(feature: str, address: str, base: str) -> Dict[str, str]:
 
 
 def status(flow_id: str) -> Dict[str, str]:
-    """pending, done (with the address) or failed (with why: denied, scopes, account, google, server)."""
+    """pending, done (with the address) or failed (with why: denied, scopes, account, google, server); pending with
+    reason other_account once Google came back in a browser signed in to another account of this server."""
     flow = _flows.get(flow_id)
     if flow is None or flow["home"] != _home() or time.time() - flow["at"] > FLOW_SECONDS:
         return {"status": "failed", "reason": "expired"}
@@ -311,13 +312,18 @@ def status(flow_id: str) -> Dict[str, str]:
 def finish(code: str, state: str, error: str) -> str:
     """Google came back: the flow whose state it carries is settled. Returns how it went, for the page shown."""
     with _lock:
-        flow = next((item for item in _flows.values() if item["status"] == "pending" and item["home"] == _home()
+        flow = next((item for item in _flows.values() if item["status"] == "pending"
                      and time.time() - item["at"] <= FLOW_SECONDS and hmac.compare_digest(item["state"], state or "")), None)
         if flow is None:
             return "unknown"
+        if flow["home"] != _home():
+            # Back in a browser signed in to another account of this server: that account must not take the
+            # permission (its code is never traded). The flow stays open for the right browser and tells why.
+            flow["reason"] = "other_account"
+            return "other_account"
         flow["status"] = "working"
     reason = "denied" if error else _trade(flow, code)
-    flow.update({"status": "failed", "reason": reason} if reason else {"status": "done"})
+    flow.update({"status": "failed", "reason": reason} if reason else {"status": "done", "reason": ""})
     if reason:
         from tools import crema_failures
 

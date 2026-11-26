@@ -31,6 +31,9 @@ class PendingControls:
                       'choices': choices}
             if data.get('pattern_key'):
                 prompt['pattern_key'] = data['pattern_key']  # Crema: the app titles mail and screen approvals by it
+            pc_task = data.get('pc_task')
+            if type(pc_task) is int and pc_task > 0:
+                prompt['pc_task'] = pc_task
             if 'edit' in data:
                 prompt['edit'] = deepcopy(data['edit'])
                 prompt['choices'] = ['once', 'deny']

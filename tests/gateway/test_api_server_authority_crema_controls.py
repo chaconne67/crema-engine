@@ -101,7 +101,8 @@ async def _run_event(client, path, name, headers):
 
 
 @pytest.mark.asyncio
-async def test_the_app_sees_and_answers_a_runs_approval_and_question(api, owner, monkeypatch):
+@pytest.mark.parametrize(("pc_approval", "choice"), [(False, "once"), (True, "once"), (True, "deny")])
+async def test_the_app_sees_and_answers_a_runs_approval_and_question(api, owner, monkeypatch, pc_approval, choice):
     """The whole path: ``POST /v1/runs`` → authority turn → the app-shaped events on the run's stream and poll →
     the app-shaped answers resolve the turn's real waiters."""
     import asyncio
@@ -111,6 +112,9 @@ async def test_the_app_sees_and_answers_a_runs_approval_and_question(api, owner,
     from tools import clarify_gateway
     from tools.approval_gateway_wait import _await_gateway_decision
     monkeypatch.setattr("tools.approval_context._get_approval_timeout", lambda: 10)
+    approval_data = ({"command": "PC 자료 가져오기", "description": "PC판 자료 사본", "pattern_key": "pc-task:42",
+                      "pc_task": 42, "allow_session": False, "allow_permanent": False} if pc_approval else
+                     {"command": "send_mail to=a@b.c", "description": "mail send", "pattern_key": "mail_send"})
     got = {}
 
     async def handle(event):
@@ -118,7 +122,7 @@ async def test_the_app_sees_and_answers_a_runs_approval_and_question(api, owner,
         live, generation = owner.sessions[sid], session_row(owner.persistence, sid)['runtime_generation']
         got["approval"] = await asyncio.to_thread(
             _await_gateway_decision, live.route, lambda data: owner.register_approval(sid, generation, live.route, data),
-            {"command": "send_mail to=a@b.c", "description": "mail send", "pattern_key": "mail_send"})
+            approval_data)
         entry = clarify_gateway.register(clarify_id="cq1", session_key="k", question="어느 쪽으로 할까요?",
                                          choices=["가 (Recommended)", "나"], multi_select=False)
         owner.register_clarify(sid, generation, entry)
@@ -134,10 +138,16 @@ async def test_the_app_sees_and_answers_a_runs_approval_and_question(api, owner,
         assert accepted.status == 202, await accepted.text()
         path = '/v1/runs/' + (await accepted.json())['run_id']
         approval = await asyncio.wait_for(_run_event(client, path, "approval.request", _AUTH_HEADERS), 10)
-        assert approval["pattern_key"] == "mail_send" and approval["request_id"], approval
+        assert approval["pattern_key"] == approval_data["pattern_key"] and approval["request_id"], approval
         polled = await (await client.get(path, headers=_AUTH_HEADERS)).json()
         assert polled["status"] == "waiting_for_approval" and polled["approval"]["request_id"] == approval["request_id"]
-        answered = await client.post(path + "/approval", json={"choice": "once", "request_id": approval["request_id"]},
+        for card in (approval, polled["approval"]):
+            if pc_approval:
+                assert card.get("pc_task") == 42
+                assert card["choices"] == ["once", "deny"]
+            else:
+                assert "pc_task" not in card
+        answered = await client.post(path + "/approval", json={"choice": choice, "request_id": approval["request_id"]},
                                      headers=_AUTH_HEADERS)
         assert answered.status == 200, await answered.text()
         question = await asyncio.wait_for(_run_event(client, path, "clarify.request", _AUTH_HEADERS), 10)
@@ -151,7 +161,7 @@ async def test_the_app_sees_and_answers_a_runs_approval_and_question(api, owner,
             if "answer" in got:
                 break
             await asyncio.sleep(0.05)
-        assert got["approval"]["choice"] == "once" and got["answer"] == "나"
+        assert got["approval"]["choice"] == choice and got["answer"] == "나"
     finally:
         for task in list(api._active_run_tasks.values()):
             task.cancel()

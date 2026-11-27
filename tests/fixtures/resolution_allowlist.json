@@ -647,12 +647,6 @@
     "reason": "only asks whether the caller's bare git is on PATH; when it is not (Desktop on a Windows install whose only git is install.ps1's PM-staged copy) it defers to update_pause_record._git_executable, the updater's own resolution"
   },
   {
-    "path": "crema_change_principles/scripts/reviewer.py",
-    "symbol": "program",
-    "kind": "bare_which",
-    "reason": "The change reviewer uses the operator's installed review CLI and its subscription login."
-  },
-  {
     "path": "tools/crema_browser_install.py",
     "symbol": "_agent_browser_candidates",
     "kind": "bare_which",

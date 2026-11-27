@@ -26,9 +26,6 @@ ENGINE = Path(__file__).resolve().parents[1]
 def test_change_review_uses_the_active_chat_connection(monkeypatch, provider, mode):
     from types import SimpleNamespace
     from agent import auxiliary_client as aux
-    from crema_change_principles.scripts import reviewer
-
-    monkeypatch.setitem(__import__("sys").modules, "reviewer", reviewer)
     from crema_change_principles.scripts import crema_gate
 
     key, base, model = "fixture-active-key", "https://chat.invalid/v1", "chat-model"

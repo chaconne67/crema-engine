@@ -5,7 +5,6 @@ import sys
 from functools import partial
 from pathlib import Path
 
-import reviewer
 
 
 def ask(runtime, app, model, settings, system, user, schema, seconds):
@@ -44,9 +43,20 @@ def ask(runtime, app, model, settings, system, user, schema, seconds):
 
 def main():
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    scripts = Path(__file__).resolve().parent
+    if not (scripts / "change-principles.py").is_file():
+        # A product build supplies the policy beside this adapter. Source checkouts use kitsync's install.
+        shared = Path.home() / ".local/share/controlroom/change-principles"
+        revision = (shared / "kitsync-version").read_text(encoding="ascii").strip()
+        if len(revision) != 64 or any(c not in "0123456789abcdef" for c in revision):
+            raise ValueError("Invalid kitsync gate revision")
+        scripts = shared / "kitsync" / revision / "scripts"
+    sys.path.insert(0, str(scripts))
+    import reviewer
+
     request = json.load(sys.stdin)
     reviewer.ask = partial(ask, request["runtime"])
-    spec = importlib.util.spec_from_file_location("change_principles", Path(__file__).with_name("change-principles.py"))
+    spec = importlib.util.spec_from_file_location("change_principles", scripts / "change-principles.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     print(json.dumps(module.decide(request["event"])))

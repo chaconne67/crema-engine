@@ -460,7 +460,8 @@ class ACPClient:
         session_deadline = time.monotonic() + timeout_seconds
 
         def _request(method: str, params: dict[str, Any], *, text_parts: list[str] | None = None,
-                     reasoning_parts: list[str] | None = None, deadline: float | None = None) -> Any:
+                     reasoning_parts: list[str] | None = None, deadline: float | None = None,
+                     on_thought: Callable[[str], None] | None = None) -> Any:
             request_id = next(request_ids)
             try:
                 proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}) + "\n")
@@ -478,10 +479,18 @@ class ACPClient:
                     msg = inbox.get(timeout=0.1)
                 except queue.Empty:
                     continue
-                if self._handle_server_message(
+                thought_count, had_text = len(reasoning_parts or ()), bool(text_parts)
+                handled = self._handle_server_message(
                     msg, process=proc, cwd=self._acp_cwd, text_parts=text_parts,
                     reasoning_parts=reasoning_parts, allow_file_requests=allow_file_requests,
-                ) or msg.get("id") != request_id:
+                )
+                if on_thought is not None and reasoning_parts:
+                    for delta in reasoning_parts[thought_count:]:
+                        on_thought(delta)
+                    if not had_text and text_parts:
+                        # The first answer chunk closes the last thought paragraph.
+                        on_thought("\n\n")
+                if handled or msg.get("id") != request_id:
                     continue
                 if "error" in msg:
                     raise RuntimeError(self._request_error(method, msg.get("error") or {}))

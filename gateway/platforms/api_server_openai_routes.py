@@ -834,7 +834,7 @@ class OpenAICompatRoutesMixin:
             # the stream early. Called from the run_conversation worker thread: put_threadsafe.
             if delta is not None:
                 stream_q.put_threadsafe(delta)
-        def _on_reasoning(text):
+        def _on_reasoning(text, *, provider=None):
             # Structured reasoning deltas (#99552): the agent's reasoning_callback, not the
             # lossy 500-char ``reasoning.available`` progress preview. Tagged so the writers
             # keep them distinct from answer text.

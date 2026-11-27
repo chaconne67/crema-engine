@@ -498,7 +498,7 @@ def wire_api_observers(agent, owner, want_interim):
             publish_api_tool_progress(authority, session_id, generation, event_type, *args, **kwargs)
         if progress is not None:
             return progress(event_type, *args, **kwargs)
-    agent.reasoning_callback = lambda text: publish('reasoning_callback', text)
+    agent.reasoning_callback = lambda text: publish('reasoning_callback', text, provider=getattr(agent, 'provider', None))
     agent.status_callback = status_callback
     agent.tool_progress_callback = tool_progress_callback
     if want_interim:

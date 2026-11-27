@@ -342,7 +342,8 @@ class GeminiACPClient(ACPClient):
 
     def _create_chat_completion(
         self, *, model=None, messages=None, timeout=None, tools=None, tool_choice=None,
-        stream=False, crema_session_id=None, crema_run_instructions=None, crema_service_policy=None, **_,
+        stream=False, crema_session_id=None, crema_run_instructions=None, crema_service_policy=None,
+        reasoning_callback=None, **_,
     ):
         messages = messages or []
         conversation = (str(get_hermes_home()), crema_session_id) if crema_session_id else None
@@ -397,11 +398,25 @@ class GeminiACPClient(ACPClient):
             if per_turn:
                 prompt = f"Host instructions for the current reply:\n{per_turn}\n\n{prompt}"
             results = []
+            reasoning_forwarded = False
+
+            def on_thought(delta):
+                nonlocal reasoning_forwarded
+                if not self.is_closed:
+                    try:
+                        reasoning_callback(_sanitize_surrogates(delta))
+                    except Exception:
+                        log.debug("Gemini thought display callback failed", exc_info=True)
+                    else:
+                        if delta.strip():
+                            reasoning_forwarded = True
+
             for part, final in _prompt_parts(prompt):
                 text, reasoning = [], []
                 result = entry.request(
                     "session/prompt", {"sessionId": entry.session_id, "prompt": [{"type": "text", "text": part}]},
                     text_parts=text, reasoning_parts=reasoning, deadline=deadline,
+                    on_thought=on_thought if final and reasoning_callback is not None else None,
                 )
                 stop = result.get("stopReason") if isinstance(result, dict) else None
                 if stop != "end_turn" and not (final and stop == "max_tokens"):
@@ -411,6 +426,7 @@ class GeminiACPClient(ACPClient):
             completion = self._completion("".join(text), "".join(reasoning), model, False, usage=usage,
                                           finish_reason="length" if stop == "max_tokens" else None)
             message = completion.choices[0].message
+            message.crema_reasoning_forwarded = reasoning_forwarded
             reply = {"role": "assistant", "content": message.content}
             if message.tool_calls:
                 reply["tool_calls"] = [

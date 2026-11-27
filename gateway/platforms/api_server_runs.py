@@ -1321,12 +1321,14 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
 
     # The paragraph of thinking being written, the number of the last one sent in this run, and the
     # translations still being written.
-    thought: Dict[str, Any] = {"step": 0, "text": "", "translating": []}
+    thought: Dict[str, Any] = {"step": 0, "text": "", "provider": None, "translating": []}
 
-    def _put_thought(step: int, text: str) -> None:
+    def _put_thought(step: int, text: str, provider: Optional[str]) -> None:
         if run_id in self._run_streams:
             with suppress(Exception):
-                loop.call_soon_threadsafe(run.put_event, _run_event(run_id, "reasoning.step", step=step, text=text))
+                source = {"provider": provider} if provider else {}
+                loop.call_soon_threadsafe(run.put_event,
+                    _run_event(run_id, "reasoning.step", step=step, text=text, **source))
 
     def _put_paragraph(text: str) -> None:
         # Thinking goes out a whole paragraph at a time, so English is never shown (주인님 2026-11-01). One mostly in
@@ -1337,8 +1339,9 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
             return
         thought["step"] += 1
         step = thought["step"]
+        provider = thought["provider"]
         english = crema_thinking.needs_translation(text)
-        _put_thought(step, "" if english else text)
+        _put_thought(step, "" if english else text, provider)
         if not english:
             return
 
@@ -1346,7 +1349,7 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
             # A new thread starts outside the run's profile scope: on a multiplexed gateway (Krema, Jabis) the
             # model call could not read that profile's credentials (UnscopedSecretError) and the English stayed.
             with self._profile_scope(run.request_profile):
-                _put_thought(step, crema_thinking.translate(text) or text)
+                _put_thought(step, crema_thinking.translate(text) or text, provider)
 
         worker = threading.Thread(target=_translate, name=f"crema-thinking-{run_id}", daemon=True)
         worker.start()
@@ -1357,13 +1360,16 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
         text, thought["text"] = thought["text"], ""
         _put_paragraph(text)
 
-    def _run_and_settle():
+    def _settle_thoughts():
         # The run's last translations land before its terminal event closes the stream (60s at most).
-        out = _run_agent_sync(self, run, agent, approval_notify, _api_server=_api_server)
         _end_thought()
         deadline = time.monotonic() + 60
         for worker in thought["translating"]:
             worker.join(max(0.0, deadline - time.monotonic()))
+
+    def _run_and_settle():
+        out = _run_agent_sync(self, run, agent, approval_notify, _api_server=_api_server)
+        _settle_thoughts()
         return out
 
     def _text_cb(delta: Optional[str]) -> None:
@@ -1385,10 +1391,14 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
             loop.call_soon_threadsafe(run.put_event, _run_event(
                 run_id, "message.interim", text=text, already_streamed=bool(already_streamed)))
 
-    def _reasoning_cb(text: Optional[str]) -> None:
-        # The model's thinking (Anthropic's summarized thinking): each paragraph goes out once it is finished.
+    def _reasoning_cb(text: Optional[str], *, provider: Optional[str] = None) -> None:
+        # Each paragraph keeps the provider that wrote it, including after a failover.
         if not text or run_id not in self._run_streams:
             return
+        provider = provider if isinstance(provider, str) else None
+        if thought["provider"] != provider:
+            _end_thought()
+            thought["provider"] = provider
         *finished, thought["text"] = (thought["text"] + text).split("\n\n")
         for paragraph in finished:
             _put_paragraph(paragraph)
@@ -1465,6 +1475,7 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
                     tool_start_callback=_tool_start, tool_complete_callback=_tool_complete,
                     tool_update_callback=_progress_cb, reasoning_callback=_reasoning_cb, status_callback=_status_cb,
                     interim_assistant_callback=_interim_cb)
+            await _submit_api_worker(loop, _settle_thoughts)
             # The canonical turn has no agent object here; the served pair rides on the
             # committed usage/result runtime metadata when the turn recorded one.
             served_runtime = ((usage or {}).get("runtime") if isinstance(usage, dict) else None) or (
@@ -1473,7 +1484,8 @@ async def _execute_run(self, run: _RunLaunch, *, _api_server) -> None:
             with self._profile_scope(run.request_profile):
                 agent = self._create_agent(
                     stream_delta_callback=_text_cb, tool_progress_callback=_progress_cb,
-                    interim_assistant_callback=_interim_cb, reasoning_callback=_reasoning_cb,
+                    interim_assistant_callback=_interim_cb,
+                    reasoning_callback=lambda text: _reasoning_cb(text, provider=getattr(agent, "provider", None)),
                     status_callback=_status_cb, **run.agent_kwargs)
             self._active_run_agents[run_id] = agent
             approval_notify = _make_approval_notify(self, run, _api_server=_api_server)

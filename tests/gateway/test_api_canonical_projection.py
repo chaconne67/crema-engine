@@ -47,6 +47,34 @@ def _events(queue):
 
 
 @pytest.mark.asyncio
+async def test_run_sse_flushes_the_last_thought_with_its_provider(api, owner):
+    from gateway.session_api_turn import wire_api_observers
+    from gateway.session_results import execution_result
+
+    admitted = admit_api_turn(api, session_id="thought", user_message="hello", conversation_history=[])
+    _, ref, _ = admitted
+    launch, queue = _launch(api, admitted)
+
+    async def handle(event):
+        turn = _turn_runner(owner, ref)
+        agent = SimpleNamespace(provider="gemini-agy", status_callback=None,
+                                interim_assistant_callback=None, tool_progress_callback=None)
+        wire_api_observers(agent, turn._approval_owner, False)
+        agent.reasoning_callback("마지막 문단입니다.")
+        execution_result.get()["result"] = {"final_response": "끝"}
+        return "끝"
+
+    owner.runner._handle_message = handle
+    await _execute_run(api, launch, _api_server=_api_server)
+    await asyncio.sleep(0)
+    events = [event for event in _events(queue) if event["event"] in ("reasoning.step", "run.completed")]
+    assert [(event["event"], event.get("step"), event.get("provider"), event.get("text")) for event in events] == [
+        ("reasoning.step", 1, "gemini-agy", "마지막 문단입니다."),
+        ("run.completed", None, None, None),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_api_images_are_committed_media_in_canonical_history(api, owner):
     content = [{'type': 'text', 'text': 'what is this'},
                {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + PNG}}]

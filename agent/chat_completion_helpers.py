@@ -783,6 +783,9 @@ def _dispatch_nonstreaming_api_request(agent, api_kwargs: dict, *, make_client):
             api_kwargs.pop("_moa_prepared_request", None)
         return agent.client.chat.completions.create(**api_kwargs)
     request_client = make_client("chat_completion_request")
+    if agent.provider == "gemini-agy" and (callback := getattr(agent, "reasoning_callback", None)) is not None:
+        # Local to the ACP client; this never goes through the API middleware or onto the wire.
+        api_kwargs = {**api_kwargs, "reasoning_callback": callback}
     # #93650: keep the bulk wire-format payload out of the SDK's GIL-holding
     # request transform. No-op unless this really is the OpenAI SDK, so the
     # MoA facade above and the suite's stand-in clients are unaffected.
@@ -1566,9 +1569,15 @@ def _assistant_reasoning_text(agent, assistant_message) -> Optional[str]:
     # stream (structured deltas or <think> tag extraction); fire only for
     # non-streaming modes (gateway, batch, quiet). Anything not shown during
     # streaming is caught by the CLI post-response fallback.
-    if reasoning_text and agent.reasoning_callback and not agent.stream_delta_callback and not agent._stream_callback:
-        with contextlib.suppress(Exception):
-            agent.reasoning_callback(reasoning_text)
+    if reasoning_text and agent.reasoning_callback:
+        if getattr(agent, "provider", None) == "gemini-agy":
+            provider_data = getattr(assistant_message, "provider_data", None) or {}
+            reasoning_forwarded = provider_data.get("crema_reasoning_forwarded") is True
+        else:
+            reasoning_forwarded = agent.stream_delta_callback or agent._stream_callback
+        if not reasoning_forwarded:
+            with contextlib.suppress(Exception):
+                agent.reasoning_callback(reasoning_text)
     return _sanitize_surrogates(reasoning_text) if reasoning_text else reasoning_text
 
 

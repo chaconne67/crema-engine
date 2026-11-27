@@ -729,6 +729,8 @@ class ChatCompletionsTransport(ProviderTransport):
         provider_data: dict[str, Any] = {}
         if reasoning_content is not None:
             provider_data["reasoning_content"] = reasoning_content
+        if getattr(msg, "crema_reasoning_forwarded", False) is True:
+            provider_data["crema_reasoning_forwarded"] = True
         if getattr(msg, "reasoning_details", None):
             provider_data["reasoning_details"] = msg.reasoning_details
         # Message-level carriers (Gemini text-turn signature, profile-declared reasoning keys):

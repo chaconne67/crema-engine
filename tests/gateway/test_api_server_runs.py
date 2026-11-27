@@ -559,6 +559,7 @@ class TestStartRun:
         def create_agent(**kwargs):
             reasoning, status = kwargs["reasoning_callback"], kwargs["status_callback"]
             agent = MagicMock()
+            agent.provider = "gemini-agy"
 
             def run_conversation(**_kw):
                 status("lifecycle", COMPACTION_STATUS)
@@ -579,7 +580,9 @@ class TestStartRun:
                 body = await (await cli.get(f"/v1/runs/{run_id}/events")).text()
 
         events = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
-        assert [(e["step"], e["text"]) for e in events if e["event"] == "reasoning.step"] == [(1, "로그를 먼저 봅니다.")]
+        assert [(e["step"], e["text"], e["provider"]) for e in events if e["event"] == "reasoning.step"] == [
+            (1, "로그를 먼저 봅니다.", "gemini-agy")
+        ]
         assert [e["kind"] for e in events if e["event"] == "status.update"] == ["compacting", "compacted"]
         assert next(e for e in events if e["event"] == "run.completed")["output"] == "Done."
 

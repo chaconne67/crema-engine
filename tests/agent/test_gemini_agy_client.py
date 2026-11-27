@@ -3,6 +3,7 @@ import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 
@@ -69,6 +70,53 @@ def complete(messages, *, client=None, session="chat-1", **kwargs):
     client = client or agy.GeminiACPClient(command="/fixture/agy", args=["acp"])
     return client.chat.completions.create(model=kwargs.pop("model", "gemini-4-neon"),
                                           messages=messages, crema_session_id=session, **kwargs)
+
+
+def test_thought_reaches_dispatch_callback_before_acp_call_finishes(tmp_path):
+    from agent.chat_completion_helpers import _assistant_reasoning_text, _dispatch_nonstreaming_api_request
+    from agent.transports.chat_completions import ChatCompletionsTransport
+    from tests.agent.test_acp_client import _CATALOG_SERVER
+
+    seen = tmp_path / "thought-received"
+    script = tmp_path / "fake_agy.py"
+    notify = f"""
+        import time
+        from pathlib import Path
+        print(json.dumps({{"jsonrpc": "2.0", "method": "session/update", "params": {{
+            "update": {{"sessionUpdate": "agent_thought_chunk", "content": {{"text": "Thinking."}}}}}}}}), flush=True)
+        deadline = time.monotonic() + 3
+        while not Path({str(seen)!r}).exists():
+            if time.monotonic() >= deadline:
+                raise RuntimeError("the parent did not show the thought in flight")
+            time.sleep(.01)
+"""
+    server = _CATALOG_SERVER.replace('elif method == "session/prompt":',
+                                    'elif method == "session/prompt":' + notify)
+    server = server.replace('{"stopReason": "end_turn"}',
+                            '{"stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 2}}')
+    script.write_text(server, encoding="utf-8")
+    client = agy.GeminiACPClient(command=sys.executable, args=[str(script)])
+    deltas = []
+
+    def receive(text):
+        deltas.append(text)
+        seen.touch()
+
+    agent = SimpleNamespace(provider="gemini-agy", api_mode="chat_completions", reasoning_callback=receive,
+                            stream_delta_callback=lambda text: None, _stream_callback=None, verbose_logging=False,
+                            _extract_reasoning=lambda message: message.reasoning)
+    response = _dispatch_nonstreaming_api_request(
+        agent, {"model": "open-model", "messages": [{"role": "user", "content": "Hello"}], "timeout": 10},
+        make_client=lambda reason: client,
+    )
+    normalized = ChatCompletionsTransport().normalize_response(response)
+    assert normalized.content == "hello"
+    assert _assistant_reasoning_text(agent, normalized) == "Thinking."
+    assert deltas == ["Thinking.", "\n\n"]
+    normalized.provider_data.pop("crema_reasoning_forwarded")
+    deltas.clear()
+    assert _assistant_reasoning_text(agent, normalized) == "Thinking."
+    assert deltas == ["Thinking."]
 
 
 def test_cancel_unblocks_an_active_gemini_request(monkeypatch):

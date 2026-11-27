@@ -3226,10 +3226,15 @@ def _publish_rotated_compaction(
                  else agent._session_db.get_session_title(agent.session_id))
     new_session_id = mint_session_id()
     from agent.context_compressor import _DB_PERSISTED_MARKER
+    from agent.system_prompt import prompt_layout_patch
     from tools.approval_yolo import with_session_yolo
+    model_config = with_session_yolo(agent._session_init_model_config, old_session_id)
+    layout = prompt_layout_patch(agent, new_system_prompt)
+    if layout:
+        model_config = {**(model_config or {}), **layout}
     child = dict(
         source=_compression_child_source(agent, old_session_id), model=agent.model,
-        model_config=with_session_yolo(agent._session_init_model_config, old_session_id),
+        model_config=model_config,
         system_prompt=new_system_prompt, cwd=getattr(agent, "working_directory", None), profile_name=_profile_for_child,
     )
     lease_terms = dict(
@@ -3632,8 +3637,8 @@ def _commit_compaction(
                 # re-baseline transcript handling.
                 compacted_in_place = True
                 # In-place still updates the current row's prompt; rotation published it atomically above.
-                (store.sessions if store is not None else agent._session_db).update_system_prompt(
-                    agent.session_id, new_system_prompt)
+                from agent.system_prompt import save_prompt_snapshot
+                save_prompt_snapshot(agent, store, new_system_prompt)
                 agent._last_flushed_db_idx = 0
             else:
                 # Bind old_session_id first: it is the rollback key in the handler below.

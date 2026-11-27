@@ -10,6 +10,7 @@ provider, timestamp line).  See ``references/system-prompt-invariant.md``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -20,7 +21,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from agent.delegation_context import owned_kanban_task
 from agent.prompt_cache_scope import conversation_id
 from agent.prompt_builder import (
-    CREMA_METHOD_GUIDANCE,
     DEFAULT_AGENT_IDENTITY, EXECUTION_GUIDANCE_MODELS, GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
     KANBAN_GUIDANCE,
     PARALLEL_TOOL_CALL_GUIDANCE, PLATFORM_HINTS, SESSION_SEARCH_GUIDANCE,
@@ -38,6 +38,217 @@ _PLUGIN_SECTION_FRAME_RE = re.compile(
     re.MULTILINE,
 )
 _GATE_WORDS = {**dict.fromkeys(("true", "always", "yes", "on"), True), **dict.fromkeys(("false", "never", "no", "off"), False)}
+
+PROMPT_LAYOUT_KEY = "crema_prompt_layout_v1"
+_SCHEDULED_GUIDANCE = (
+    "# Scheduled run\n\n"
+    "Work through the task authorized by this schedule and verify the result. "
+    "There is no live conversation during this run. If a step requires new approval or information "
+    "from the user, defer that step and record what it needs in the result. "
+    "Existing tool permissions, approval queues and delivery controls still apply."
+)
+
+
+def _without_interactive_guidance(guidance: str) -> str:
+    """Select the scheduled form of engine-owned working instructions."""
+    start = guidance.find("Large work: ask before you start\n")
+    if start >= 0:
+        end = guidance.index("\n\nBefore you end a reply", start)
+        guidance = guidance[:start] + guidance[end + 2:]
+    start = guidance.find("- When work is left that needs the user")
+    if start >= 0:
+        end = guidance.index("Changing things (files, code", start)
+        guidance = guidance[:start].rstrip() + "\n\n" + guidance[end:]
+    return (
+        guidance.replace("look it up with your tools, or ask the user when only they know it.",
+                         "look it up with your available tools.")
+        .replace("use the information provided or ask the user.", "use the information provided.")
+        .replace(STEER_CHANNEL_NOTE.strip() + "\n\n", "")
+        .removesuffix("\n\n" + STEER_CHANNEL_NOTE.strip())
+        .replace("- Ask a clarifying question only when the information cannot be retrieved by tools.\n", "")
+    )
+
+
+def _scheduled_api_turn() -> bool:
+    from gateway.session_api_turn import api_execution
+
+    execution = api_execution.get()
+    if execution is not None:
+        return execution.get("crema_scheduled") is True
+    from tools.crema_schedule_tool import _scheduled_turn
+
+    return _scheduled_turn.get() is not None
+
+
+def _prompt_digest(prompt: str) -> str:
+    return hashlib.sha256(prompt.encode("utf-8", errors="surrogatepass")).hexdigest()
+
+
+def _prompt_range(agent: Any, prompt: str, section: str) -> Optional[tuple[int, int]]:
+    layout = getattr(agent, "_crema_prompt_layout", None)
+    if not isinstance(layout, dict) or layout.get("digest") != _prompt_digest(prompt):
+        return None
+    bounds = layout.get(section)
+    if not isinstance(bounds, list) or len(bounds) != 2:
+        return None
+    start, end = bounds
+    if type(start) is int and type(end) is int and 0 <= start <= end <= len(prompt):
+        return start, end
+    return None
+
+
+def restore_prompt_layout(agent: Any, model_config: Any) -> None:
+    from persistence.conversation.sessions import parse_model_config
+
+    agent._crema_prompt_layout = parse_model_config(model_config).get(PROMPT_LAYOUT_KEY)
+
+
+def prompt_layout_patch(agent: Any, prompt: str) -> dict:
+    if _prompt_range(agent, prompt, "guidance") is None:
+        return {}
+    return {PROMPT_LAYOUT_KEY: agent._crema_prompt_layout}
+
+
+def save_prompt_snapshot(agent: Any, store: Any, prompt: str) -> None:
+    """Publish the renderer's layout before its matching prompt. Readers verify the digest."""
+    target = store.sessions if store is not None else agent._session_db
+    patch = prompt_layout_patch(agent, prompt)
+    if patch:
+        (target.patch_model_config if store is not None else target.patch_session_model_config)(
+            agent.session_id, patch
+        )
+    target.update_system_prompt(agent.session_id, prompt)
+
+
+def _scheduled_prompt(agent: Any, saved: str) -> str:
+    if not _scheduled_api_turn():
+        return saved
+    bounds = _prompt_range(agent, saved, "guidance")
+    if bounds is not None:
+        start, end = bounds
+        guidance = _without_interactive_guidance(saved[start:end])
+        return f"{_SCHEDULED_GUIDANCE}\n\n{saved[:start]}{guidance}{saved[end:]}"
+    # Legacy snapshots do not identify who wrote each passage. Keep all their bytes.
+    return (
+        f"{_SCHEDULED_GUIDANCE}\n"
+        "Apply the scheduled run rules ahead of any interactive planning, questions or "
+        f"requests to wait for a live reply below.\n\n{saved}"
+    )
+
+
+def effective_system_prompt(agent: Any, saved: str) -> str:
+    """Add run-specific guidance to one provider request without changing the saved prompt."""
+    saved = _scheduled_prompt(agent, saved)
+    if not model_names_visible():
+        saved = _omit_model_names(saved)
+        saved += "\n\nKeep the underlying model and provider names private when answering questions about this service."
+    extra = getattr(agent, "ephemeral_system_prompt", None)
+    return (saved + "\n\n" + extra).strip() if extra else saved
+
+
+def gemini_service_policy(agent: Any) -> dict:
+    """Find the renderer-owned service section in the provider copy of the prompt."""
+    saved = getattr(agent, "_cached_system_prompt", None)
+    if not isinstance(saved, str):
+        return {}
+    bounds = _prompt_range(agent, saved, "service")
+    if bounds is None or bounds[0] == bounds[1]:
+        return {}
+    start, end = bounds
+    shift = len(_scheduled_prompt(agent, saved)) - len(saved)
+    return {"start": start + shift, "end": end + shift, "section": saved[start:end]}
+
+
+def model_names_visible() -> bool:
+    if not os.environ.get("CREMA_ENGINE_INPUT"):
+        return True
+    from crema_startup import engine_input
+    from hermes_cli.config import load_config_readonly
+
+    startup = engine_input(load_config_readonly())
+    return (startup or {}).get("model", {}).get("userCanChoose") is not False
+
+
+def _omit_model_names(prompt: str) -> str:
+    # Older prompts have a renderer-owned identity trailer after every context block.
+    from agent.surface_switch import split_runtime_boundary
+
+    identity, marker, runtime = split_runtime_boundary(prompt)
+    prefix, separator, trailer = identity.rpartition("\n\n")
+    lines = trailer.split("\n")
+    if not lines[0].startswith(("Conversation started: ", "Timezone: ")):
+        return prompt
+    if not all(line.startswith(("Today's date (as of the last context rebuild): ", "Session ID: ",
+                                "Model: ", "Provider: ", "Platform: ")) for line in lines[1:]):
+        return prompt
+    visible = [line for line in lines if not line.startswith(("Model: ", "Provider: "))]
+    return prefix + separator + "\n".join(visible) + marker + runtime
+
+
+def stored_prompt_route(model_config: Any, prompt: str) -> tuple[str, str]:
+    from persistence.conversation.sessions import parse_model_config
+
+    layout = parse_model_config(model_config).get(PROMPT_LAYOUT_KEY)
+    if isinstance(layout, dict) and layout.get("digest") == _prompt_digest(prompt):
+        route = layout.get("route")
+        if isinstance(route, list) and len(route) == 2 and all(isinstance(part, str) for part in route):
+            return route[0], route[1]
+    from agent.surface_switch import identity_line_value
+
+    return identity_line_value(prompt, "Model"), identity_line_value(prompt, "Provider")
+
+
+def _context_length(agent: Any) -> Optional[int]:
+    length = getattr(getattr(agent, "context_compressor", None), "context_length", None)
+    return length if isinstance(length, int) and length > 0 else None
+
+
+def _context_files_allowed(agent: Any) -> bool:
+    return not agent.skip_context_files or agent.platform == "cron"
+
+
+def _service_instructions_part(agent: Any, ctx_len: Optional[int], *, queue_warning: bool = True) -> str:
+    if not _context_files_allowed(agent):
+        return ""
+    return _pb.build_service_instructions_prompt(_agent_home(agent), ctx_len, queue_warning=queue_warning).strip()
+
+
+def refresh_service_prompt(agent: Any) -> None:
+    """Replace only the service policy at the next turn boundary, keeping the saved private context."""
+    from agent.agent_init_session import agent_interface
+    from hermes_cli.observability.shared_metrics_efficiency import record_cache_break
+
+    saved = getattr(agent, "_cached_system_prompt", None)
+    if not isinstance(saved, str) or not saved:
+        return
+    bounds = _prompt_range(agent, saved, "service")
+    if bounds is None:
+        return  # No reliable range in older snapshots.
+    start, end = bounds
+    try:
+        service = _service_instructions_part(agent, _context_length(agent), queue_warning=False)
+        replacement = f"\n\n{service}" if service else ""
+    except (OSError, UnicodeError):
+        logger.warning("Service instructions could not be read (session=%s); retrying next turn.",
+                       agent.session_id, exc_info=True)
+        return
+    if saved[start:end] == replacement:
+        return
+    updated = saved[:start] + replacement + saved[end:]
+    old_layout = agent._crema_prompt_layout
+    agent._crema_prompt_layout = {
+        **old_layout, "digest": _prompt_digest(updated), "service": [start, start + len(replacement)],
+    }
+    try:
+        if agent._session_db:
+            save_prompt_snapshot(agent, agent_interface(agent), updated)
+    except Exception:
+        agent._crema_prompt_layout = old_layout
+        logger.warning("Service instructions could not be saved (session=%s); retrying next turn.",
+                       agent.session_id, exc_info=True)
+        return
+    agent._cached_system_prompt = updated
+    record_cache_break(agent, "system_prompt_rebuild")
 
 
 def _model_gate(setting: Any, model: Optional[str], default_models) -> bool:
@@ -548,8 +759,10 @@ def _timestamp_line(agent: Any) -> str:
                            "— trust this over the start date for what day it is now; query tools for exact time.")
     if getattr(agent, "_bot_chat_timeless_prompt", False):
         timestamp_line = f"Timezone: {', '.join(_bits)}" if _bits else ""
-    trailer = (("Session ID", agent.session_id if agent.pass_session_id else None), ("Model", agent.model),
-               ("Provider", agent.provider), ("Platform", agent.platform))
+    show_model = model_names_visible()
+    trailer = (("Session ID", agent.session_id if agent.pass_session_id else None),
+               ("Model", agent.model if show_model else None),
+               ("Provider", agent.provider if show_model else None), ("Platform", agent.platform))
     return timestamp_line + "".join(f"\n{label}: {value}" for label, value in trailer if value)
 
 
@@ -593,7 +806,7 @@ def _identity_parts(agent: Any, ctx_len: Optional[int]) -> tuple[list[str], bool
 def _guidance_parts(agent: Any) -> list[str]:
     """Crema's working method (always), then tool-aware and model-gated guidance blocks, each gated by
     its config.yaml key."""
-    parts: list[str] = [CREMA_METHOD_GUIDANCE]
+    parts: list[str] = [_pb.crema_method_guidance(agent.valid_tool_names)]
     if agent.valid_tool_names and getattr(agent, "_parallel_tool_call_guidance", True):
         parts.append(PARALLEL_TOOL_CALL_GUIDANCE)
     parts.append(_tool_guidance_block(agent))  # None/empty entries are dropped by _join_tier
@@ -610,11 +823,29 @@ def _guidance_parts(agent: Any) -> list[str]:
     if _model_gate(agent._tool_use_enforcement, agent.model, TOOL_USE_ENFORCEMENT_MODELS):
         parts.append(TOOL_USE_ENFORCEMENT_GUIDANCE)
         if any(g in (agent.model or "").lower() for g in ("gemini", "gemma")):
-            parts.append(GOOGLE_MODEL_OPERATIONAL_GUIDANCE)
+            google = GOOGLE_MODEL_OPERATIONAL_GUIDANCE
+            if not {"read_file", "search_files"} & set(agent.valid_tool_names):
+                google = google.replace(
+                    "- **Verify first:** Use read_file/search_files to check file contents and "
+                    "project structure before making changes. Never guess at file contents.\n", ""
+                )
+            if "terminal" not in agent.valid_tool_names:
+                google = google.replace(
+                    "- **Non-interactive commands:** Use flags like -y, --yes, --non-interactive to prevent "
+                    "CLI tools from hanging on prompts.\n", ""
+                )
+            parts.append(google)
     if _model_gate(getattr(agent, "_execution_guidance", "auto"), agent.model, EXECUTION_GUIDANCE_MODELS):
         from agent.prompt_builder import execution_guidance_text
         parts.append(execution_guidance_text(agent.valid_tool_names))
     return parts
+
+
+def _render_work_guidance(agent: Any) -> str:
+    guidance = _join_tier(_guidance_parts(agent))
+    if agent.platform == "cron":
+        return f"{_SCHEDULED_GUIDANCE}\n\n{_without_interactive_guidance(guidance)}"
+    return guidance
 
 
 def _alibaba_identity_part(agent: Any) -> list[str]:
@@ -757,13 +988,15 @@ def _context_files_part(agent: Any, ctx_len: Optional[int], soul_loaded: bool) -
     IS the user's shell cwd. Desktop launch artifacts skip the session cwd but
     still honor the profile-scoped TERMINAL_CWD; without one, the fallback guard
     can reject Hermes's bundled AGENTS.md."""
-    if agent.skip_context_files:
+    if not _context_files_allowed(agent):
         return []
     launch_artifact = getattr(agent, "_context_cwd_is_launch_artifact", False)
-    cwd = resolve_context_cwd(include_session_override=not launch_artifact)
+    # Cron's skip flag means the job has no valid project folder.
+    cwd = None if agent.skip_context_files else resolve_context_cwd(include_session_override=not launch_artifact)
     return [_pb.build_context_files_prompt(
         cwd=cwd, skip_soul=soul_loaded, context_length=ctx_len,
-        allow_install_tree_fallback=agent.platform in ("cli", "tui"), home_override=_agent_home(agent))]
+        allow_install_tree_fallback=agent.platform in ("cli", "tui"), home_override=_agent_home(agent),
+        include_service=False)]
 
 
 def _join_tier(parts: list[Optional[str]]) -> str:
@@ -771,21 +1004,29 @@ def _join_tier(parts: list[Optional[str]]) -> str:
     return "\n\n".join(p.strip() for p in parts if p and p.strip())
 
 
-def _assistant_prompt_parts(agent: Any, system_message: Optional[str], ctx_len: Optional[int]) -> Dict[str, str]:
+def _assistant_prompt_parts(
+    agent: Any, system_message: Optional[str], ctx_len: Optional[int], service: str
+) -> Dict[str, str]:
     """``agent.prompt_mode: assistant`` (FC-CRM ADR 0026): only what a narrow assistant uses — SOUL.md (who it
     is and its work rules), CREMA.md instructions, guidance for the tools actually loaded, memory (this user) and the date. None of
     Crema's working method, coding posture, skills index, profile line or runtime environment:
     they cost tokens and turns on every call and steer a customer-facing assistant toward developer habits.
     Same three tiers, so everything shared across profiles stays in the cacheable prefix."""
     stable, soul_loaded = _identity_parts(agent, ctx_len)
+    if agent.platform == "cron":
+        stable.append(_SCHEDULED_GUIDANCE)
+    elif agent.platform == "api_server":
+        stable.append(platform_hint(agent))
     stable.append(_tool_guidance_block(agent))
-    context = [system_message] if system_message is not None else []
+    context = [service, system_message]
     context.extend(_context_files_part(agent, ctx_len, soul_loaded))
     volatile = [*_memory_parts(agent), _timestamp_line(agent)]
     return {"stable": _join_tier(stable), "context": _join_tier(context), "volatile": _join_tier(volatile)}
 
 
-def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> dict[str, str]:
+def build_system_prompt_parts(
+    agent: Any, system_message: Optional[str] = None, *, layout: Optional[dict] = None
+) -> dict[str, str]:
     """Assemble the system prompt as three ordered cache tiers: ``stable`` (identity,
     guidance and the coding brief), ``context`` (caller ``system_message``, project
     context files, workspace snapshot and remaining workspace guidance) and
@@ -794,27 +1035,38 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     shared context file can remain in the longest common prefix across worktrees.
     Never re-rendered mid-session."""
     # Model context window scales the context-file caps; stable per conversation.
-    _cc_len = getattr(getattr(agent, "context_compressor", None), "context_length", None)
-    _ctx_len = _cc_len if isinstance(_cc_len, int) and _cc_len > 0 else None
+    _ctx_len = _context_length(agent)
+    service = _service_instructions_part(agent, _ctx_len)
     if getattr(agent, "_prompt_mode", "crema") == "assistant":
-        return _assistant_prompt_parts(agent, system_message, _ctx_len)
+        if layout is not None:
+            layout["guidance"] = [0, 0]
+        parts = _assistant_prompt_parts(agent, system_message, _ctx_len, service)
+        if layout is not None:
+            start = len(parts["stable"])
+            layout["service"] = [start, start + (len(service) + 2 if service else 0)]
+        return parts
     # ── Stable tier ────────────────────────────────────────────────
     stable_parts, _soul_loaded = _identity_parts(agent, _ctx_len)
     # Crema: no "You run on Hermes Agent" help pointer — the identity comes from SOUL.md alone.
-    stable_parts.extend(_guidance_parts(agent))
+    guidance = _render_work_guidance(agent)
+    if layout is not None:
+        start = len(_join_tier(stable_parts)) + 2
+        layout["guidance"] = [start, start + len(guidance)]
+    stable_parts.append(guidance)
     skills_prompt = _skills_prompt(agent)
-    stable_parts.extend(_alibaba_identity_part(agent))
+    if model_names_visible():
+        stable_parts.extend(_alibaba_identity_part(agent))
     # Pinned skills are per-agent constants (resolved once), so they live in the stable prefix.
     stable_parts.extend(_auto_load_parts(agent))
     # Coding posture: the operating brief stays in the stable prefix. The
     # environment block contains the current cwd/backend and belongs after
     # project context, not ahead of a large shared AGENTS.md block.
-    environment_hints = _pb.build_environment_hints()
+    environment_hints = _pb.build_environment_hints(agent.valid_tool_names)
     coding_prefix_parts, coding_workspace_parts, coding_trailing_parts = _coding_parts(agent)
     stable_parts.extend(coding_prefix_parts)
     post_workspace_parts = _post_workspace_parts(agent)
     # ── Context tier (project/worktree-dependent, may change between sessions) ──
-    context_parts: list[str] = []
+    context_parts: list[str] = [service]
     # ephemeral_system_prompt is injected at API-call time only, never cached.
     if system_message is not None:
         context_parts.append(system_message)
@@ -842,19 +1094,28 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         # Embedder hints are prose too; reserve the delimiter for the renderer.
         environment_hints = environment_hints.replace(_pb.RUNTIME_ENVIRONMENT_HEADING, "> " + _pb.RUNTIME_ENVIRONMENT_HEADING)
         volatile_parts.append(f"{_pb.RUNTIME_ENVIRONMENT_HEADING}\n\n{environment_hints}\n\n{_pb.RUNTIME_ENVIRONMENT_END}")
-    return {"stable": _join_tier(stable_parts), "context": _join_tier(context_parts), "volatile": _join_tier(volatile_parts)}
+    stable = _join_tier(stable_parts)
+    if layout is not None:
+        start = len(stable)
+        layout["service"] = [start, start + (len(service) + 2 if service else 0)]
+    return {"stable": stable, "context": _join_tier(context_parts), "volatile": _join_tier(volatile_parts)}
 
 
 def build_system_prompt(agent: Any, system_message: Optional[str] = None) -> str:
     """Assemble the full prompt; cached on ``agent._cached_system_prompt`` and
     only rebuilt after compression.  Tiers are ordered stable -> context ->
     volatile so implicit longest-prefix caches keep the unchanged scaffold."""
-    parts = build_system_prompt_parts(agent, system_message=system_message)
+    layout: dict = {}
+    parts = build_system_prompt_parts(agent, system_message=system_message, layout=layout)
     agent._cached_system_prompt_static = parts["stable"]
     # Surface context-file truncation warnings in chat, not only in logs.
     for warning in drain_truncation_warnings():
         agent._emit_diagnostic_status(warning)
-    return "\n\n".join(p for p in (parts["stable"], parts["context"], parts["volatile"]) if p)
+    prompt = "\n\n".join(p for p in (parts["stable"], parts["context"], parts["volatile"]) if p)
+    layout["digest"] = _prompt_digest(prompt)
+    layout["route"] = [str(agent.model or ""), str(agent.provider or "")]
+    agent._crema_prompt_layout = layout
+    return prompt
 
 
 def invalidate_system_prompt(agent: Any) -> None:

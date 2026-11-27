@@ -40,14 +40,128 @@ def _make_agent(**overrides):
 
 
 def test_crema_method_follows_a_user_written_persona():
-    from agent.prompt_builder import CREMA_METHOD_GUIDANCE
+    from agent.prompt_builder import crema_method_guidance
     agent = _make_agent(load_soul_identity=True, skip_context_files=True)
     with (
         patch("agent.prompt_builder.load_soul_md", return_value="You are Luna. Speak warmly."),
         patch("agent.prompt_builder.build_environment_hints", return_value=""),
     ):
         stable = build_system_prompt_parts(agent)["stable"]
-    assert stable.startswith("You are Luna. Speak warmly.\n\n" + CREMA_METHOD_GUIDANCE)
+    assert stable.startswith("You are Luna. Speak warmly.\n\n" + crema_method_guidance([]))
+    assert all(name not in stable for name in ("clarify", "read_file", "ego-browser"))
+
+
+@pytest.mark.parametrize("authority", [True, False])
+def test_scheduled_turn_changes_only_the_renderer_guidance(monkeypatch, authority):
+    from agent.system_prompt import effective_system_prompt, prompt_layout_patch, restore_prompt_layout
+    from gateway.session_api_turn import api_execution
+    from tools.crema_schedule_tool import _scheduled_turn
+
+    user_copy = "My notes quote:\n\nLarge work: ask before you start\n\nKeep this private example."
+    monkeypatch.setattr("agent.prompt_builder.load_soul_md", lambda *_a, **_kw: user_copy)
+    agent = _make_agent(load_soul_identity=True, skip_context_files=True, platform="api_server")
+    saved = build_system_prompt(agent)
+    same_session = _make_agent(platform="api_server")
+    restore_prompt_layout(same_session, prompt_layout_patch(agent, saved))
+    assert effective_system_prompt(same_session, saved) == saved
+
+    execution = api_execution.set({"crema_scheduled": True} if authority else None)
+    scheduled = _scheduled_turn.set(None if authority else {})
+    try:
+        wire = effective_system_prompt(same_session, saved)
+        assert wire.startswith("# Scheduled run\n")
+        assert user_copy in wire and wire.count("Large work: ask before you start") == 1
+        assert "Do all the work the request and its approval cover" in wire
+        assert "use the information provided or ask the user" not in wire
+        legacy = effective_system_prompt(_make_agent(platform="api_server"), saved)
+        assert legacy.endswith(saved)
+        assert "ahead of any interactive planning" in legacy
+    finally:
+        _scheduled_turn.reset(scheduled)
+        api_execution.reset(execution)
+
+    execution = api_execution.set({"crema_scheduled": False})
+    scheduled = _scheduled_turn.set({})  # Heartbeat bookkeeping is not signature proof.
+    try:
+        assert effective_system_prompt(same_session, saved) == saved
+    finally:
+        _scheduled_turn.reset(scheduled)
+        api_execution.reset(execution)
+
+
+def test_cron_without_a_workdir_keeps_service_and_personal_instructions(monkeypatch, tmp_path):
+    home = tmp_path / "profile"
+    project = tmp_path / "project"
+    home.mkdir()
+    project.mkdir()
+    (home / ".service-instructions.md").write_text("Service rule.")
+    (home / "CREMA.md").write_text("Personal rule.")
+    (project / "CREMA.md").write_text("Project rule.")
+    monkeypatch.setattr("agent.system_prompt._agent_home", lambda _agent: home)
+    monkeypatch.setenv("TERMINAL_CWD", str(project))
+    agent = _make_agent(skip_context_files=True, platform="cron")
+    prompt = build_system_prompt(agent)
+    assert "Service rule." in prompt and "Personal rule." in prompt and "Project rule." not in prompt
+    assert "Large work: ask before you start" not in prompt
+    assert "defer that step" in prompt
+    agent.skip_context_files = False
+    parts = build_system_prompt_parts(agent)
+    assert "Project rule." in parts["context"]
+    assert "administrator instructions over conflicting project and personal instructions" in parts["context"]
+    assert "follow this project's instructions over personal instructions" in parts["context"]
+
+
+def test_windows_shell_guidance_requires_a_terminal(monkeypatch):
+    from agent import prompt_builder
+
+    monkeypatch.setattr(prompt_builder, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(prompt_builder, "is_wsl", lambda: False)
+    monkeypatch.setattr(prompt_builder, "_windows_marketing_version", lambda: "test")
+    monkeypatch.setattr(prompt_builder, "_bot_screen_hint", lambda: "Bot Screen launch instructions")
+    no_tools = build_system_prompt_parts(_make_agent(platform="api_server"))["volatile"]
+    terminal = build_system_prompt_parts(_make_agent(
+        platform="api_server", valid_tool_names=["terminal"],
+    ))["volatile"]
+    assert "Bot Screen launch instructions" not in no_tools
+    assert "Bot Screen launch instructions" in terminal
+    assert "Current working directory:" in no_tools
+    assert "your `terminal` tool runs commands through bash" not in no_tools
+    assert "your `terminal` tool runs commands through bash" in terminal
+
+
+@pytest.mark.parametrize("terminal", [True, False])
+def test_remote_file_guidance_names_only_available_tools(monkeypatch, terminal):
+    from agent import prompt_builder
+
+    monkeypatch.setenv("TERMINAL_ENV", "docker")
+    monkeypatch.setattr(prompt_builder, "_probe_remote_backend", lambda _: None)
+    tools = ["read_file", "terminal"] if terminal else ["read_file"]
+    agent = _make_agent(platform="api_server", valid_tool_names=tools)
+    volatile = build_system_prompt_parts(agent)["volatile"]
+    assert "docker" in volatile.lower() and "`read_file`" in volatile
+    assert ("Terminal backend:" in volatile) is terminal
+    assert ("uname -a && whoami && pwd" in volatile) is terminal
+    assert "`write_file`" not in volatile
+    assert "User home directory:" not in volatile
+
+
+def test_staff_omits_the_renderer_model_names_and_keeps_the_route(monkeypatch):
+    from agent import system_prompt
+
+    monkeypatch.setattr(system_prompt, "model_names_visible", lambda: False)
+    agent = _make_agent(model="fixture-gpt-route", provider="fixture-provider", platform="api_server")
+    fresh = build_system_prompt(agent)
+    route = system_prompt.stored_prompt_route(system_prompt.prompt_layout_patch(agent, fresh), fresh)
+    assert route == ("fixture-gpt-route", "fixture-provider")
+    assert "fixture-gpt-route" not in fresh and "fixture-provider" not in fresh
+    legacy = (
+        "Personal example:\nModel: wrote this as an example\n\n"
+        "Conversation started: Friday, November 27, 2026\n"
+        "Model: fixture-gpt-route\nProvider: fixture-provider\nPlatform: api_server"
+    )
+    rendered = system_prompt.effective_system_prompt(agent, legacy)
+    assert "Model: wrote this as an example" in rendered
+    assert "fixture-gpt-route" not in rendered and "fixture-provider" not in rendered
 
 
 def test_crema_method_says_how_to_take_a_message_sent_while_working():
@@ -60,13 +174,18 @@ def test_crema_method_says_how_to_take_a_message_sent_while_working():
 
 
 def test_crema_method_sends_signed_in_sites_to_the_browser_toggle():
-    # With 웹 브라우저 조작 off the ego-browser skill is hidden, and its rule against opening the user's own browser
-    # with it: the always-on method keeps that rule and says where it is turned on.
-    from agent.prompt_builder import CREMA_METHOD_GUIDANCE
+    from agent.prompt_builder import crema_method_guidance
 
-    assert "ego-browser skill" in CREMA_METHOD_GUIDANCE
-    assert "부가 기능 연동 → 웹 브라우저 조작" in CREMA_METHOD_GUIDANCE
-    assert "Don't open the user's own browser" in CREMA_METHOD_GUIDANCE
+    browser_guidance = crema_method_guidance(["skill_view", "web_extract"])
+    assert "ego-browser skill if it is available" in browser_guidance
+    assert "web_extract" in browser_guidance
+    assert "부가 기능 연동 → 웹 브라우저 조작" in browser_guidance
+    assert "웹 브라우저 조작 is off or not installed" not in browser_guidance
+    terminal_guidance = crema_method_guidance(["terminal"])
+    assert "ego-browser" not in terminal_guidance
+    assert "own browser only on an explicit request" in terminal_guidance
+    assert "부가 기능 연동 → 웹 브라우저 조작" in terminal_guidance
+    assert "웹 브라우저 조작" not in crema_method_guidance([])
 
 
 def _captured_context_cwd(agent):
@@ -75,7 +194,7 @@ def _captured_context_cwd(agent):
 
     def fake_context_files(
         cwd=None, skip_soul=False, context_length=None,
-        allow_install_tree_fallback=False, home_override=None,
+        allow_install_tree_fallback=False, home_override=None, include_service=True,
     ):
         captured["cwd"] = cwd
         return ""
@@ -517,11 +636,11 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
     from agent import system_prompt
 
     agent = _make_agent(
-        valid_tool_names=["read_file"],
+        valid_tool_names=["terminal", "read_file", "search_files", "patch", "write_file"],
         _parallel_tool_call_guidance=False,
     )
     monkeypatch.setattr(system_prompt, "DEFAULT_AGENT_IDENTITY", "IDENTITY")
-    monkeypatch.setattr(system_prompt, "CREMA_METHOD_GUIDANCE", "METHOD")
+    monkeypatch.setattr(system_prompt._pb, "crema_method_guidance", lambda _names: "METHOD")
     monkeypatch.setattr(system_prompt, "STEER_CHANNEL_NOTE", "STEER")
     monkeypatch.setattr(system_prompt, "get_hermes_home", lambda: Path("/hermes"))
 

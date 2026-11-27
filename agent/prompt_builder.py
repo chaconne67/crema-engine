@@ -13,7 +13,7 @@ import sys
 import threading
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Collection, Dict, List, Optional, Tuple
 
 from hermes_constants import (
     get_hermes_home, get_scratch_dir, get_skills_dir, is_wsl, reset_hermes_home_override, set_hermes_home_override,
@@ -325,12 +325,6 @@ CREMA_METHOD_GUIDANCE = (
     "- When asked to build, run or verify something, deliver a real result backed by tool output, not a "
     "plan or a stub. If a blocker stops the real path, say so plainly and try another way.\n"
     "\n"
-    "Websites that need the user's sign-in, for work no connected tool (mail, calendar, files...) covers: work "
-    "in them only through the ego-browser skill (Crema's 웹 브라우저 조작). If that skill is not in your skill list, 웹 브라우저 조작 is off or not installed: say so and ask the "
-    "user to turn it on in Settings → 부가 기능 연동 → 웹 브라우저 조작. Don't open the user's own browser from the "
-    "terminal or with computer use unless they ask for exactly that: it is the window they are working in. A "
-    "public page you only need to read can still be read with web_extract.\n"
-    "\n"
     "The user's computer time\n"
     "- Minimize how long the user cannot use their computer, not just click duration. Prepare research, code, builds, test inputs, expected results and how to end control before taking their screen or input. Prefer available connected tools and verified background actions that preserve the intended app and sign-in.\n"
     "- Before foreground use, state the target, one result to check and expected time. Plan for 30 seconds; split work planned to exceed 60 seconds. Count from when the user starts waiting. These are planning budgets, not automatic timeout guarantees.\n"
@@ -527,10 +521,52 @@ OPENAI_MODEL_EXECUTION_GUIDANCE = (
 )
 
 
+def crema_method_guidance(tool_names) -> str:
+    names = set(tool_names or ())
+    opening, _, computer_and_rest = CREMA_METHOD_GUIDANCE.partition("The user's computer time")
+    computer, _, work = computer_and_rest.partition("While you work")
+    parts = [opening.rstrip()]
+    browser = ""
+    if "skill_view" in names:
+        browser = (
+            "For work in signed-in websites, use an available connected tool or the ego-browser skill if it is "
+            "available. If neither is available, say which part of the work is blocked."
+        )
+    elif names & {"computer_use", "terminal", "execute_code", "pc_run"}:
+        browser = (
+            "For work in signed-in websites, use an available connected tool. "
+            "If you cannot reach the website with a permitted tool, say what is blocked."
+        )
+    if browser:
+        browser += (
+            " In the Crema desktop app, the user can check Settings → 부가 기능 연동 → 웹 브라우저 조작. "
+            "Open the user's own browser only on an explicit request."
+        )
+        if "web_extract" in names:
+            browser += " You can read public pages with web_extract."
+        parts.append(browser)
+    if "computer_use" in names:
+        parts.append(("The user's computer time" + computer).rstrip())
+    parts.append("While you work" + work)
+    guidance = "\n\n".join(parts)
+    if "clarify" not in names:
+        guidance = guidance.replace(
+            "Then ask with clarify (go ahead / go ahead with changes / only some pieces; "
+            "numbered choices in text where clarify is not offered) and end your reply.",
+            "Then ask for approval in the reply and end it.",
+        )
+    if not names:
+        guidance = (
+            guidance.replace("look it up with your tools, or ask the user when only they know it.",
+                             "use the information provided or ask the user.")
+            .replace("backed by tool output", "backed by available evidence")
+            .replace("Before your first tool call, and when you start a new stage", "When you start a new stage")
+        )
+    return guidance
+
+
 # Each <mandatory_tool_use>/<act_dont_ask> line above named against the tool(s) it tells the model to reach
-# for. A line is dropped when none of its named tools are in the session's valid_tool_names, so a toolset
-# without terminal/execute_code/etc. isn't told to use them (#106506). The
-# guidance names no web tool (#39797), so there is no entry for one.
+# for. Keep only available tools in each example. The guidance names no web tool (#39797).
 _EXECUTION_GUIDANCE_LINE_TOOLS = {
     "- Arithmetic, math, calculations → use terminal or execute_code\n": {"terminal", "execute_code"},
     "- Hashes, encodings, checksums → use terminal (e.g. sha256sum, base64)\n": {"terminal"},
@@ -542,6 +578,8 @@ _EXECUTION_GUIDANCE_LINE_TOOLS = {
         "terminal",
     },
     "- Git history, branches, diffs → use terminal\n": {"terminal"},
+    "- 'Is port 443 open?' → check THIS machine (don't ask 'open where?')\n": {"terminal"},
+    "- 'What OS am I running?' → check the live system (don't use user profile)\n": {"terminal"},
     "- 'What time is it?' → run `date` (don't guess)\n": {"terminal"},
 }
 
@@ -556,8 +594,12 @@ def execution_guidance_text(valid_tool_names=None) -> str:
     if valid_tool_names is not None:
         valid_tool_names = set(valid_tool_names)
         for line, tools in _EXECUTION_GUIDANCE_LINE_TOOLS.items():
-            if not tools & valid_tool_names:
+            available = tools & valid_tool_names
+            if not available:
                 text = text.replace(line, "")
+            elif available != tools:
+                label, _, _ = line.partition(" → use ")
+                text = text.replace(line, label + " → use " + " or ".join(sorted(available)) + "\n")
     return text
 
 
@@ -566,8 +608,8 @@ def execution_guidance_text(valid_tool_names=None) -> str:
 GOOGLE_MODEL_OPERATIONAL_GUIDANCE = (
     "# Google model operational directives\n"
     "Follow these operational rules strictly:\n"
-    "- **Absolute paths:** Always construct and use absolute file paths for all "
-    "file system operations. Combine the project root with relative paths.\n"
+    "- **Paths:** Follow each tool's path format. Resolve local paths in that tool's working folder. "
+    "For a connected PC file tool, keep its pc:// reference unchanged.\n"
     "- **Verify first:** Use read_file/search_files to check file contents and "
     "project structure before making changes. Never guess at file contents.\n"
     "- **Dependency checks:** Never assume a library is available. Check "
@@ -939,7 +981,7 @@ def _clear_backend_probe_cache() -> None:
     _BACKEND_PROBE_CACHE.clear()
 
 
-def _local_host_hints() -> list[str]:
+def _local_host_hints(*, terminal_available: bool = True) -> list[str]:
     """Host OS / home / cwd block for a local terminal backend (tools run on this host)."""
     import platform
 
@@ -954,6 +996,8 @@ def _local_host_hints() -> list[str]:
         host_lines.append(f"Current working directory: {resolve_agent_cwd()}")
     except OSError:
         pass
+    if not terminal_available:
+        return ["\n".join(host_lines)]
     # The model reaches for the system temp dir by reflex (tmpfs on most Linux hosts, fills RAM);
     # naming Hermes' scratch dir here is what makes the TMPDIR export a habit rather than a hidden default.
     try:
@@ -1007,10 +1051,14 @@ def _bot_screen_hint() -> str:
         return ""
 
 
-def _remote_backend_hint(backend: str) -> str:
+def _remote_backend_hint(backend: str, tool_names: Optional[Collection[str]] = None) -> str:
     """Backend-only block for remote/sandbox backends (host info deliberately suppressed)."""
-    lead = (f"Terminal backend: {backend}. Your `terminal`, `read_file`, `write_file`, `patch`, and "
-            f"`search_files` tools all operate inside ")
+    available = [name for name in ("terminal", "read_file", "write_file", "patch", "search_files")
+                 if tool_names is None or name in tool_names]
+    names = ", ".join(f"`{name}`" for name in available)
+    if "terminal" not in available:
+        return f"Use paths inside the {backend} environment with {names}." if available else ""
+    lead = f"Terminal backend: {backend}. The tools {names} operate inside "
     probe = _probe_remote_backend(backend)
     if probe:
         return lead + (
@@ -1048,18 +1096,21 @@ def _embedder_environment_hint() -> str:
         (_config_readonly("agent.environment_hint").get("agent", {}) or {}).get("environment_hint", "")).strip()
 
 
-def build_environment_hints() -> str:
+def build_environment_hints(tool_names: Optional[Collection[str]] = None) -> str:
     """Execution-environment block: local backends get host OS/home/cwd; remote/sandbox
     backends get ONLY the backend's own state (the agent's tools cannot touch the host).
     WSL and embedder hints are appended."""
     backend = (_tenv_read("TERMINAL_ENV") or "local").strip().lower()
     is_remote_backend = backend in _REMOTE_TERMINAL_BACKENDS or _plugin_backend_is_remote(backend)
-    hints = [_remote_backend_hint(backend)] if is_remote_backend else _local_host_hints()
+    terminal_available = tool_names is None or "terminal" in tool_names
+    hints = ([_remote_backend_hint(backend, tool_names)] if is_remote_backend
+             else _local_host_hints(terminal_available=terminal_available))
     # A host-placed Bot Screen is only reachable from a local backend (a sandboxed terminal cannot
     # open windows on the gateway host), and a sandbox-placed one is the sandbox probe's business.
-    if not is_remote_backend:
+    # The announcement tells the model how to launch and inspect windows through terminal.
+    if terminal_available and not is_remote_backend:
         hints.append(_bot_screen_hint())
-    hints += [WSL_ENVIRONMENT_HINT] if is_wsl() else []
+    hints += [WSL_ENVIRONMENT_HINT] if terminal_available and is_wsl() else []
     return "\n\n".join(h for h in (*hints, _embedder_environment_hint()) if h)
 
 
@@ -1624,9 +1675,38 @@ def crema_md_paths(cwd: Optional[str] = None, home_override: "Path | None" = Non
     return paths
 
 
+def _context_file_block(label, path, content, user_authored, context_length, *, queue_warning=True):
+    body = f"## {label}: {path}\n\n{_scan_context_content(content, label, user_authored=user_authored)}"
+    return _truncate_content(body, label, context_length=context_length, read_path=str(path), queue_warning=queue_warning)
+
+
+def build_service_instructions_prompt(
+    home: Path | None, context_length: int | None, *, queue_warning: bool = True,
+) -> str:
+    """Render the administrator's file. A transient read error must not erase a saved policy."""
+    path = (home if home is not None else get_hermes_home()) / ".service-instructions.md"
+    try:
+        content = _read_text_with_timeout(path)
+    except FileNotFoundError:
+        return ""
+    if content is None:
+        raise TimeoutError(f"Service instructions could not be read: {path}")
+    content = content.strip()
+    if not content:
+        return ""
+    return (
+        "# Service instructions\n\n"
+        "Follow these administrator instructions over conflicting project and personal instructions. "
+        "When a service instruction explicitly sets a default, use the applicable project or personal "
+        "preference. Access and approval still depend on the tools and the account's permissions.\n\n"
+        + _context_file_block("CREMA.md (service)", path, content, True, context_length, queue_warning=queue_warning)
+    )
+
+
 def build_context_files_prompt(
     cwd: Optional[str] = None, skip_soul: bool = False, context_length: Optional[int] = None,
     allow_install_tree_fallback: bool = False, home_override: Path | None = None,
+    *, include_service: bool = True,
 ) -> str:
     """Context files for the system prompt: SOUL.md from HERMES_HOME unless *skip_soul* (already the identity
     slot), then the user's CREMA.md instructions (``crema_md_paths``).
@@ -1643,13 +1723,18 @@ def build_context_files_prompt(
                      "followed:\n\n" + soul)
     sections = []
     for label, path, user_authored in crema_md_paths(cwd, home_override):
+        if label == "CREMA.md (service)":
+            if include_service:
+                parts.append(build_service_instructions_prompt(home_override, context_length))
+            continue
         content = _read_context_file(path)
         if content:
-            body = f"## {label}: {path}\n\n{_scan_context_content(content, label, user_authored=user_authored)}"
-            sections.append(_truncate_content(body, label, context_length=context_length, read_path=str(path)))
+            sections.append(_context_file_block(label, path, content, user_authored, context_length))
     if sections:
-        precedence = (" Where they disagree, follow this project's instructions when present; otherwise follow the user's own instructions over service instructions." if len(sections) > 1
-                      else "")
+        precedence = (
+            " When they disagree, follow this project's instructions over personal instructions."
+            if len(sections) > 1 else ""
+        )
         parts.append("# CREMA.md\n\nThe user's standing instructions for working in Crema. Follow them in this "
                      f"chat.{precedence}\n\n" + "\n\n".join(sections))
-    return "\n\n".join(parts)
+    return "\n\n".join(part for part in parts if part)

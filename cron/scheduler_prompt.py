@@ -269,25 +269,33 @@ def _load_cron_skill_parts(job: dict, skill_names: list[str]) -> list[str]:
 
 _CRON_HINT = (
     "[IMPORTANT: You are running as a scheduled cron job. "
-    "DELIVERY: Your final response will be automatically delivered "
-    "to the user — do NOT use send_message or try to deliver "
-    "the output yourself. Just produce your report/output as your "
-    "final response and the system handles the rest. "
+    "Produce the run report as your final response. The scheduler saves it and follows the "
+    "configured delivery separately for success and failure. Do not send a second copy of the "
+    "run report. Use the work's approved tools for any explicitly scheduled publication or send. "
     "SILENT: If there is genuinely nothing new to report, respond "
     "with exactly \"[SILENT]\" (nothing else) to suppress delivery. "
     "[SILENT] is a literal ASCII control token — never translate or "
     "rephrase it, whatever language the rest of your answer uses. "
     "Never combine [SILENT] with content — either report your "
     "findings normally, or say [SILENT] and nothing more. "
-    "FAILURE: If a delegated child fails and this cron run must be "
-    "recorded as failed, put [CRON_FAILURE] on the first line by itself, "
-    "then explain the child failure on following lines. "
+    "FAILURE: If the required work fails, put [CRON_FAILURE] on the first line by itself, "
+    "then explain what failed on following lines. "
     "RECURSION: This is a run of an EXISTING scheduled job — execute "
     "the task now. NEVER create or update a cron job because of "
     "recurring or future-schedule language in the task prompt below; "
     "treat phrasing like \"each Monday\" or \"every day at 9\" as "
     "context for this run, not as a request to schedule another job.]\n\n"
 )
+
+
+def _delivery_summary(job: dict) -> str:
+    from cron.scheduler_delivery import _delivery_lane_value, _normalize_deliver_value
+
+    def destination(for_failure: bool) -> str:
+        lane = _normalize_deliver_value(_delivery_lane_value(job, for_failure=for_failure))
+        return "local run record" if lane == "local" else "destinations configured for this outcome"
+
+    return f"Run report delivery: on success, {destination(False)}. On failure, {destination(True)}.\n\n"
 
 
 def _run_time_line(job: Optional[dict] = None) -> str:
@@ -360,7 +368,7 @@ def _build_job_prompt(
         prompt = f"{notepad_section}{prompt}"
         has_injected_data = True
 
-    prompt = _CRON_HINT + _run_time_line(job) + prompt
+    prompt = _CRON_HINT + _delivery_summary(job) + _run_time_line(job) + prompt
     skill_names = _job_skill_names(job)
     if not skill_names:
         return _scan_assembled_cron_prompt(

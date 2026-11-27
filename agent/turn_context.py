@@ -1329,6 +1329,9 @@ def build_turn_context(
     refresh_warm_prompt(agent, system_message, conversation_history)
     if agent._cached_system_prompt is None:
         restore_or_build_system_prompt(agent, system_message, conversation_history)
+    if conversation_history:
+        from agent.system_prompt import refresh_service_prompt
+        refresh_service_prompt(agent)
     active_system_prompt = agent._cached_system_prompt
     # `/delegation <backend> --now`: after the pin restore, so a fresh agent rebuilds too.
     from agent.delegation_backends import apply_requested_tool_rebuild
@@ -1553,9 +1556,8 @@ def build_api_messages(
     # Final system message = cached prompt + ephemeral additions (API-time only).
     # Plugin/recall context goes into the user message, never the system prompt: the
     # prompt is built ONCE per session and replayed verbatim (stable cache prefix).
-    effective_system = active_system_prompt or ""
-    if agent.ephemeral_system_prompt:
-        effective_system = (effective_system + "\n\n" + agent.ephemeral_system_prompt).strip()
+    from agent.system_prompt import effective_system_prompt
+    effective_system = effective_system_prompt(agent, active_system_prompt or "")
     if effective_system:
         api_messages = [{"role": "system", "content": effective_system}] + api_messages
     return api_messages, effective_system

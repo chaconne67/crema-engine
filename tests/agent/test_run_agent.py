@@ -1092,21 +1092,23 @@ class TestCremaMethodGuidance:
             return a
 
     def test_every_model_gets_it_once_right_after_the_identity(self):
-        from agent.prompt_builder import CREMA_METHOD_GUIDANCE, DEFAULT_AGENT_IDENTITY
+        from agent.prompt_builder import crema_method_guidance, DEFAULT_AGENT_IDENTITY
         for model in ("anthropic/claude-opus-4.8", "openai/gpt-4.1", "google/gemini-3-pro-preview"):
-            prompt = self._make_agent(model=model)._build_system_prompt()
-            assert prompt.startswith(DEFAULT_AGENT_IDENTITY + "\n\n" + CREMA_METHOD_GUIDANCE), model
-            assert prompt.count(CREMA_METHOD_GUIDANCE) == 1, model
+            agent = self._make_agent(model=model)
+            method = crema_method_guidance(agent.valid_tool_names)
+            prompt = agent._build_system_prompt()
+            assert prompt.startswith(DEFAULT_AGENT_IDENTITY + "\n\n" + method), model
+            assert prompt.count(method) == 1, model
 
     def test_config_cannot_turn_it_off(self):
-        from agent.prompt_builder import CREMA_METHOD_GUIDANCE
+        from agent.prompt_builder import crema_method_guidance
         agent = self._make_agent(task_completion_guidance=False)
-        assert CREMA_METHOD_GUIDANCE in agent._build_system_prompt()
+        assert crema_method_guidance(agent.valid_tool_names) in agent._build_system_prompt()
 
     def test_without_tools_too(self):
-        from agent.prompt_builder import CREMA_METHOD_GUIDANCE, DEFAULT_AGENT_IDENTITY
+        from agent.prompt_builder import crema_method_guidance, DEFAULT_AGENT_IDENTITY
         prompt = self._make_agent(tools=())._build_system_prompt()
-        assert prompt.startswith(DEFAULT_AGENT_IDENTITY + "\n\n" + CREMA_METHOD_GUIDANCE)
+        assert prompt.startswith(DEFAULT_AGENT_IDENTITY + "\n\n" + crema_method_guidance([]))
 
 
 class TestEnvironmentProbeIntegration:

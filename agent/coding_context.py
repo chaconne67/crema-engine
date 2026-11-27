@@ -345,9 +345,16 @@ class RuntimeMode:
         prefix: list[str] = []
         if self.profile.guidance:
             brief = self.profile.guidance
-            if valid_tool_names is not None and "todo_list" not in valid_tool_names:
-                brief = brief.replace(_TODO_SENTENCE, _NO_TODO_SENTENCE)
-            family = _model_family(self.model)
+            tools = None if valid_tool_names is None else set(valid_tool_names)
+            if tools is not None:
+                if "todo_list" not in tools:
+                    brief = brief.replace(_TODO_SENTENCE, _NO_TODO_SENTENCE)
+                if "terminal" not in tools:
+                    brief = re.sub(r"(?ms)^- Use `terminal` .*?(?=^- Fix root causes)", "", brief)
+                    brief = brief.replace(
+                        " — re-run `git status`/`git branch` before relying on it.", ". It may be out of date."
+                    )
+            family = _model_family(self.model) if tools is None or {"patch", "write_file"} <= tools else None
             if family is not None:
                 brief = f"{brief}\n{_EDIT_FORMAT_GUIDANCE[family][1]}"
             prefix.append(brief)

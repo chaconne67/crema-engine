@@ -519,10 +519,9 @@ def _consume_user_interrupt(agent, active: bool = True) -> tuple[bool, Any]:
 
 def _codex_developer_instructions(agent) -> str:
     """The prompt composition the standard loop sends as its system message (turn_context order)."""
-    developer_instructions = getattr(agent, "_cached_system_prompt", None) or ""
-    if getattr(agent, "ephemeral_system_prompt", None):
-        developer_instructions = (developer_instructions + "\n\n" + agent.ephemeral_system_prompt).strip()
-    return developer_instructions
+    from agent.system_prompt import effective_system_prompt
+
+    return effective_system_prompt(agent, getattr(agent, "_cached_system_prompt", None) or "")
 
 
 # Durable codex thread binding: ``sessions.model_config.codex_thread_id`` (hermes_state), written after the

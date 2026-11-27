@@ -90,6 +90,7 @@ def rebuild_for_refresh(agent: Any, system_message: Any, conversation_history: A
     from agent.agent_init_session import agent_interface
     from agent.prompt_builder import clear_skills_system_prompt_cache
     from agent.surface_switch import stage_surface_switch_note
+    from agent.system_prompt import save_prompt_snapshot
     from hermes_cli.observability.shared_metrics_efficiency import record_cache_break
 
     logger.info("Operator requested a system prompt refresh (epoch %d) for session %s; rebuilding it "
@@ -107,8 +108,7 @@ def rebuild_for_refresh(agent: Any, system_message: Any, conversation_history: A
     if db:
         store = agent_interface(agent)
         try:
-            (store.sessions if store is not None else db).update_system_prompt(agent.session_id,
-                                                                               agent._cached_system_prompt)
+            save_prompt_snapshot(agent, store, agent._cached_system_prompt)
         except Exception:
             logger.warning("Could not persist the refreshed system prompt (session=%s); the refresh "
                            "re-fires next turn.", agent.session_id, exc_info=True)

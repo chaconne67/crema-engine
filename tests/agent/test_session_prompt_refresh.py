@@ -62,11 +62,12 @@ def profile(monkeypatch, tmp_path):
         yield srv, home, project
 
 
-def _agent(srv, home, session_id):
+def _agent(srv, home, session_id, *, precreate=True):
     from run_agent import AIAgent
 
     store = storage_handle(home)
-    seed_session(store, session_id, "whatsapp")  # the gateway opens the row before the turn
+    if precreate:
+        seed_session(store, session_id, "whatsapp")  # the gateway opens the row before the turn
     return AIAgent(provider="custom", base_url=srv.base_url, api_key="sk-fake-e2e", model="fake-model",
                    session_db=store, persistence=store, session_id=session_id, quiet_mode=True, platform="whatsapp")
 
@@ -136,6 +137,41 @@ def test_without_the_verb_a_continuing_session_keeps_its_stored_prompt(profile):
     _update_profile(home, project)
     history, second = _turn(srv, home, "chat-a", "still there?", history)
     assert second == first  # main's contract: the stored bytes are replayed until /new
+
+
+@pytest.mark.parametrize("warm", [False, True])
+def test_service_change_replaces_only_saved_service_instructions(profile, warm):
+    srv, home, project = profile
+    service_path = home / ".service-instructions.md"
+    personal_path = home / "CREMA.md"
+    project_path = project / "CREMA.md"
+    service_path.write_text("Old service rule.", encoding="utf-8")
+    personal_path.write_text("Old personal rule.", encoding="utf-8")
+    project_path.write_text("Old project rule.", encoding="utf-8")
+    agent = _agent(srv, home, "test-service", precreate=False) if warm else None
+    try:
+        history, initial = _turn(srv, home, "test-service", "first", [], agent=agent)
+        assert initial.count("# Service instructions") == 1
+        assert all(rule in initial for rule in ("Old service rule.", "Old personal rule.", "Old project rule."))
+        tool_pin = session_row(storage_handle(home), "test-service")["tool_names"]
+
+        service_path.write_text("Updated service rule.", encoding="utf-8")
+        personal_path.write_text("New personal rule.", encoding="utf-8")
+        project_path.write_text("New project rule.", encoding="utf-8")
+        history, updated = _turn(srv, home, "test-service", "second", history, agent=agent)
+        assert updated == initial.replace("Old service rule.", "Updated service rule.")
+        assert _user_texts(srv.main_requests()[-1])[:2] == ["first", "second"]
+        stored = session_row(storage_handle(home), "test-service")
+        assert stored["system_prompt"] == updated
+        assert stored["tool_names"] == tool_pin
+
+        _, later = _turn(srv, home, "test-service", "third", history)
+        assert later == updated
+        _, new = _turn(srv, home, "new-service-test", "new", [])
+        assert all(rule in new for rule in ("Updated service rule.", "New personal rule.", "New project rule."))
+    finally:
+        if agent is not None:
+            agent.close()
 
 
 def test_the_verb_makes_the_next_turn_adopt_soul_skills_and_project_files_once(profile, monkeypatch, capsys):

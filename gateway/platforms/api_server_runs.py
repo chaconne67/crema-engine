@@ -850,6 +850,7 @@ async def _admit_run_to_authority(
                 conversation_history=launch.conversation_history, active_run_id=run_id,
                 run_owner_scope=self._run_owners[run_id],
                 turn_author=launch.turn_author,
+                crema_scheduled=launch.scheduled is not None,
                 history_from_session=session_history_delivery,
                 session_history_delivery='1' if session_history_delivery else '',
                 bind_declared_conversation=_declared_selected, walked_from=launch.walked_from, cwd=launch.cwd,

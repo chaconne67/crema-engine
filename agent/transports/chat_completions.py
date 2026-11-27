@@ -668,6 +668,7 @@ class ChatCompletionsTransport(ProviderTransport):
             base_url=params.get("base_url"), ollama_num_ctx=params.get("ollama_num_ctx"),
             session_id=params.get("session_id"), cache_scope_id=params.get("cache_scope_id"),
             **({"lmstudio_reasoning_options": _lm_options} if _lm_options is not None else {}),
+            **({"crema_service_policy": params["crema_service_policy"]} if "crema_service_policy" in params else {}),
             ephemeral_system_prompt=params.get("ephemeral_system_prompt"),
         )
         api_kwargs.update(top_level_from_profile)

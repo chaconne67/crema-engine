@@ -313,10 +313,16 @@ class AIAgent(
         return self._session_db
 
     def _session_row_model_config(self) -> Any:
-        """``model_config`` for the lazily created session row: the init config plus a live /yolo toggled
-        before the first turn (``hermes --resume`` restores it)."""
+        """Initial route, live /yolo and provenance for the prompt in the first session row."""
+        from agent.system_prompt import prompt_layout_patch
         from tools.approval_yolo import with_session_yolo
-        return with_session_yolo(self._session_init_model_config, self.session_id)
+
+        config = with_session_yolo(self._session_init_model_config, self.session_id)
+        if self._cached_system_prompt:
+            layout = prompt_layout_patch(self, self._cached_system_prompt)
+            if layout:
+                return {**(config or {}), **layout}
+        return config
 
     def _ensure_db_session(self) -> None:
         """Create the session DB row on first use; a transient failure leaves it to retry next turn."""

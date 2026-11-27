@@ -362,23 +362,27 @@ async def execute_admission(authority, ref, row):
     # This drain, not the handler's unwind, releases the turn's crash marker (see below).
     event._turn_marker_handoff = True
     handed = False
-    heartbeat_context = []
+    scheduled_context = []
+    scheduled = None
     try:
         async with _admission_scope(authority, ref, home, row, event, captured):
             if is_api:
                 # Committed media resolves under the owning profile's home, like admission did.
                 prepared = prepare_api_execution(authority, ref, row['payload'])
-                if heartbeat := row['payload'].get('api_turn_v1', {}).get('heartbeat'):
+                heartbeat = row['payload'].get('api_turn_v1', {}).get('heartbeat')
+                if prepared['crema_scheduled'] or heartbeat:
+                    from tools.crema_schedule_tool import _scheduled_turn
+                    scheduled = {}
+                    scheduled_context.append((_scheduled_turn, _scheduled_turn.set(scheduled)))
+                if heartbeat:
                     from crema_heartbeat import active, current_turn
                     from engine_home import refresh_account_profile
                     from hermes_constants import get_hermes_home
-                    from tools.crema_schedule_tool import _scheduled_turn
                     # A recovered admission may have waited across a membership or assignment change.
                     await asyncio.to_thread(refresh_account_profile, get_hermes_home())
                     if not active(heartbeat['ref'], heartbeat['session']):
                         raise AuthorityRefusal('heartbeat_stopped')
-                    heartbeat_context.append((_scheduled_turn, _scheduled_turn.set({})))
-                    heartbeat_context.append((current_turn, current_turn.set((heartbeat['ref'], heartbeat['session']))))
+                    scheduled_context.append((current_turn, current_turn.set((heartbeat['ref'], heartbeat['session']))))
                 api_execution.set(prepared)
                 if isinstance(event.text, list):
                     # The durable transcript keeps the committed media references (the same
@@ -400,6 +404,8 @@ async def execute_admission(authority, ref, row):
                 if is_api or (row['payload'].get('finite') is True and not event.get_command()):
                     result = {'final_response': '', 'messages': [], 'failed': True, 'completed': False,
                               'error': response or 'The admitted turn failed.'}
+            if scheduled and scheduled.get('pc_unavailable'):
+                result = {**result, 'schedule_unavailable': scheduled['pc_unavailable']}
             # The drain commits this under the stream lock so no viewer reads `terminal`
             # before the completion event exists in the replay ring.
             authority.pending_results[row['admission_id']] = {
@@ -429,7 +435,7 @@ async def execute_admission(authority, ref, row):
             await _release_turn_marker(authority, event)
         executing_admission.reset(token)
         execution_result.reset(result_token)
-        for variable, value in reversed(heartbeat_context):
+        for variable, value in reversed(scheduled_context):
             variable.reset(value)
         api_execution.reset(api_token)
         admission_author.reset(author_token)

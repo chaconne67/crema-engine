@@ -1465,6 +1465,9 @@ def _build_chat_completions_kwargs(agent, api_messages, tools_for_api, reasoning
         lmstudio_reasoning_options=agent._lmstudio_reasoning_options_cached() if _is_lmstudio else None,
         qwen_session_metadata=_qwen_meta,
         ephemeral_system_prompt=getattr(agent, "ephemeral_system_prompt", None))
+    if agent.provider == "gemini-agy":
+        from agent.system_prompt import gemini_service_policy
+        _common["crema_service_policy"] = gemini_service_policy(agent)
     if _profile:
         # Profiles handle per-provider quirks via hooks fed the context above.
         return transport.build_kwargs(provider_profile=_profile, **_common)
@@ -1748,9 +1751,13 @@ def rewrite_prompt_model_identity(agent, model: str, provider: str) -> None:
     Not persisted: the stored row keeps the primary's labels so a restored primary replays a
     byte-identical prompt (prefix cache intact). Only the LAST occurrence of each line is touched —
     earlier matches may be user content (memory snapshots, context files)."""
+    from agent.system_prompt import _prompt_digest, prompt_layout_patch, model_names_visible
+    if not model_names_visible():
+        return
     sp = getattr(agent, "_cached_system_prompt", None)
     if not isinstance(sp, str) or not sp:
         return
+    layout = prompt_layout_patch(agent, sp)
     for label, value in (("Model", model), ("Provider", provider)):
         if not value:
             continue
@@ -1759,6 +1766,8 @@ def rewrite_prompt_model_identity(agent, model: str, provider: str) -> None:
             last = matches[-1]
             sp = f"{sp[:last.start()]}{label}: {value}{sp[last.end():]}"
     agent._cached_system_prompt = sp
+    if layout:
+        agent._crema_prompt_layout = {**agent._crema_prompt_layout, "digest": _prompt_digest(sp)}
 
 
 def _fallback_entry_key(fb: dict) -> tuple[str, str, str]:
@@ -2115,9 +2124,8 @@ def _iteration_summary_api_messages(agent, messages: list) -> list:
             agent._sanitize_tool_calls_for_strict_api(api_msg, model=sanitize_model)
         api_messages.append(api_msg)
 
-    effective_system = agent._cached_system_prompt or ""
-    if agent.ephemeral_system_prompt:
-        effective_system = (effective_system + "\n\n" + agent.ephemeral_system_prompt).strip()
+    from agent.system_prompt import effective_system_prompt
+    effective_system = effective_system_prompt(agent, agent._cached_system_prompt or "")
     if effective_system:
         api_messages = [{"role": "system", "content": effective_system}] + api_messages
     for idx, pfm in enumerate(agent.prefill_messages or ()):

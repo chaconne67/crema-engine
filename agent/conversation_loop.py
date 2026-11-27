@@ -756,9 +756,9 @@ def _persist_system_prompt(agent, failure_message: str, *, persist_tools: bool =
         return
     try:
         from agent.agent_init_session import agent_interface
+        from agent.system_prompt import save_prompt_snapshot
         store = agent_interface(agent)
-        (store.sessions if store is not None else agent._session_db).update_system_prompt(
-            agent.session_id, agent._cached_system_prompt)
+        save_prompt_snapshot(agent, store, agent._cached_system_prompt)
         if persist_tools:
             from tools.mcp_tool_agent import persist_agent_tool_names
             persist_agent_tool_names(agent)
@@ -852,7 +852,7 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
                 agent.session_id, exc,
             )
 
-    if stored_prompt and _stored_prompt_matches_runtime(agent, stored_prompt):
+    if stored_prompt and _stored_prompt_matches_runtime(agent, stored_prompt, session_row.get("model_config")):
         # NULL/empty rows never reach this probe: they already rebuild below.
         if _bot_chat_prompt_stale(agent, stored_prompt):
             logger.info(
@@ -896,6 +896,8 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
         # Continuing session — reuse the exact system prompt from the
         # previous turn so the Anthropic cache prefix matches.
         agent._cached_system_prompt = stored_prompt
+        from agent.system_prompt import restore_prompt_layout
+        restore_prompt_layout(agent, session_row.get("model_config"))
         # The reused bytes may describe the surface this conversation STARTED on; correct that
         # at the tail of the request instead of rebuilding the prompt in front of it (#104414).
         announced_switch = stage_surface_switch_note(agent, stored_prompt, conversation_history)
@@ -984,7 +986,7 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
     stamp_prompt_epoch(agent, refresh_epoch)
 
 
-def _stored_prompt_matches_runtime(agent, prompt: str) -> bool:
+def _stored_prompt_matches_runtime(agent, prompt: str, model_config=None) -> bool:
     """Return False when the persisted runtime-identity lines are stale."""
     # Model/provider identity, then cwd drift.  A cwd change is a real content change (context
     # files, the workspace snapshot and the coding posture are all resolved from it), so it
@@ -992,8 +994,8 @@ def _stored_prompt_matches_runtime(agent, prompt: str) -> bool:
     # The builder omits an empty trailer line, so stored-but-now-empty is a route change too;
     # the rebuilt prompt then carries no line and matches from the next turn on.  Stored-empty
     # (pre-trailer prompts) keeps reusing.
-    for label, attr in (("Model", "model"), ("Provider", "provider")):
-        stored = identity_line_value(prompt, label)
+    from agent.system_prompt import stored_prompt_route
+    for stored, attr in zip(stored_prompt_route(model_config, prompt), ("model", "provider")):
         current = str(getattr(agent, attr, "") or "").strip()
         if stored and stored != current:
             return False
@@ -1226,7 +1228,8 @@ def _sync_failover_system_message(agent, api_messages, active_system_prompt):
     if not isinstance(sp, str) or not sp:
         return active_system_prompt
     if api_messages and api_messages[0].get("role") == "system":
-        effective = (sp + "\n\n" + agent.ephemeral_system_prompt).strip() if agent.ephemeral_system_prompt else sp
+        from agent.system_prompt import effective_system_prompt
+        effective = effective_system_prompt(agent, sp)
         if not _rewrite_system_content_blocks(api_messages[0], effective):
             api_messages[0]["content"] = effective
     return sp

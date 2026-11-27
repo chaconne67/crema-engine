@@ -95,6 +95,7 @@ def run_projection(adapter, run_id):
             status = 'waiting_for_approval'  # the documented run state main's run store reports
     return {**progress, 'pending_controls': pending, 'run_id': run_id, 'status': status, 'session_id': row['target_session_id'],
             'admission_id': row['admission_id'], 'execution_generation': row['generation'],
+            **({'schedule_unavailable': result['schedule_unavailable']} if result.get('schedule_unavailable') else {}),
             'output': result.get('final_response', ''), 'usage': saved.get('usage', {}) if saved else {}}
 
 

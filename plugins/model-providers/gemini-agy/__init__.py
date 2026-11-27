@@ -121,9 +121,10 @@ class GeminiAGYProfile(ProviderProfile):
         return AccountUsageSnapshot(provider=self.name, source="agy_usage_command",
                                     fetched_at=datetime.now(timezone.utc), windows=tuple(windows))
 
-    def build_api_kwargs_extras(self, *, session_id=None, ephemeral_system_prompt=None, **_):
+    def build_api_kwargs_extras(self, *, session_id=None, ephemeral_system_prompt=None, crema_service_policy=None, **_):
         # Auxiliaries do not get the conversational route's Hermes session ID.
-        return {}, {"crema_session_id": session_id, "crema_run_instructions": ephemeral_system_prompt}
+        return {}, {"crema_session_id": session_id, "crema_run_instructions": ephemeral_system_prompt,
+                    "crema_service_policy": crema_service_policy}
 
 
 register_provider(GeminiAGYProfile(

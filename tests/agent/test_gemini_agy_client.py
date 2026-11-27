@@ -101,6 +101,45 @@ def test_run_instructions_do_not_restore_context_removed_before_send(transport):
     assert calls[0][2] is None
 
 
+def test_service_policy_is_sent_once_as_metadata_and_keeps_live_session(transport, monkeypatch):
+    calls, _ = transport
+    monkeypatch.setitem(globals(), "TOOL_REPLY", "ORCHARD")
+    prefix = "Fixture context"
+    question = {"role": "user", "content": "Use pc://device/work for this question."}
+
+    def wire(policy, instructions, history):
+        section = "\n\n# Service instructions\n\n" + policy
+        system = {"role": "system", "content": prefix + section + "\n\n" + instructions}
+        complete([system, question, *history], crema_run_instructions=instructions, crema_service_policy={
+            "start": len(prefix), "end": len(prefix + section), "section": section,
+        })
+
+    wire("Service rule one.", "Response metadata A", [])
+    assert calls[0][2].count("Service rule one.") == 1
+    assert "Service rule one." not in calls[0][1]
+    assert "Response metadata A" in calls[0][1] and "Response metadata A" not in calls[0][2]
+    assert calls[0][1].endswith("Use pc://device/work for this question.")
+
+    history = [{"role": "assistant", "content": "ORCHARD", "reasoning_content": "Stored ACP reasoning"},
+               {"role": "user", "content": "Follow-up"}]
+    wire("Service rule one.", "Response metadata B", history)
+    assert calls[0][0] == calls[1][0]
+    assert calls[1][1].endswith("User:\nFollow-up")
+    wire("Service rule two.", "Response metadata B", history)
+    assert calls[2][0] != calls[1][0]
+    assert calls[2][2].count("Service rule two.") == 1 and "Service rule one." not in calls[2][2]
+
+
+def test_large_service_instructions_remain_whole_in_transcript(transport):
+    calls, _ = transport
+    service = "Service rules.\n" * 500
+    complete([{"role": "system", "content": service}, {"role": "user", "content": "Latest"}],
+             crema_service_policy={"start": 0, "end": len(service), "section": service})
+    assert calls[0][2] == agy._HOST_POLICY
+    assert service.rstrip() in calls[0][1]
+    assert calls[0][1].endswith("User:\nLatest")
+
+
 def test_long_transcript_preserves_text_usage_and_session(transport):
     calls, _ = transport
     body = "기록🌳" * 22000

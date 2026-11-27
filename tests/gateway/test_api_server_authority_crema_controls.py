@@ -101,6 +101,54 @@ async def _run_event(client, path, name, headers):
 
 
 @pytest.mark.asyncio
+async def test_only_a_signed_run_gets_the_scheduled_prompt_and_tool_scope(api, owner, monkeypatch):
+    import sys
+    from contextlib import nullcontext
+    from contextvars import ContextVar
+    from agent.system_prompt import effective_system_prompt
+    from gateway.session_results import execution_result
+    from tests.gateway.test_api_unknown_resolution import _AUTH_HEADERS, _runs_client
+    from tools.crema_schedule_tool import SCHEDULED_HEADER, scheduled_signature, scheduled_turn
+
+    monkeypatch.setattr(api_server_mod, "_api_request_profile", ContextVar("test_profile", default="default"))
+    monkeypatch.setattr(api, "_profile_scope", lambda _profile: nullcontext())
+    monkeypatch.setitem(sys.modules, "engine_home", SimpleNamespace(profile_has=lambda *_: True))
+    monkeypatch.setitem(sys.modules, "engine_keys", SimpleNamespace(engine_key=lambda _: "fixture-key"))
+    seen = []
+
+    async def handle(event):
+        from tools.crema_schedule_tool import scheduled_pc_unavailable
+        seen.append((scheduled_turn() is not None, effective_system_prompt(SimpleNamespace(), "Saved prompt.")))
+        if scheduled_turn() is not None:
+            scheduled_pc_unavailable("PC not available in this fixture.")
+        execution_result.get()["result"] = {"final_response": "ok", "messages": []}
+        return "ok"
+
+    owner.runner._handle_message = handle
+    client = _runs_client(api)
+    await client.start_server()
+    try:
+        body = {"input": "Run all the steps of the schedule.", "session_id": "api-session", "crema_scheduled": True}
+        for number, signed in enumerate((False, True, False)):
+            occurrence = f"crema-scheduled-test-{number}"
+            response = await client.post("/v1/runs", json=body, headers={
+                **_AUTH_HEADERS, "Idempotency-Key": occurrence,
+                SCHEDULED_HEADER: scheduled_signature("fixture-key", occurrence) if signed else "invalid",
+            })
+            assert response.status == 202, await response.text()
+            path = "/v1/runs/" + (await response.json())["run_id"]
+            async with client.get(path + "/events", headers=_AUTH_HEADERS) as events:
+                await events.read()
+            polled = await (await client.get(path, headers=_AUTH_HEADERS)).json()
+            assert polled.get("schedule_unavailable") == ("PC not available in this fixture." if signed else None)
+        assert [(scheduled, prompt.startswith("# Scheduled run")) for scheduled, prompt in seen] == [
+            (False, False), (True, True), (False, False),
+        ]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("pc_approval", "choice"), [(False, "once"), (True, "once"), (True, "deny")])
 async def test_the_app_sees_and_answers_a_runs_approval_and_question(api, owner, monkeypatch, pc_approval, choice):
     """The whole path: ``POST /v1/runs`` → authority turn → the app-shaped events on the run's stream and poll →

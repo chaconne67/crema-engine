@@ -6,7 +6,7 @@ until the agent has answered fixed questions and a freshly called reviewer agent
 judges what it can see then (owner 2026-11-06: each stage works on its own):
 1. Before an action that may change lasting work, until a plan has passed since the owner last spoke (new words may
    widen the work, owner 2026-11-10): an edit of a file there that is not a document, or a shell command that may
-   write there. The first hold gives the principles with the plan questions; the reviewer checks the answers against
+   write there. For uncertain shell effects the reviewer determines the target before requiring answers. It checks against
    the principles and the chat's records, and decides: not a change (this action runs), proceed, or revise.
 2. Before a commit with files that are not documents: the agent answers the commit questions; the reviewer checks them
    against the principles, the records and what the commit takes, and decides: commit or revise. A passed commit ends
@@ -500,8 +500,11 @@ def program(word):
     return re.sub(r"\.exe$", "", unquote(word).replace("\\", "/").rsplit("/", 1)[-1].lower())
 
 
+POSSIBLE_WRITE = "possible write"
+
+
 def writes(command, cwd=None, host=None, bodies=None):
-    """Whether a shell command may write lasting work (`in_scope`): a file it names there, or, when what it writes is not
+    """Return True for a protected write, POSSIBLE_WRITE for unresolved effects, or False. Scope is a named file or, when the target is not
     shown, the folder it runs in (`cd`, `ssh`'s home, the hook's folder). Words are read with their quotes: a quoted word
     is data given to the command (a search word), except the command an ssh call or a shell's -c runs, which is read
     the same way on that host. A heredoc's body is text given to a command, except a script given to a shell (read as a
@@ -521,6 +524,15 @@ def writes(command, cwd=None, host=None, bodies=None):
     except ValueError:
         return True  # the words cannot be read: asked
     where = {"cwd": cwd, "vars": {}, "env": {}}  # the folder the next command runs in; variables set to a known value; exported GIT_DIR, GIT_WORK_TREE
+
+    possible = False
+
+    def nested(command, folder, on):
+        nonlocal possible
+        effect = writes(command, folder, on, bodies)
+        if effect == POSSIBLE_WRITE:
+            possible = True
+        return effect is True
 
     def resolved(word):
         """The path a word names, or None when it cannot be known (an unset variable, a command's output)."""
@@ -612,12 +624,12 @@ def writes(command, cwd=None, host=None, bodies=None):
             shell = exe == "ssh" and not remote or any(r in SHELL_RUNNERS for r in runs)
             interpreter = any(INTERPRETERS.fullmatch(r) for r in runs)
             for script in scripts:
-                if shell and writes(script, run_in, on, bodies):
+                if shell and nested(script, run_in, on):
                     return True
                 if interpreter and WRITES.search(script) and (place_in_scope(on, run_in) or any(
                         is_code(p) and not in_temp(p) and in_scope(on, p if on else os.path.expanduser(p))
                         for p in PATH_LITERAL.findall(script)[:10])):
-                    return True
+                    possible = True
         if exe in {"docker", "podman"} and part[1:2] == ["cp"]:  # docker cp code.py web:/app/: a copy into a container
             if re.match(r"^[\w.-]{2,}:", unquote(part[-1])):
                 return True
@@ -626,7 +638,7 @@ def writes(command, cwd=None, host=None, bodies=None):
             i = 1
             while i < len(part) and part[i].startswith("-"):
                 i += 2 if part[i] in {"-n", "-I", "-L", "-P", "-d", "-s", "-E", "-a"} else 1
-            if i < len(part) and writes(" ".join(map(unquote, part[i:])), where["cwd"], host, bodies):
+            if i < len(part) and nested(" ".join(map(unquote, part[i:])), where["cwd"], host):
                 return True
             continue
         if exe == "find":  # find -delete, find -exec rm {} \;
@@ -636,7 +648,7 @@ def writes(command, cwd=None, host=None, bodies=None):
             for i, w in enumerate(part):
                 if w in {"-exec", "-execdir", "-ok"}:
                     end = next((j for j in range(i + 1, len(part)) if unquote(part[j]) in {";", "\\;", "+"}), len(part))
-                    if writes(" ".join(map(unquote, part[i + 1:end])), where["cwd"], host, bodies):
+                    if nested(" ".join(map(unquote, part[i + 1:end])), where["cwd"], host):
                         return True
             continue
         remote = ssh_parts(part) if exe == "ssh" else None
@@ -644,7 +656,7 @@ def writes(command, cwd=None, host=None, bodies=None):
             if WRITES.search(" ".join(part[:-len(remote[1])])) and here():
                 return True  # preserve execution-option checks before reading the remote command
             cut = next((i for i, w in enumerate(remote[1]) if re.match(r"(\d|&)?>", w)), len(remote[1]))
-            if writes(" ".join(map(unquote, remote[1][:cut])), "~", remote[0], bodies):
+            if nested(" ".join(map(unquote, remote[1][:cut])), "~", remote[0]):
                 return True
             part = ["ssh"] + remote[1][cut:]  # this shell's redirects, read below
         # a shell run by this one, also inside docker exec, sudo, wsl: bash -c '...', powershell -NoProfile -Command "..."
@@ -652,8 +664,8 @@ def writes(command, cwd=None, host=None, bodies=None):
             program(r) in SHELL_RUNNERS for r in part[:i - 1])]
         if runs:
             boxed = any(program(w) in {"docker", "podman"} for w in part[:runs[0]]) and "exec" in part[:runs[0]]
-            if WRITES.search(" ".join(part[:runs[0]])) and here() or writes(
-                    " ".join(map(unquote, part[runs[0]:])), None if boxed else where["cwd"], "container" if boxed else host, bodies):
+            if WRITES.search(" ".join(part[:runs[0]])) and here() or nested(
+                    " ".join(map(unquote, part[runs[0]:])), None if boxed else where["cwd"], "container" if boxed else host):
                 return True
             continue
         write_source = part
@@ -707,7 +719,11 @@ def writes(command, cwd=None, host=None, bodies=None):
                 target = unquote(word[found.end():] or (part[k + 1] if k + 1 < len(part) else ""))
                 # no target: 2>&1 inside $( ), whose & is read as its own word
                 if target and not (target.lower() in QUIET or target.startswith("&") or outside(target)):
-                    return True
+                    if resolved(target) is not None:
+                        return True
+                    possible = True
+        if part[0] in FILE_TOOLS and part[1:] in (["--help"], ["--version"]):
+            continue
         if exe in FILE_TOOLS:
             paths = [w for w in part[1:] if not w.startswith("-")]
             written = paths[-1:] if exe in {"cp", "ln"} else paths  # cp only reads its sources
@@ -725,15 +741,11 @@ def writes(command, cwd=None, host=None, bodies=None):
                 files = []
             if not all(outside(f) for f in files) if files else here():
                 return True
-    return False
+    return POSSIBLE_WRITE if possible else False
 
 
 CANNOT = ("잠시 뒤 같은 작업을 다시 하세요. 저장소 경로를 못 읽었으면 `cd ~/...`나 `git -C <경로>`로 다시 하세요. 계속 안 되면 "
           "막힌 작업과 이 오류를 변경 게이트(change-principles 플러그인)의 문제로 주인님께 보고하세요.")
-
-
-def principles():
-    return "\n\n--- 원칙 원문 ---\n" + reviewer.PRINCIPLES.read_text(encoding="utf-8")
 
 
 def answers_file(event, stage):
@@ -743,40 +755,39 @@ def answers_file(event, stage):
 
 def questions_text(path, stage):
     asked = "\n".join(f"- {name}: {q}" for name, q in reviewer.QUESTIONS[stage].items())
-    return (f"\n\n아래 질문마다 답을 {path} 에 JSON으로 쓰고 같은 작업을 다시 하세요. 모양: {{\"<질문 이름>\": \"답\", ...}}. "
-            "답 파일은 그 작업과 다른 명령으로 먼저 쓰세요. 같은 명령 안에서 쓰면 변경 게이트가 볼 때는 아직 답이 없습니다. "
-            "질문이 해당하지 않으면 '해당 없음'과 짧은 이유를 쓰세요. 이 대화에 이미 밝힌 내용은 답에서 짧게 언급하면 됩니다. "
-            + ("이 동작이 작업물을 바꾸지 않으면 change만 답하면 됩니다. " if stage == "plan" else "") + "새로 부른 검토 에이전트가 답을 원칙에 비추어 보고, 답이 이 대화 기록"
-            "(커밋 때는 커밋할 내용도)과 맞는지 확인합니다. 했다·돌렸다고 쓴 것은 그 실행이 대화 기록에 있어야 합니다. 하지 않은 일은 하지 "
-            "않았다고 쓰세요.\n" + asked)
+    return (f"\n{asked}\n질문 이름을 키로, 답을 값으로 담은 JSON을 {path} 에 먼저 저장한 뒤 다시 실행하세요. "
+            "검토자는 답을 실제 작업 기록과 대조합니다.")
 
 
-def judged(state, event, stage, action, diff=None):
-    """The reviewer's verdict on the agent's answers and this change's records, or ("hold", text) when the answers are
-    missing, the reviewer asks to revise, or no verdict can be had."""
+def judged(state, event, stage, action, diff=None, *, uncertain=False):
+    """Keep ordinary work moving. A protected change always needs answers and independent evidence."""
     path = answers_file(event, stage)
-    reused = stage == "plan" and not path.exists()
+    answers = state.get("accepted_plan") if stage == "plan" else None
+    reused = False
+    issue = "변경 게이트입니다. 요청한 변경과 검증 근거를 확인합니다."
     try:
-        answers = (json.loads(path.read_text(encoding="utf-8")) if path.exists() else
-                   state.get("accepted_plan") if reused else None)
+        answers = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        reused = answers is not None
     except ValueError as error:
-        return ("hold", f"답 파일이 JSON이 아닙니다({error}). 고친 뒤 같은 작업을 다시 하세요." + questions_text(path, stage)), None
-    if answers is None:
-        return ("hold", "변경 게이트입니다. 이 작업을 하기 전에 질문에 답하세요." + questions_text(path, stage) + principles()), None
+        answers = None
+        issue = f"답 파일이 JSON이 아닙니다({error})."
     missing = reviewer.unanswered(answers, stage)
-    # only `change` answered: the agent holds that the action does not change the work, and the reviewer judges that alone
-    only_change = stage == "plan" and missing == [q for q in reviewer.QUESTIONS["plan"] if q != "change"]
-    if missing and not only_change:
-        return ("hold", f"답이 없는 질문: {', '.join(missing)}. 모두 답한 뒤 같은 작업을 다시 하세요." + questions_text(path, stage)), None
+    questions = issue + questions_text(path, stage)
+    if missing and not uncertain:
+        return ("hold", questions), None
+
     try:
         records, end = reviewer.records_of(event, state.get("since", 0))
         records = reviewer.without_answers(records, path.name)
         verdict, why, todo = reviewer.review(stage, records, action, event, answers, diff,
-                                             **({"reused": True} if reused else {}))
-        if only_change and verdict == "proceed":  # it does change the work: the plan is still to be answered
-            verdict, todo = "revise", "이 동작은 작업물을 바꿉니다. 나머지 질문에도 답하세요."
-    except Exception as error:  # what cannot be judged does not go through unjudged
+                                             reused=reused, shell=uncertain)
+    except Exception as error:
         return ("hold", f"판정을 하지 못해 막았습니다({type(error).__name__}: {error}). " + CANNOT), None
+    if uncertain and verdict == "not a change":
+        return verdict, end  # Only this action passes. Keep any pending plan and its answers.
+    if missing:
+        return ("hold", questions), None
     if verdict != "revise":
         state["held"] = 0
         if stage == "plan" and verdict == "proceed":
@@ -800,18 +811,17 @@ def new_change(state):
 
 
 def on_prompt(state):
-    """The owner's new words may widen the work: its next change is planned anew. The principles are told at that
-    change's first hold, so a chat that changes no lasting work is not given them (owner 2026-11-15)."""
+    """Recheck the next change against the new request, reusing answers within their scope."""
     new_change(state)
     state["planned"] = False
 
 
-def before_change(state, event, action):
+def before_change(state, event, action, *, uncertain=False):
     """An action that may change the work, before this change's plan has passed."""
     new_change(state)
     if state.get("planned"):
         return None
-    verdict, _ = judged(state, event, "plan", action)
+    verdict, _ = judged(state, event, "plan", action, uncertain=uncertain)
     if verdict == "proceed":
         state["planned"] = True
     return verdict if isinstance(verdict, tuple) else None
@@ -876,7 +886,8 @@ def decide(event):
         if target and changes:
             check = lambda state: on_commit(state, target, event)
         elif changes and not target and state_path(event).stem not in command:  # not its answers
-            check = lambda state: before_change(state, event, json.dumps({"tool": name, "command": command}, ensure_ascii=False))
+            action = json.dumps({"tool": name, "cwd": cwd, "command": command}, ensure_ascii=False)
+            check = lambda state: before_change(state, event, action, uncertain=changes == POSSIBLE_WRITE)
         else:
             return None
     else:

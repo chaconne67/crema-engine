@@ -337,6 +337,9 @@ class GeminiACPClient(ACPClient):
         for wire in active:
             wire.close()
 
+    # The request watchdog uses cancel for subprocess clients, which have no HTTP connection.
+    cancel = close
+
     def _create_chat_completion(
         self, *, model=None, messages=None, timeout=None, tools=None, tool_choice=None,
         stream=False, crema_session_id=None, crema_run_instructions=None, crema_service_policy=None, **_,

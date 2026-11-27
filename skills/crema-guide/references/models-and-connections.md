@@ -30,6 +30,7 @@
 - 연결한 방식에는 **연결됨**이 표시된다. 같은 AI의 다른 연결 방식은 따로 고를 수 있다.
 - Krema 개발자 계정에서만 **Google Gemini 구독**을 연결할 수 있다. 같은 대화의 기록이 이어지면 먼저 연 Gemini 세션을 재사용한다. 캐시 읽기 토큰 수는 Gemini가 보고한 사용량이다.
 - 긴 대화에서 Gemini 세션을 새로 열면 기록을 여러 번에 나눠 전달한다. Gemini는 기록을 모두 받은 뒤 마지막 질문에 답하므로 첫 답까지 시간이 더 걸릴 수 있다.
+- Krema에서 Gemini 답변을 중지하면 엔진이 진행 중인 Gemini 연결도 닫는다.
 - 목록에 없는 것
   - LM Studio(내 PC 모델), Claude Code 로그인
   - Amazon Bedrock, Google Vertex

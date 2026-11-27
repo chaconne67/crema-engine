@@ -1,10 +1,13 @@
 import contextlib
 import os
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from agent import gemini_agy_client as agy
+from agent.client_lifecycle import ClientLifecycleMixin
 from hermes_cli.auth import AuthError, get_auth_status, resolve_external_process_provider_credentials
 from providers import get_provider_profile
 
@@ -66,6 +69,47 @@ def complete(messages, *, client=None, session="chat-1", **kwargs):
     client = client or agy.GeminiACPClient(command="/fixture/agy", args=["acp"])
     return client.chat.completions.create(model=kwargs.pop("model", "gemini-4-neon"),
                                           messages=messages, crema_session_id=session, **kwargs)
+
+
+def test_cancel_unblocks_an_active_gemini_request(monkeypatch):
+    started = threading.Event()
+    terminated = threading.Event()
+
+    class Process:
+        def terminate(self):
+            terminated.set()
+
+        def wait(self, *, timeout):
+            return 0
+
+    class Wire(agy._GeminiWire):
+        @contextlib.contextmanager
+        def _session(self, *_args, **_kwargs):
+            self._active_processes.add(Process())
+
+            def request(method, _params, **_kwargs):
+                if method == "session/prompt":
+                    started.set()
+                    assert terminated.wait(5)
+                    raise RuntimeError("ACP wire closed")
+                return {}
+
+            yield {"sessionId": "test", "models": {
+                "availableModels": [{"modelId": "gemini-4-neon"}],
+            }}, request
+
+    monkeypatch.setattr(agy, "_GeminiWire", Wire)
+    client = agy.GeminiACPClient(command="/fixture/agy", args=["acp"])
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(complete, [{"role": "user", "content": "wait"}], client=client)
+        try:
+            assert started.wait(5)
+            ClientLifecycleMixin()._abort_request_openai_client(client, reason="interrupt_abort")
+            assert terminated.is_set()
+            with pytest.raises(RuntimeError, match="ACP wire closed"):
+                future.result(timeout=5)
+        finally:
+            client.close()
 
 
 def test_replays_only_tool_result_with_new_client_and_preserves_usage(transport):

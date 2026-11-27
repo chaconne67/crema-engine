@@ -15,6 +15,30 @@ from tests.gateway.test_surface_admission import _admissions, _authority, _wait_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scheduled", [False, True])
+async def test_api_admission_classifies_user_input_and_scheduled_notifications(api, owner, scheduled):
+    from gateway.response_filters import display_kind_for_event
+    from gateway.session_api_turn import admit_api_turn, observe_api_turn
+    from gateway.session_results import execution_result
+
+    seen = []
+
+    async def handle(event):
+        seen.append((event.internal, event.allow_gateway_control, display_kind_for_event(event)))
+        execution_result.get()["result"] = {"final_response": "ok"}
+        return "ok"
+
+    owner.runner._handle_message = handle
+    admission = admit_api_turn(
+        api, session_id="api-chat", user_message="what happened?", conversation_history=[],
+        crema_scheduled=scheduled,
+    )
+    await asyncio.wait_for(observe_api_turn(admission), timeout=10)
+
+    assert seen == [(True, False, "internal_notification" if scheduled else None)]
+
+
+@pytest.mark.asyncio
 async def test_display_fields_are_admitted_and_bound_to_their_own_turn(tmp_path, monkeypatch):
     from gateway.response_filters import display_kind_for_event, display_metadata_for_event
     from gateway.session_controls import AuthorityConnection

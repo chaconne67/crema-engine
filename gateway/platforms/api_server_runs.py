@@ -265,6 +265,8 @@ def terminal_run_status(result: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     if result.get("pending_steer"):
         # Undelivered steer text rides on every terminal event/status for client replay.
         fields["pending_steer"] = result["pending_steer"]
+    if "pending_work" in result:
+        fields["pending_work"] = result["pending_work"]
     return status, fields
 
 
@@ -1869,6 +1871,9 @@ async def _handle_steer_run(self, request: web.Request, *, _api_server) -> web.R
     body, err = await self._read_json_body(request)
     if err:
         return err
+    # The run can finish while the body is arriving.
+    status = self._run_statuses.get(run_id, status)
+    agent = self._active_run_agents.get(run_id)
     raw_text = body.get("input") or body.get("message") or body.get("text") or ""
     steer_text = _api_server._normalize_chat_content(raw_text).strip()
     if not steer_text:
@@ -1905,23 +1910,25 @@ async def _handle_steer_run(self, request: web.Request, *, _api_server) -> web.R
     # agent ref) is what rejects stop-then-steer.
     if status.get("status") != "running" or (owned is None and not hasattr(agent, "steer")):
         return _steer_refused(_openai_error, run_id)
-    if owned is not None:
-        from gateway.session_contract import SessionRef
-        authority, row = owned
-        sid, latched = row['target_session_id'], False
-        try:
-            with authority.sessions[sid].event_stream.lock:
-                authority.check_approval_generation(sid, row['generation'])
-                # Before the claimed turn adopts its agent the steer is latched for that agent.
-                agent, latched = authority.steer_agent(SessionRef(authority.profile_id, sid), row['generation'], steer_text)
-        except (KeyError, AuthorityRefusal):
-            agent = None
-        if not latched and not hasattr(agent, "steer"):
-            return _steer_refused(_openai_error, run_id)
-        if latched:
-            return delivered()
+    def inject(agent):
+        return agent.steer(steer_text, ticket=delivery_key) if delivery_key else agent.steer(steer_text)
+
     try:
-        accepted = bool(agent.steer(steer_text))
+        if owned is None:
+            accepted = inject(agent)
+        else:
+            from gateway.session_contract import SessionRef
+            authority, row = owned
+            sid, generation = row["target_session_id"], row["generation"]
+            with authority.sessions[sid].event_stream.lock:
+                authority.check_approval_generation(sid, generation)
+                submission = (delivery_key, steer_text) if delivery_key else steer_text
+                agent, latched = authority.steer_agent(SessionRef(authority.profile_id, sid), generation, submission)
+                if not latched and not hasattr(agent, "steer"):
+                    return _steer_refused(_openai_error, run_id)
+                accepted = latched or inject(agent)
+    except (KeyError, AuthorityRefusal):
+        return _steer_refused(_openai_error, run_id)
     except Exception as exc:
         logger.exception("[api_server] steer failed for run %s", run_id)
         return _json_error(_openai_error, _api_server._redact_api_error_text(exc), code="steer_failed", status=500)

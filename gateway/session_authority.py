@@ -1056,6 +1056,9 @@ class SessionAuthority:
         # The turn's executor thread runs this; the stream lock orders it against session.steer's latch.
         with live.event_stream.lock if live is not None else contextlib.nullcontext():
             self.adopted[session_id] = (generation, agent)
+            open_delivery = getattr(agent, "open_work_delivery", None)
+            if open_delivery is not None:
+                open_delivery()
             clear = getattr(agent, 'clear_interrupt', None)
             if self.delivered_stops.pop(session_id, generation) != generation and clear is not None:
                 clear()
@@ -1065,7 +1068,11 @@ class SessionAuthority:
                 request_hard_interrupt(agent)
             latched, steers = self.pending_steers.pop(session_id, (None, ()))
             for text in steers if latched == generation else ():
-                agent.steer(text)
+                if isinstance(text, tuple):
+                    ticket, words = text
+                    agent.steer(words, ticket=ticket)
+                else:
+                    agent.steer(text)
 
     def check_approval_generation(self, session_id, generation):
         handle = self._handle(SessionRef(self.profile_id, session_id))

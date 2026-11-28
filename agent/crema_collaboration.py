@@ -26,7 +26,7 @@ def _all_work_events(conn) -> list[tuple[int, dict]]:
     for task in kb.list_tasks(conn, assignee=turns.ASSIGNEE, include_archived=True):
         for event in kb.list_events(conn, task.id):
             work = (event.payload or {}).get("work")
-            if not work or work.get("direction") == "outbound" or work.get("kind") == "result":
+            if not work or work.get("direction") == "outbound" or work.get("kind") in {"message", "result"}:
                 continue
             key = (work.get("request_id"), work.get("message_id"))
             if not (key[0] and key[1]):
@@ -53,7 +53,7 @@ def _terminal_requests(conn) -> set[str]:
 
 def _child_work(conn, request_id: str) -> list[dict]:
     return [work for work in _all_work(conn) if work.get("parent_request_id") == request_id
-            and work.get("kind") != "result"]
+            and work.get("kind") not in {"message", "result"}]
 
 
 def _question_cycle(conn, sender: str, recipient: str, request_id: str, parent_request_id: str, text: str) -> bool:
@@ -92,6 +92,10 @@ def _review_is_latest(conn, work: dict) -> bool:
 
 def _aggregate_parent_status(conn, request_id: str, own_status: str) -> tuple[str, list[dict]]:
     children = _child_work(conn, request_id)
+    latest_reviews = {(w["sender"], w["recipient"], w["request_id"]): w for w in children
+                      if w.get("kind") == "review"}
+    children = [w for w in children if w.get("kind") != "review"
+                or latest_reviews[(w["sender"], w["recipient"], w["request_id"])] is w]
     pending = [w for w in children if w.get("status") != "completed"]
     if not pending:
         return own_status, children
@@ -250,7 +254,9 @@ def reconcile_stopping() -> None:
     conn = turns._board()
     try:
         for work in _all_work(conn):
-            if work.get("status") not in {"stopping", "check_required"} or not work.get("run_id"):
+            if (work.get("status") not in {"stopping", "check_required"} or not work.get("run_id")
+                    or (work.get("status") == "check_required" and work.get("reported_run_status"))
+                    or work.get("kind") == "message"):
                 continue
             receipt = _run_receipt(work)
             if (not receipt or str(receipt.get("run_id") or "") != str(work["run_id"])
@@ -277,13 +283,13 @@ def reconcile_stopping() -> None:
 def create(session_id: str, to: str, text: str, *, mode: str = "queue", kind: str = "request",
            request_id: str = "", attempt_id: str = "", message_id: str = "",
            model: str = "", revision: Any = None, requirements: str = "",
-           parent_request_id: str = "", start: dict | None = None,
+           parent_request_id: str = "", start: dict | None = None, reply_to: str = "",
            target_request_id: str = "", target_attempt_id: str = "", target_message_id: str = "") -> dict:
     """Persist a work message after the existing addressed-chat check."""
     from agent import crema_file_turns as turns
     if mode not in {"queue", "steer", "interrupt"}:
         return {"error": "mode must be queue, steer or interrupt"}
-    if kind not in {"request", "question", "answer", "result", "review"}:
+    if kind not in {"message", "request", "question", "answer", "result", "review"}:
         return {"error": "unsupported collaboration message kind"}
     text = str(text or "").strip()
     if not text or len(text) > turns.MESSAGE_MAX:
@@ -301,6 +307,7 @@ def create(session_id: str, to: str, text: str, *, mode: str = "queue", kind: st
     model = str(model or "").strip()
     if model and model not in turns.models():
         return {"error": f"No model '{model}' in the user's model menu ({', '.join(turns.models()) or 'none'})."}
+    requested_scope = request_id
     conn = turns._board()
     try:
         target_work = None
@@ -311,7 +318,29 @@ def create(session_id: str, to: str, text: str, *, mode: str = "queue", kind: st
                 return {"error": problem}
         elif any((target_request_id, target_attempt_id, target_message_id)):
             return {"error": "target work fields are only valid for interrupt mode"}
-        if not _works_with(me, target["session"]):
+        source = None
+        if reply_to or kind in {"message", "result"}:
+            # Select only messages actually addressed to this sender by this peer.
+            originals = {}
+            for payload in _events(conn, me):
+                item = payload["work"]
+                if (item.get("recipient") == me and item.get("sender") == target["session"]
+                        and item.get("project_id") == project_id
+                        and (not request_id or item.get("request_id") == request_id)
+                        and (not reply_to or item.get("message_id") == reply_to)
+                        and (kind != "result" or item.get("kind") not in {"result", "message"})):
+                    originals[item["message_id"]] = item
+            if reply_to or kind == "result":
+                if len(originals) != 1 or (kind == "result" and not (request_id or reply_to)):
+                    return {"error": "identify the original message with reply_to"}
+                source = next(iter(originals.values()))
+            else:
+                active = [w for w in originals.values() if w.get("status") in {"claimed", "accepted"}]
+                if len(active) == 1:
+                    source = active[0]
+            if source:
+                request_id = source["request_id"]
+        if not _works_with(me, target["session"]) and kind != "result":
             grants = _active_grants(conn, me, target["session"], project_id)
             if request_id:
                 if not any(g.get("request_id") == request_id for g in grants):
@@ -322,7 +351,7 @@ def create(session_id: str, to: str, text: str, *, mode: str = "queue", kind: st
                 return {"error": "choose the authorized request_id for this chat"}
             else:
                 return {"error": "these chats need a user-authorized collaboration request"}
-        if not parent_request_id:
+        if not parent_request_id and kind not in {"message", "result"}:
             active_parents = _active_parent_requests(conn, me)
             if request_id and request_id in active_parents:
                 # A reply or follow-up question on the assigned request is not its own child.
@@ -340,6 +369,8 @@ def create(session_id: str, to: str, text: str, *, mode: str = "queue", kind: st
             return {"error": "this question is already waiting in this work; report the mutual wait to the requester"}
     finally:
         conn.close()
+    if not request_id and kind == "message" and message_id:
+        request_id = uuid.uuid5(uuid.NAMESPACE_URL, f"crema-request:{me}:{message_id}").hex
     request_id = request_id or str(uuid.uuid4())
     review = None
     if kind == "review":
@@ -363,8 +394,11 @@ def create(session_id: str, to: str, text: str, *, mode: str = "queue", kind: st
     work = {"request_id": request_id, "attempt_id": attempt_id or str(uuid.uuid4()),
             "message_id": message_id or str(uuid.uuid4()),
             "project_id": project_id,
+            "sender_chat": sender["id"], "sender_title": sender.get("title", ""),
+            "sender_project": sender.get("project", ""),
             "sender": me, "recipient": target["session"], "mode": mode, "kind": kind,
             "status": "queued", "text": text,
+            **({"source_message_id": source["message_id"]} if source else {}),
             **({"parent_request_id": parent_request_id} if parent_request_id else {}),
             **({"model": model} if model else {}), **({"revision": revision} if revision is not None else {}),
             **({"start": start} if start else {}),
@@ -381,10 +415,18 @@ def create(session_id: str, to: str, text: str, *, mode: str = "queue", kind: st
             existing = [p["work"] for p in _events(conn, target["session"])
                         if p["work"].get("message_id") == work["message_id"]]
             if existing:
-                old = existing[-1]
-                if (old.get("request_id"), old.get("attempt_id")) != (request_id, work["attempt_id"]):
+                original = existing[0]
+                identity = ["sender", "recipient", "text", "kind", "project_id", "mode"]
+                if kind != "message" or requested_scope:
+                    identity.append("request_id")
+                if kind != "message" or reply_to:
+                    identity.append("source_message_id")
+                if (original.get("attempt_id") != work["attempt_id"]
+                        or any(original.get(field) != work.get(field) for field in identity)):
                     return {"error": "message_id is already used by another work attempt"}
-                return {"ok": True, "work": old, "duplicate": True}
+                return {"ok": True, "work": existing[-1], "duplicate": True}
+            if not _authorized(target["session"], work, conn):
+                return {"error": "this message is no longer authorized for the receiving chat"}
             payload = {"text": text, "message": text, "sender": me,
                        "sender_chat": (sender or {}).get("id", ""), "sender_title": turns._title(me),
                        "sender_project": work["project_id"], "handed": True, "work": work}
@@ -418,7 +460,7 @@ def _interrupt_target(conn, sender: str, recipient: str, request_id: str,
     return {**target, "run_id": receipt["run_id"]}, None
 
 
-def send_compatible(session_id: str, to: str, text: str, *, mode: str = "queue", kind: str = "request",
+def send_compatible(session_id: str, to: str, text: str, *, mode: str = "queue", kind: str = "message", reply_to: str = "",
                     request_id: str = "", attempt_id: str = "", message_id: str = "",
                     target_request_id: str = "", target_attempt_id: str = "", target_message_id: str = "") -> dict:
     """Use request work only when both chats advertise the new protocol; preserve legacy callers."""
@@ -441,7 +483,10 @@ def send_compatible(session_id: str, to: str, text: str, *, mode: str = "queue",
         return turns.send(session_id, to, text)
     if sender_project != target_project:
         return {"error": "the chats belong to different projects; no new work was started"}
-    return create(session_id, to, text, mode=mode, kind=kind, request_id=request_id,
+    if kind == "message" and message_id:
+        seed = f"crema-message:{me}:{target['session']}:{message_id}"
+        attempt_id = attempt_id or uuid.uuid5(uuid.NAMESPACE_URL, seed).hex
+    return create(session_id, to, text, mode=mode, kind=kind, reply_to=reply_to, request_id=request_id,
                   attempt_id=attempt_id, message_id=message_id, target_request_id=target_request_id,
                   target_attempt_id=target_attempt_id, target_message_id=target_message_id)
 
@@ -452,6 +497,23 @@ def collaborate(body: dict[str, Any], *, trusted_user: bool = False) -> dict:
     action, session = str(body.get("action") or ""), str(body.get("session_id") or "")
     request_id, attempt_id, message_id = (str(body.get(k) or "") for k in
                                           ("request_id", "attempt_id", "message_id"))
+    if action == "history":
+        directory = {r["session"]: r for r in turns._directory() + turns._directory(archived=True)}
+        current = directory.get(session, {})
+        if not current.get("project_id") or current.get("collaboration") != 1:
+            return {"ok": False, "error": "unknown collaboration session"}
+        conn = turns._board()
+        try:
+            latest = {}
+            for note in _events(conn, session):
+                work = note["work"]
+                if (work.get("project_id") == current["project_id"] and work.get("direction") == "outbound"
+                        and work.get("kind") not in {"message", "result"}):
+                    latest[work["message_id"]] = work
+            return {"ok": True, "items": [turns._work_item(w, directory)
+                                         for w in latest.values() if w.get("status") in {"completed", "failed", "cancelled"}]}
+        finally:
+            conn.close()
     if action in {"grant", "revoke"}:
         if not trusted_user:
             return {"ok": False, "error": "only an authenticated user may change collaboration grants"}
@@ -475,7 +537,8 @@ def collaborate(body: dict[str, Any], *, trusted_user: bool = False) -> dict:
         attempts = [w for w in records if w.get("attempt_id") == attempt_id and w.get("status") != "queued"]
         current = attempts[-1] if attempts else work
         if action == "validate":
-            valid = _authorized(session, work, conn)
+            valid = (work.get("attempt_id") == attempt_id and work.get("status") in {"queued", "claimed", "accepted", "check_required"}
+                     and _authorized(session, work, conn))
             if work.get("kind") == "review":
                 valid = valid and _review_is_latest(conn, work)
             if work.get("mode") == "interrupt":
@@ -500,7 +563,7 @@ def _append_locked(conn, recipient_task, sender_task, work: dict, *, recipient_p
     from agent import crema_file_turns as turns
     kb = turns._kb()
     kb._append_event(conn, recipient_task.id, "crema_note", recipient_payload or {"text": "", "work": work})
-    if sender_task.id != recipient_task.id:
+    if sender_task.id != recipient_task.id and work.get("kind") != "message":
         kb._append_event(conn, sender_task.id, "crema_note", {"text": "", "work": {**work, "direction": "outbound"}})
 
 
@@ -517,14 +580,25 @@ def _claim(conn, session: str, request_id: str, attempt_id: str, message_id: str
         work, latest = records[0], records[-1]
         if work.get("recipient") != session:
             return {"ok": False, "error": "collaboration message belongs to another session"}
+        if latest.get("kind") == "result" and not latest.get("source_message_id"):
+            original = _result_source(conn, latest)
+            if original:
+                latest = {**latest, "source_message_id": original["message_id"]}
+                work = {**work, "source_message_id": original["message_id"]}
         attempts = [w for w in records if w.get("attempt_id") == attempt_id and w.get("status") != "queued"]
+        if latest.get("requeued_from") and latest.get("attempt_id") != attempt_id:
+            return {"ok": True, "claimed": False, "work": latest}
+        if attempts and attempts[-1].get("status") in {"completed", "failed", "cancelled"}:
+            return {"ok": True, "claimed": False, "work": latest}
         if attempts:
             return _recover_claim(conn, recipient_task, attempts[-1], session)
         if latest.get("status") in {"claimed", "accepted", "stopping"}:
             return _recover_claim(conn, recipient_task, latest, session)
-        if not _authorized(session, work, conn):
-            return {"ok": True, "claimed": False, "work": {**latest, "status": "cancelled",
-                                                                 "reason": "permission revoked"}}
+        sender_task = turns._task_for(conn, work.get("sender", ""))
+        if not _authorized(session, latest, conn):
+            cancelled = {**latest, "status": "cancelled", "reason": "permission revoked"}
+            _append_locked(conn, recipient_task, sender_task, cancelled)
+            return {"ok": True, "claimed": False, "work": cancelled}
         if work.get("kind") == "review" and not _review_is_latest(conn, work):
             stale = {**latest, "status": "cancelled", "stale_revision": True,
                      "reason": "a newer document revision is awaiting review"}
@@ -537,10 +611,10 @@ def _claim(conn, session: str, request_id: str, attempt_id: str, message_id: str
                                                 work.get("target_attempt_id", ""),
                                                 work.get("target_message_id", ""), allow_stopped=True)
             if problem or target.get("run_id") != work.get("target_run_id"):
-                return {"ok": True, "claimed": False,
-                        "work": {**latest, "status": "cancelled", "reason": problem or "target run changed"}}
-        sender_task = turns._task_for(conn, work.get("sender", ""))
-        claimed = {**work, "attempt_id": attempt_id, "status": "claimed"}
+                cancelled = {**latest, "status": "cancelled", "reason": problem or "target run changed"}
+                _append_locked(conn, recipient_task, sender_task, cancelled)
+                return {"ok": True, "claimed": False, "work": cancelled}
+        claimed = {**(latest if latest.get("requeued_from") else work), "attempt_id": attempt_id, "status": "claimed"}
         _append_locked(conn, recipient_task, sender_task, claimed)
         return {"ok": True, "claimed": True, "work": claimed}
 
@@ -563,7 +637,7 @@ def _recover_claim(conn, recipient_task, current: dict, session: str) -> dict:
 
 
 def _update_attempt(conn, session: str, request_id: str, attempt_id: str, message_id: str,
-                    action: str, body: dict) -> dict:
+                    action: str, body: dict, *, receipt=None, return_work=False) -> dict:
     from agent import crema_file_turns as turns
     kb = turns._kb()
     recipient_task = turns._task_for(conn, session)
@@ -595,16 +669,32 @@ def _update_attempt(conn, session: str, request_id: str, attempt_id: str, messag
             status = str(body.get("status") or "")
             if status not in {"completed", "waiting", "partial", "failed", "cancelled", "stopping"}:
                 return {"ok": False, "error": "unsupported report status"}
-            receipt = _run_receipt({**current, "recipient": session})
+            receipt = receipt or _run_receipt({**current, "recipient": session})
             if not receipt or str(receipt.get("run_id")) != str(body.get("run_id") or ""):
                 return {"ok": False, "error": "run does not match the durable receipt for this work attempt"}
             receipt_status = str(receipt.get("status") or "")
+            delivery = f"krema-work:{attempt_id}:{message_id}"
+            if delivery in receipt.get("pending_work", []) and receipt_status in {"completed", "failed"}:
+                # The run ended before consuming this steer. Keep its message and permission scope.
+                fresh = {**work, "mode": "queue", "status": "queued", "attempt_id": str(uuid.uuid4()),
+                         "requeued_from": attempt_id}
+                _append_locked(conn, recipient_task, turns._task_for(conn, work["sender"]), fresh)
+                return {"ok": True, "work": fresh}
+            if (current.get("mode") == "steer" and receipt.get("pending_steer")
+                    and "pending_work" not in receipt and receipt_status == "completed"):
+                # Earlier engines did not identify individual unread submissions.
+                uncertain = {**current, "status": "check_required", "reported_run_status": receipt_status}
+                if current != uncertain:
+                    _append_locked(conn, recipient_task, turns._task_for(conn, work["sender"]), uncertain)
+                return {"ok": True, "work": uncertain}
             if current.get("reported_run_status") == receipt_status:
                 return {"ok": True}
             if receipt_status in {"waiting_for_approval", "waiting_for_clarify"}:
                 status = "waiting"
             elif receipt_status == "completed":
-                if status not in {"completed", "waiting", "partial"}:
+                if work.get("kind") in {"message", "result"}:
+                    status = "completed"
+                elif status not in {"completed", "waiting", "partial"}:
                     return {"ok": False, "error": "report status conflicts with the completed run"}
             elif receipt_status == "failed":
                 status = "failed"
@@ -622,14 +712,14 @@ def _update_attempt(conn, session: str, request_id: str, attempt_id: str, messag
                 result = reason
             elif status == "failed" and not result:
                 result = str(receipt.get("error") or "실행이 실패했습니다.")
-            if limit_reason:
+            if limit_reason and receipt_status in {"failed", "completed"}:
                 if work.get("kind") == "review":
                     status, result = "waiting", limit_reason
                 else:
                     status = "partial" if result else "waiting"
                     result = f"{result}\n\n{limit_reason}".strip()
             actual_model = _receipt_model(receipt)
-            if work.get("model") and not current.get("review"):
+            if work.get("model") and not current.get("review") and status in {"completed", "partial"}:
                 if not actual_model:
                     status, result = "waiting", "실제로 사용한 모델을 확인하지 못해 결과를 검증할 수 없습니다."
                 elif actual_model != work["model"]:
@@ -637,10 +727,10 @@ def _update_attempt(conn, session: str, request_id: str, attempt_id: str, messag
                                                    "요청별 결과를 확정하지 않았습니다.")
             if current.get("status") == status and current.get("result") == result:
                 return {"ok": True}
-            updated = {**current, "status": status, "result": result,
+            updated = {**current, "status": status, "result": result, "run_id": receipt["run_id"],
                        "reported_run_status": receipt_status,
                        **({"actual_model": actual_model} if actual_model else {})}
-            if current.get("review"):
+            if current.get("review") and (receipt_status == "completed" or limit_reason and receipt_status == "failed"):
                 if limit_reason:
                     outcome = {"status": "waiting", "reason": limit_reason, "findings": []}
                 else:
@@ -658,7 +748,7 @@ def _update_attempt(conn, session: str, request_id: str, attempt_id: str, messag
                 updated["status"] = outcome["status"]
                 updated["result"] = outcome.get("reason", "")
             own_status = updated["status"]
-            if work.get("kind") != "result" and own_status in {"completed", "partial"}:
+            if work.get("kind") not in {"message", "result"} and own_status in {"completed", "partial"}:
                 updated["own_status"] = own_status
                 updated["status"], children = _aggregate_parent_status(conn, request_id, own_status)
                 updated["children"] = [{"request_id": child.get("request_id"),
@@ -668,9 +758,9 @@ def _update_attempt(conn, session: str, request_id: str, attempt_id: str, messag
         sender_task = turns._task_for(conn, work.get("sender", ""))
         delivery_authorized = _authorized(session, work, conn)
         _append_locked(conn, recipient_task, sender_task, updated)
-        if updated.get("status") == "cancelled":
+        if updated.get("status") == "cancelled" and work.get("kind") not in {"message", "result"}:
             _cancel_descendants(conn, request_id)
-        if action == "report" and status != "stopping" and work.get("kind") != "result" \
+        if action == "report" and status != "stopping" and work.get("kind") not in {"message", "result"} \
                 and delivery_authorized:
             delivery_id = uuid.uuid5(uuid.NAMESPACE_URL,
                                      f"crema-work:{request_id}:{attempt_id}:{message_id}:{status}:"
@@ -693,7 +783,22 @@ def _update_attempt(conn, session: str, request_id: str, attempt_id: str, messag
             _append_locked(conn, response_recipient, response_sender, response)
         if work.get("parent_request_id"):
             _refresh_parent(conn, work["parent_request_id"], updated)
-        return {"ok": True}
+        return {"ok": True, **({"work": updated} if return_work else {})}
+
+
+def settle_delivery(conn, work: dict) -> dict:
+    """A closed browser cannot report a finished mailbox delivery or an unread steer."""
+    if (work.get("direction") == "outbound" or work.get("status") not in {"accepted", "claimed", "waiting", "check_required"}
+            or (work.get("kind") not in {"message", "result"} and work.get("mode") != "steer")):
+        return work
+    receipt = _run_receipt(work)
+    if (not receipt or receipt.get("status") not in {"completed", "cancelled", "failed", "interrupted"}
+            or not receipt.get("run_id") or receipt.get("status") == work.get("reported_run_status")):
+        return work
+    result = _update_attempt(conn, work["recipient"], work["request_id"], work["attempt_id"], work["message_id"],
+                             "report", {"run_id": receipt["run_id"], "status": "completed"},
+                             receipt=receipt, return_work=True)
+    return result.get("work", work)
 
 
 def _run_receipt(work: dict) -> dict | None:
@@ -739,10 +844,14 @@ def read_request(session_id: str, to: str, request_id: str) -> dict:
         # _all_work is ordered by each message's first durable insertion. Status updates to an
         # older attempt (for example, rejecting a stale review claim) must not supersede a newer
         # original request when the sender reads its durable result.
-        matches = [work for work in _all_work(conn)
-                   if work.get("request_id") == request_id and work.get("sender") == me
-                   and work.get("recipient") == target["session"]
-                   and work.get("project_id") == project_id]
+        by_message = {}
+        for payload in _events(conn, target["session"]):
+            work = payload["work"]
+            if (work.get("request_id") == request_id and work.get("sender") == me
+                    and work.get("recipient") == target["session"] and work.get("project_id") == project_id
+                    and work.get("kind") != "result" and work.get("direction") != "outbound"):
+                by_message[work["message_id"]] = work
+        matches = list(by_message.values())
         if not matches:
             return {"error": f"No collaboration request '{request_id}' for that chat."}
         original_requests = [work for work in matches if work.get("kind") in {"request", "review"}]
@@ -751,6 +860,14 @@ def read_request(session_id: str, to: str, request_id: str) -> dict:
         return {"chat": target["title"], "work": (original_requests or matches)[-1]}
     finally:
         conn.close()
+
+
+def _result_source(conn, work):
+    matches = [item for item in _all_work(conn)
+               if item.get("request_id") == work.get("request_id") and item.get("sender") == work.get("recipient")
+               and item.get("recipient") == work.get("sender") and item.get("project_id") == work.get("project_id")
+               and (not work.get("source_message_id") or item.get("message_id") == work["source_message_id"])]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _authorized(session_id: str, work: dict, conn) -> bool:
@@ -766,11 +883,7 @@ def _authorized(session_id: str, work: dict, conn) -> bool:
             or source.get("project_id") != work.get("project_id")):
         return False
     if work.get("kind") == "result":
-        original = next((item for item in _all_work(conn)
-                         if item.get("request_id") == work.get("request_id")
-                         and item.get("message_id") == work.get("source_message_id")
-                         and item.get("sender") == session_id and item.get("recipient") == sender
-                         and item.get("project_id") == work.get("project_id")), None)
+        original = _result_source(conn, work)
         if not original:
             return False
         if original.get("kind") == "review" and not _review_is_latest(conn, original):
@@ -895,7 +1008,8 @@ def _active_parent_requests(conn, session_id: str) -> list[str]:
     latest = {}
     for payload in _events(conn, session_id):
         work = payload["work"]
-        if work.get("recipient") == session_id and work.get("direction") != "outbound":
+        if (work.get("recipient") == session_id and work.get("direction") != "outbound"
+                and work.get("kind") not in {"message", "result"}):
             latest[work.get("request_id")] = work
     active = {request for request, work in latest.items()
               if request and work.get("status") in {"claimed", "accepted", "waiting", "partial", "stopping"}}

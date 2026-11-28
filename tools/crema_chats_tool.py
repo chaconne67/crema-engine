@@ -9,7 +9,7 @@ from typing import Any, Dict
 from tools.registry import registry, tool_error
 
 
-def crema_chats(args: Dict[str, Any], session_id: str = "", **_: Any) -> str:
+def crema_chats(args: Dict[str, Any], session_id: str = "", tool_call_id: str = "", **_: Any) -> str:
     from agent import crema_file_turns
 
     action = args.get("action")
@@ -23,10 +23,14 @@ def crema_chats(args: Dict[str, Any], session_id: str = "", **_: Any) -> str:
         return tool_error(result["error"]) if isinstance(result, dict) and "error" in result else json.dumps(result, ensure_ascii=False)
     if action == "send":
         from agent.crema_collaboration import send_compatible
+        import uuid
+        message_id = args.get("message_id") or (
+            uuid.uuid5(uuid.NAMESPACE_URL, f"crema-tool:{session_id}:{tool_call_id}").hex if tool_call_id else "")
         result = send_compatible(session_id, args.get("to", ""), args.get("message", ""),
-                                 mode=args.get("mode", "queue"), kind=args.get("kind", "request"),
-                                 request_id=args.get("request_id", ""), attempt_id=args.get("attempt_id", ""),
-                                 message_id=args.get("message_id", ""),
+                                 mode=args.get("mode", "queue"), kind=args.get("kind") or
+                                 ("request" if args.get("mode") in {"interrupt", "steer"} else "message"),
+                                 reply_to=args.get("reply_to", ""), request_id=args.get("request_id", ""), attempt_id=args.get("attempt_id", ""),
+                                 message_id=message_id,
                                  target_request_id=args.get("target_request_id", ""),
                                  target_attempt_id=args.get("target_attempt_id", ""),
                                  target_message_id=args.get("target_message_id", ""))
@@ -38,6 +42,7 @@ def crema_chats(args: Dict[str, Any], session_id: str = "", **_: Any) -> str:
                         message_id=args.get("message_id", ""), model=args.get("model", ""),
                         revision=args.get("revision"), requirements=args.get("requirements", ""),
                         parent_request_id=args.get("parent_request_id", ""),
+                        **({"reply_to": args["reply_to"]} if args.get("reply_to") else {}),
                         target_request_id=args.get("target_request_id", ""),
                         target_attempt_id=args.get("target_attempt_id", ""),
                         target_message_id=args.get("target_message_id", ""))
@@ -61,9 +66,9 @@ registry.register(
             "description": "The user's other Crema chats. Before editing a file another chat may be changing or making a decision in another chat's area, use contacts with the path or topic to find the responsible chat. Looking up a contact grants no permission. list: the chats this chat works with (number, name, "
                            "project, replying, idle or archived, and the chat that started it: 'this chat' for the "
                            "chats this chat started; archived ones are those this chat closed). models: the models the user connected, which start may give a new chat. "
-                           "send: between collaboration-enabled chats in the same project, send creates a work request and defaults to queue. "
+                           "send: give the destination and the message. The recipient decides how to use it and can reply with send, identifying the original message with reply_to. "
                            "An older sender uses ordinary message delivery, which can join a reply in progress. A collaboration-enabled sender "
-                           "cannot send work to an older recipient in an identified project. Use work for a document review or a required model. "
+                           "needs a compatible recipient in an identified project. "
                            "start: a new chat under this one in the "
                            "sidebar, named by its role, that starts working on the message at once; the user can open "
                            "it, follow it and talk to it, and Crema tells this chat when it finishes, so do not wait "
@@ -73,11 +78,10 @@ registry.register(
                            "rule, running and reporting tests), and this chat's own, by leaving model out, for "
                            "judgment or design, where a weaker model's mistake costs the user more than the usage "
                            "saved. work: if the current task overlaps another chat's work and contacts reports can_contact=true, ask that chat "
-                           "what you need to proceed, even if the user did not name it. Within an authorized task, use work for delegation, "
-                           "questions, answers and reviews. If contact needs permission, ask the user to authorize that chat for this task. "
+                           "what you need to proceed, even if the user did not name it. Use send for conversation. Use work for a tracked result, a required model or document review. If contact needs permission, ask the user to authorize that chat for this task. "
                            "Use queue for new work or ordinary questions, steer "
                            "for a needed condition or answer on the same active task, and interrupt only for an explicit "
-                           "authorized stop-and-switch instruction. Reuse request_id for the same task, attempt_id for "
+                           "authorized stop-and-switch instruction. For tracked work, reuse request_id for the same task, attempt_id for "
                            "the same run, and message_id when retrying delivery; use a new attempt_id only for a real "
                            "retry. Give model and revision when the user requires a specific reviewer model or exact "
                            "artifact version. The receiver's stored record, not message text or a caller-supplied role, "
@@ -113,9 +117,10 @@ registry.register(
                 "role": {"type": "string", "description": "start: the new chat's role, the part of the work it does, in the user's language, up to 20 characters (e.g. '자료 조사', 'c 담당')"},
                 "message": {"type": "string", "description": "send, start, work: what to say or do, complete on its own (the other chat has not seen this chat)"},
                 "mode": {"type": "string", "enum": ["queue", "steer", "interrupt"], "description": "send, work: when the recipient should handle this request"},
-                "kind": {"type": "string", "enum": ["request", "question", "answer", "result", "review"], "description": "send, work: the message's role in the request"},
-                "attempt_id": {"type": "string", "description": "send, work: reuse for one run attempt"},
-                "message_id": {"type": "string", "description": "send, work: reuse to retry delivery"},
+                "reply_to": {"type": "string", "description": "Original message ID when replying to a chat."},
+                "kind": {"type": "string", "enum": ["request", "question", "answer", "result", "review"], "description": "work: use review for a versioned document review; omit for a tracked task"},
+                "attempt_id": {"type": "string", "description": "work: identifies an explicit execution attempt"},
+                "message_id": {"type": "string", "description": "optional identifier for replaying a previous delivery"},
                 "model": {"type": "string", "description": "work: required model when this work must run or be reviewed with one. start: new chat's model from action=models; leave out to use this chat's model."},
                 "revision": {"oneOf": [{"type": "string"}, {"type": "object",
                                                 "properties": {"title": {"type": "string"}, "content": {"type": "string"}},

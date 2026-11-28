@@ -641,3 +641,106 @@ def test_interrupt_stop_permission_does_not_authorize_an_unrelated_new_request(c
                               "status": "cancelled"}) == {"ok": True}
     assert turns.collaborate({**_key(continuation), "action": "claim"})["claimed"] is True
     assert turns.collaborate({**_key(continuation), "action": "validate", "project_id": "project-1"})["valid"] is True
+
+
+def test_plain_delivery_reply_and_replay(collaboration_board):
+    from tools.crema_chats_tool import crema_chats
+
+    send = {"action": "send", "to": "b", "message": "일정은 금요일입니다."}
+    def deliver(args, session, call_id):
+        return json.loads(crema_chats(args, session_id=session, tool_call_id=call_id))
+
+    first = deliver(send, A, "call-1")["work"]
+    assert first["kind"] == "message"
+    assert deliver(send, A, "call-1")["duplicate"]
+    assert deliver({**send, "message": "different"}, A, "call-1").get("error")
+    initial = turns.state(active_only=True)["messages"]
+    assert [row["session_id"] for row in initial] == [B]
+    item, = initial[0]["items"]
+    assert item["from_chat"] == "a" and first["message_id"] in item["prompt"]
+    assert turns.collaborate({**_key(first), "action": "claim"})["claimed"]
+    reply = deliver({"action": "send", "to": "a", "message": "오전인가요?"}, B, "call-2")["work"]
+    assert reply["source_message_id"] == first["message_id"] and reply["request_id"] == first["request_id"]
+    assert "error" in deliver({"action": "send", "to": "a", "message": "x", "reply_to": reply["message_id"]}, C, "call-3")
+    # The browser disappeared after starting the model. Polling settles the original from its saved run.
+    collaboration_board.receipts[first["attempt_id"], first["message_id"]] = {
+        "run_id": "r-first", "session_id": B, "status": "completed", "output": "읽었습니다."}
+    assert turns.collaborate({**_key(reply), "action": "claim"})["claimed"]
+    collaboration_board.receipts[reply["attempt_id"], reply["message_id"]] = {
+        "run_id": "r-reply", "session_id": A, "status": "completed", "output": "확인했습니다."}
+    assert not turns.state(active_only=True).get("messages")
+    assert turns.read(A, "b", first["request_id"])["work"]["status"] == "completed"
+    assert deliver(send, A, "call-1")["duplicate"]
+    assert deliver({"action": "send", "to": "a", "message": "오전인가요?"}, B, "call-2")["duplicate"]
+
+
+def test_manual_result_and_scoped_terminal_history(collaboration_board):
+    from agent.crema_collaboration import send_compatible
+    job = create(A, "b", "확인")["work"]
+    assert turns.collaborate({**_key(job), "action": "claim"})["claimed"]
+    result = send_compatible(B, "a", "조사 결과", kind="result", request_id=job["request_id"])["work"]
+    assert result["source_message_id"] == job["message_id"]
+    assert turns.collaborate({**_key(result), "action": "claim"})["claimed"]
+    collaboration_board.receipts[job["attempt_id"], job["message_id"]] = {
+        "run_id": "r", "session_id": B, "status": "completed", "output": "업무 결과"}
+    assert turns.collaborate({**_key(job), "action": "report", "run_id": "r", "status": "completed"})["ok"]
+    assert all(i["work"]["message_id"] != job["message_id"]
+               for row in turns.state(active_only=True)["messages"] for i in row["items"])
+    history = turns.collaborate({"action": "history", "session_id": A})["items"]
+    assert [i["work"]["result"] for i in history] == ["업무 결과"] and history[0]["from_chat"] == "b"
+
+
+def test_ticketed_unread_steer_keeps_its_message_and_rechecks_permissions(collaboration_board):
+    first = create(A, "b", "처음")["work"]
+    follow = create(A, "b", "보충", mode="steer", request_id=first["request_id"])["work"]
+    assert turns.collaborate({**_key(follow), "action": "claim"})["claimed"]
+    collaboration_board.receipts[follow["attempt_id"], follow["message_id"]] = {
+        "run_id": "first", "session_id": B, "status": "completed", "output": "첫 답",
+        "pending_work": [f"krema-work:{follow['attempt_id']}:{follow['message_id']}"]}
+    polled = turns.state(active_only=True)["messages"]
+    again = next(i["work"] for r in polled if r["session_id"] == B for i in r["items"]
+                 if i["work"]["message_id"] == follow["message_id"])
+    assert again["status"] == "queued" and again["mode"] == "queue"
+    assert again["attempt_id"] != follow["attempt_id"] and again["request_id"] == first["request_id"]
+    assert not turns.collaborate({**_key(follow), "action": "claim"})["claimed"]
+    assert turns.collaborate({**_key(again), "action": "claim"})["claimed"]
+    collaboration_board.receipts[again["attempt_id"], again["message_id"]] = {
+        "run_id": "second", "session_id": B, "status": "completed", "output": "보충에 대한 답"}
+    assert turns.collaborate({**_key(again), "action": "report", "run_id": "second", "status": "completed"})["ok"]
+    assert turns.read(A, "b", again["request_id"])["work"]["result"] == "보충에 대한 답"
+
+
+@pytest.mark.parametrize("outcome", ["failed", "cancelled"])
+def test_failed_review_keeps_terminal_run_state(collaboration_board, outcome):
+    job = create(A, "b", "검토", kind="review", model="review-model",
+                 revision={"title": "문서", "content": "본문"}, requirements="본문 확인")["work"]
+    assert turns.collaborate({**_key(job), "action": "claim"})["claimed"]
+    collaboration_board.receipts[job["attempt_id"], job["message_id"]] = {
+        "run_id": "r", "session_id": B, "status": outcome, "output": ""}
+    assert turns.collaborate({**_key(job), "action": "report", "run_id": "r", "status": outcome})["ok"]
+    assert turns.read(A, "b", job["request_id"])["work"]["status"] == outcome
+
+def test_steer_tickets_separate_identical_words_and_preserve_user_leftovers():
+    import threading
+    from agent.interrupt_control import InterruptControlMixin
+    from gateway.platforms.api_server_runs import terminal_run_status
+    class TestAgent(InterruptControlMixin):
+        pass
+    agent = TestAgent()
+    agent._pending_steer_lock = threading.Lock()
+    agent._pending_steer = None
+    read = "krema-work:a:m1"
+    unread = "krema-work:b:m2"
+    assert agent.steer("같은 말", ticket=read)
+    assert agent._drain_pending_steer() == "같은 말"
+    assert agent.steer("같은 말", ticket=unread)
+    assert agent.steer("사용자 지시")
+    assert agent.steer("gateway", ticket="other-source")
+    result = {"pending_steer": agent._drain_leftover_steer(), "pending_work": agent.take_unread_work()}
+    _, receipt = terminal_run_status(result)
+    assert receipt["pending_work"] == [unread] and receipt["pending_steer"] == "사용자 지시"
+    assert agent.withdraw_steer("other-source")
+    assert not agent.steer("종료 직후", ticket=unread)
+    agent.open_work_delivery()
+    assert agent.steer("다음 차례", ticket=unread)
+    assert agent.take_unread_work() == [unread]

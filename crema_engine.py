@@ -33,7 +33,7 @@ def install_turn_collaboration_route(settings) -> None:
         action = body.get("action")
         if isinstance(action, str) and action in {"grant", "revoke"}:
             raise HTTPException(status_code=403, detail="only a directly authenticated user can change collaboration grants")
-        if not isinstance(action, str) or action not in {"claim", "validate", "accepted", "report"}:
+        if not isinstance(action, str) or action not in {"claim", "validate", "accepted", "report", "history"}:
             raise HTTPException(status_code=400, detail="unsupported collaboration action")
         try:
             return await asyncio.to_thread(crema_file_turns.collaborate, body, trusted_user=False)
@@ -265,7 +265,7 @@ async def main() -> None:
     @settings.get("/api/crema/turns")
     async def turns():
         await asyncio.to_thread(crema_file_turns.settle)
-        return await asyncio.to_thread(crema_file_turns.state)
+        return await asyncio.to_thread(crema_file_turns.state, active_only=True)
 
     install_turn_collaboration_route(settings)
     install_user_collaboration_route(settings, native_consent_token)

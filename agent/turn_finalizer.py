@@ -880,6 +880,9 @@ def finalize_turn(
     # hand it back so it becomes the next user turn instead of being lost. A gateway transfer
     # (ticketed) stays buffered: the claim's settlement returns it to its own queue place.
     _leftover_steer = (getattr(agent, "_drain_leftover_steer", None) or agent._drain_pending_steer)()
+    take_work = getattr(agent, "take_unread_work", None)
+    if callable(take_work):
+        result["pending_work"] = take_work()
     if _leftover_steer:
         result["pending_steer"] = _leftover_steer
     agent._response_was_previewed = False

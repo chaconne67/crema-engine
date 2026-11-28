@@ -87,6 +87,10 @@ def _ic_slot(agent, lock_attr: str, slot: str):
     return getattr(agent, slot)
 
 
+def _crema_work_ticket(ticket):
+    return isinstance(ticket, str) and ticket.startswith("krema-work:")
+
+
 def _steer_parts(agent) -> list:
     """The buffered steers as ``(ticket, text)`` pairs; ``_pending_steer`` is their newline join. A ticket
     names one submission (a gateway transfer). A buffer another writer set directly is one ticketless part."""
@@ -315,6 +319,8 @@ class InterruptControlMixin:
             return False
         cleaned = text.strip()
         with _ic_lock(self, "_pending_steer_lock"):
+            if _crema_work_ticket(ticket) and getattr(self, "_crema_work_closed", False) is True:
+                return False
             _set_steer_parts(self, _steer_parts(self) + [(ticket, cleaned)])
         # The turn no longer ran on its own (first-task-done detection reads this off the result).
         self._turn_user_intervened = True
@@ -415,6 +421,24 @@ class InterruptControlMixin:
             parts = _steer_parts(self)
             _set_steer_parts(self, [part for part in parts if part[0] is not None])
         return "\n".join(text for ticket, text in parts if ticket is None) or None
+
+    def open_work_delivery(self):
+        """An authority-owned agent may be reused by a new turn."""
+        with _ic_lock(self, "_pending_steer_lock"):
+            self._crema_work_closed = False
+
+    def take_unread_work(self) -> list[str]:
+        """Settle Crema deliveries by ticket, including guidance dropped on a hard stop."""
+        with _ic_lock(self, "_pending_steer_lock"):
+            self._crema_work_closed = True
+            parts = _steer_parts(self)
+            unread = [ticket for ticket, _ in parts if _crema_work_ticket(ticket)]
+            _set_steer_parts(self, [part for part in parts if not _crema_work_ticket(part[0])])
+            fates = _steer_fates(self)
+            for ticket in list(fates):
+                if _crema_work_ticket(ticket) and not fates.pop(ticket):
+                    unread.append(ticket)
+            return unread
 
     def withdraw_steer(self, ticket) -> bool:
         """Settle one ``steer(text, ticket=...)`` by identity (the gateway's transfer of a queued prompt):

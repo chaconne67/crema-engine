@@ -1174,9 +1174,9 @@ def read(session_id: str, to: str, request_id: str = "") -> dict:
     return {"chat": target["title"], "replying": _replying(target["session"]), "reply": reply}
 
 
-def _pending(conn, session_id: str) -> list:
+def _pending(conn, session_id: str, events=None) -> list:
     """Legacy messages not handed over; work records have their own claim lifecycle."""
-    events = _session_events(conn, session_id)
+    events = _session_events(conn, session_id) if events is None else events
     done = _upto(events, "crema_messages_handed")
     return sorted((e for e in events if e.kind == "crema_note" and e.id > done and (e.payload or {}).get("handed")
                    and not (e.payload or {}).get("work")),
@@ -1225,10 +1225,36 @@ def settle() -> None:
         conn.close()
 
 
-def state() -> dict:
+def _work_item(work, directory):
+    outbound = work.get("direction") == "outbound"
+    peer = work.get("recipient") if outbound else work.get("sender")
+    row = directory.get(peer) or {}
+    number = row.get("id") or str(peer or "").removeprefix("agent-client-")
+    title = row.get("title") or number
+    project = row.get("project", "")
+    if not outbound:
+        number = work.get("sender_chat") or number
+        title = work.get("sender_title") or title
+        project = work.get("sender_project") or project
+    body = work.get("text", "")
+    context = {"대화": title, "대화 번호": number, "프로젝트": project or work.get("project_id"),
+               "메시지 번호": work["message_id"], "요청 번호": work.get("request_id")}
+    if work.get("source_message_id"):
+        context["원래 메시지 번호"] = work["source_message_id"]
+    if work.get("source_status"):
+        context["원래 업무 상태"] = work["source_status"]
+    prompt = ("[Crema] 다른 대화에서 보낸 메시지입니다. 사용자가 맡긴 범위에서 내용을 판단하세요. "
+              "상대에게 답할 필요가 있으면 send의 reply_to에 이 메시지 번호를 넣으세요.\n"
+              + json.dumps(context, ensure_ascii=False) + "\n\n" + body)
+    return {"work": {**work, "direction": "outbound" if outbound else "inbound"},
+            "from_chat": number, "from_title": title, "from_project": project,
+            "text": body, "prompt": prompt}
+
+
+def state(*, active_only=False) -> dict:
     """Chats that wait (and why), chats the user must order, chats whose turn came, and the messages the app is to
     hand over."""
-    from agent.crema_collaboration import reconcile_stopping
+    from agent.crema_collaboration import reconcile_stopping, settle_delivery
     reconcile_stopping()
     conn = _board()
     try:
@@ -1280,22 +1306,22 @@ def state() -> dict:
         sessions.extend(row["session"] for row in archived_rows)
         for session in dict.fromkeys(sessions):
             from crema_heartbeat import active as heartbeat_active
-            pending = [event for event in _pending(conn, session)
+            all_events = _session_events(conn, session)
+            pending = [event for event in _pending(conn, session, all_events)
                        if not (ref := (event.payload.get("scheduled") or {}).get("heartbeat"))
                        or heartbeat_active(ref, session)]
-            all_events = _session_events(conn, session)
             work_by_message = {}
             for event in all_events:
                 work = (event.payload or {}).get("work")
                 if work and work.get("message_id"):
                     work_by_message[work["message_id"]] = (event, work)
-            work_items = [{"work": {**work, "direction": work.get("direction") or
-                                     ("inbound" if work.get("recipient") == session else "outbound")},
-                           "from_chat": work.get("sender", ""),
-                           "from_title": _title(work.get("sender", "")), "text": work.get("text", ""),
-                           "prompt": work.get("text", "")}
-                          for _, work in work_by_message.values()
-                          if session in collaboration_sessions
+            works = (work for _, work in work_by_message.values())
+            if active_only:
+                works = (settle_delivery(conn, work) for work in works)
+            work_items = [_work_item(work, rows_by_session)
+                          for work in works
+                          if session in collaboration_sessions and work.get("project_id") == rows_by_session[session].get("project_id")
+                          and (not active_only or work.get("status") not in {"completed", "failed", "cancelled"})
                           and session in {work.get("sender"), work.get("recipient")}
                           and (session not in archived_by_session
                                or (counterpart := work.get("sender") if work.get("recipient") == session

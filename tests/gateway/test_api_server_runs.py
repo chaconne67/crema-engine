@@ -1289,7 +1289,7 @@ class TestSteerRun:
             assert (await cli.post(url, json=delivery)).status == 200
             assert (await cli.post(url, json=delivery)).status == 200
             assert (await cli.post(url, json={**delivery, "input": "another request"})).status == 409
-        agent.steer.assert_called_once_with(delivery["input"])
+        agent.steer.assert_called_once_with(delivery["input"], ticket=delivery["delivery_key"])
         work = dict(attempt_id="one", message_id="two", recipient="review-chat", mode="steer")
         assert work_run_receipt(adapter, work)["run_id"] == "run_123"
         assert work_run_receipt(adapter, {**work, "recipient": "another-chat"}) is None

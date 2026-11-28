@@ -874,6 +874,8 @@ def _execute_tool(function_name: str, function_args: dict[str, Any], original_ar
     with the approval observability context bound for the duration."""
     dispatch_kwargs: dict[str, Any] = {
         "task_id": ids.task_id, "session_id": ids.session_id, "conversation_id": ids.conversation_id}
+    if function_name == "crema_chats":
+        dispatch_kwargs["tool_call_id"] = ids.tool_call_id
     if function_name == "execute_code":
         dispatch_kwargs["turn_id"] = ids.turn_id
         # Prefer the caller's list so subagents can't overwrite the parent's

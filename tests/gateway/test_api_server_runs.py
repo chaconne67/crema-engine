@@ -1244,6 +1244,32 @@ class TestRunEventsCORS:
 
 class TestSteerRun:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(("cached", "current", "expected"), [
+        ("queued", "running", 200), ("running", "completed", 409), ("running", "waiting_for_approval", 409),
+    ])
+    async def test_steer_uses_the_current_run_state(self, adapter, monkeypatch, cached, current, expected):
+        from gateway.platforms import api_server_authority_runs as authority_runs
+
+        agent = MagicMock()
+        agent.steer.return_value = True
+        authority = MagicMock()
+        authority.profile_id = "profile"
+        authority.steer_agent.return_value = (agent, False)
+        adapter.gateway_runner = MagicMock(session_authority=authority)
+        monkeypatch.setattr(authority_runs, "run_admission", lambda *_: (authority, {"target_session_id": "chat", "generation": 1}))
+        monkeypatch.setattr(authority_runs, "run_projection", lambda *_: {"status": current, "pending_controls": []})
+        adapter._set_run_status("run_123", cached)
+        _claim_run(adapter, "run_123")
+
+        async with TestClient(TestServer(_create_runs_app(adapter))) as cli:
+            response = await cli.post("/v1/runs/run_123/steer", json={"input": "현재 작업에 반영"})
+            assert response.status == expected
+        if expected == 200:
+            agent.steer.assert_called_once_with("현재 작업에 반영")
+        else:
+            agent.steer.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_steer_running_agent(self, adapter):
         app = _create_runs_app(adapter)
         agent = MagicMock()

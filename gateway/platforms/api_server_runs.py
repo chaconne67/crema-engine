@@ -1871,8 +1871,8 @@ async def _handle_steer_run(self, request: web.Request, *, _api_server) -> web.R
     body, err = await self._read_json_body(request)
     if err:
         return err
-    # The run can finish while the body is arriving.
-    status = self._run_statuses.get(run_id, status)
+    # The authority can start or finish the run while the body arrives. Its projection also drives GET /runs.
+    status = self._durable_run_status(request, run_id) or {}
     agent = self._active_run_agents.get(run_id)
     raw_text = body.get("input") or body.get("message") or body.get("text") or ""
     steer_text = _api_server._normalize_chat_content(raw_text).strip()

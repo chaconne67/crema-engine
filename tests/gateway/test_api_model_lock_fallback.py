@@ -70,7 +70,7 @@ def test_locked_turn_served_by_another_runtime_settles_failed(api):
     """Main's settlement refusal: a locked turn whose agent ran on another provider/model is a
     failed turn carrying the mismatch, never a completed answer from the wrong runtime."""
     from types import SimpleNamespace
-    from gateway.run_turn_runner import _settle_api_runtime_lock
+    from gateway.run_turn_runner import _settle_api_runtime
     from gateway.session_api_turn import api_execution
 
     agent = SimpleNamespace(provider='custom', model='backup-model', _hermes_api_runtime={'provider': 'custom'})
@@ -79,8 +79,26 @@ def test_locked_turn_served_by_another_runtime_settles_failed(api):
         'confirmed_runtime_lock': True, 'route': {'provider': 'custom', 'model': 'primary-model'},
         'route_source': 'raw_request'}})
     try:
-        _settle_api_runtime_lock(agent, result, captured)
+        _settle_api_runtime(agent, result, captured)
     finally:
         api_execution.reset(token)
     assert result['failed'] is True and result['completed'] is False and result['final_response'] == ''
     assert 'confirmed model lock runtime mismatch' in result['error']
+
+
+def test_unlocked_api_turn_records_the_agent_that_answered(api):
+    from types import SimpleNamespace
+    from gateway.run_turn_runner import _settle_api_runtime
+    from gateway.session_api_turn import api_execution
+
+    agent = SimpleNamespace(provider='custom', model='backup')
+    captured = {'usage': {'input_tokens': 2}}
+    result = {'completed': True}
+    token = api_execution.set({'adapter': api, 'settings': {'requested_model': 'primary'}})
+    try:
+        _settle_api_runtime(agent, result, captured)
+    finally:
+        api_execution.reset(token)
+    assert captured['usage']['runtime']['model'] == 'backup'
+    assert captured['usage']['runtime']['provider'] == 'custom'
+    assert captured['usage']['input_tokens'] == 2 and result['completed']

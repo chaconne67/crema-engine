@@ -112,7 +112,7 @@ def _result_payload(work: dict) -> tuple[str, dict | None]:
     summary = {key: review[key] for key in
                ("status", "reason", "verdict", "findings", "evidence", "reviewed_revision", "revision",
                 "reviewer", "round") if key in review}
-    summary["reviewed_model"] = review.get("model") or work.get("actual_model", "")
+    summary["reviewed_model"] = work.get("actual_model", "")
     if review.get("previous"):
         summary["previous"] = {key: review["previous"].get(key) for key in ("revision", "findings")
                                if key in review["previous"]}
@@ -588,7 +588,8 @@ def _claim(conn, session: str, request_id: str, attempt_id: str, message_id: str
         attempts = [w for w in records if w.get("attempt_id") == attempt_id and w.get("status") != "queued"]
         if latest.get("requeued_from") and latest.get("attempt_id") != attempt_id:
             return {"ok": True, "claimed": False, "work": latest}
-        if attempts and attempts[-1].get("status") in {"completed", "failed", "cancelled"}:
+        if attempts and (attempts[-1].get("status") in {"completed", "failed", "cancelled"}
+                         or attempts[-1].get("reported_run_status") in {"completed", "failed", "cancelled", "interrupted"}):
             return {"ok": True, "claimed": False, "work": latest}
         if attempts:
             return _recover_claim(conn, recipient_task, attempts[-1], session)
@@ -673,6 +674,7 @@ def _update_attempt(conn, session: str, request_id: str, attempt_id: str, messag
             if not receipt or str(receipt.get("run_id")) != str(body.get("run_id") or ""):
                 return {"ok": False, "error": "run does not match the durable receipt for this work attempt"}
             receipt_status = str(receipt.get("status") or "")
+            actual_model = _receipt_model(receipt)
             delivery = f"krema-work:{attempt_id}:{message_id}"
             if delivery in receipt.get("pending_work", []) and receipt_status in {"completed", "failed"}:
                 # The run ended before consuming this steer. Keep its message and permission scope.
@@ -693,6 +695,9 @@ def _update_attempt(conn, session: str, request_id: str, attempt_id: str, messag
                 status = "waiting"
             elif receipt_status == "completed":
                 if work.get("kind") in {"message", "result"}:
+                    status = "completed"
+                elif status == "failed" and work.get("model") and work["model"] != actual_model:
+                    # A completed run can fail the client's model check. Resolve it from the final receipt below.
                     status = "completed"
                 elif status not in {"completed", "waiting", "partial"}:
                     return {"ok": False, "error": "report status conflicts with the completed run"}
@@ -718,7 +723,6 @@ def _update_attempt(conn, session: str, request_id: str, attempt_id: str, messag
                 else:
                     status = "partial" if result else "waiting"
                     result = f"{result}\n\n{limit_reason}".strip()
-            actual_model = _receipt_model(receipt)
             if work.get("model") and not current.get("review") and status in {"completed", "partial"}:
                 if not actual_model:
                     status, result = "waiting", "실제로 사용한 모델을 확인하지 못해 결과를 검증할 수 없습니다."
@@ -728,8 +732,7 @@ def _update_attempt(conn, session: str, request_id: str, attempt_id: str, messag
             if current.get("status") == status and current.get("result") == result:
                 return {"ok": True}
             updated = {**current, "status": status, "result": result, "run_id": receipt["run_id"],
-                       "reported_run_status": receipt_status,
-                       **({"actual_model": actual_model} if actual_model else {})}
+                       "reported_run_status": receipt_status, "actual_model": actual_model}
             if current.get("review") and (receipt_status == "completed" or limit_reason and receipt_status == "failed"):
                 if limit_reason:
                     outcome = {"status": "waiting", "reason": limit_reason, "findings": []}
@@ -787,13 +790,18 @@ def _update_attempt(conn, session: str, request_id: str, attempt_id: str, messag
 
 
 def settle_delivery(conn, work: dict) -> dict:
-    """A closed browser cannot report a finished mailbox delivery or an unread steer."""
+    """Settle deliveries whose outcome the engine can determine from the final receipt."""
     if (work.get("direction") == "outbound" or work.get("status") not in {"accepted", "claimed", "waiting", "check_required"}
-            or (work.get("kind") not in {"message", "result"} and work.get("mode") != "steer")):
+            or work.get("reported_run_status") in {"completed", "failed", "cancelled", "interrupted"}):
+        return work
+    mailbox = work.get("kind") in {"message", "result"} or work.get("mode") == "steer"
+    if not mailbox and not work.get("model"):
         return work
     receipt = _run_receipt(work)
     if (not receipt or receipt.get("status") not in {"completed", "cancelled", "failed", "interrupted"}
             or not receipt.get("run_id") or receipt.get("status") == work.get("reported_run_status")):
+        return work
+    if not mailbox and (receipt["status"] != "completed" or _receipt_model(receipt) == work["model"]):
         return work
     result = _update_attempt(conn, work["recipient"], work["request_id"], work["attempt_id"], work["message_id"],
                              "report", {"run_id": receipt["run_id"], "status": "completed"},
@@ -809,7 +817,8 @@ def _run_receipt(work: dict) -> dict | None:
 
 def _receipt_model(receipt: dict) -> str:
     runtime = receipt.get("runtime")
-    return str((runtime or {}).get("model") or receipt.get("model") or "") if isinstance(runtime, dict) else str(receipt.get("model") or "")
+    # The top-level model is copied from the incoming request before the run starts.
+    return str(runtime.get("model") or "") if isinstance(runtime, dict) else ""
 
 
 def _turn_limit_reason(receipt: dict) -> str:

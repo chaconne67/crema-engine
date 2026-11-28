@@ -438,6 +438,49 @@ def test_two_browsers_get_one_request_id_for_the_same_first_grant(collaboration_
     assert sorted(reply.get("duplicate", False) for reply in replies) == [False, True]
 
 
+@pytest.mark.parametrize("kind,served,expected", [
+    ("review", "", "waiting"), ("request", "", "waiting"), ("request", "other-model", "failed"),
+])
+def test_model_error_report_settles_completed_attempt_once(collaboration_board, kind, served, expected):
+    review = {"revision": {"title": "문서", "content": "본문"}, "requirements": "본문 확인"} if kind == "review" else {}
+    work = create(A, "b", "확인", kind=kind, model="review-model", **review)["work"]
+    key = _key(work)
+    assert turns.collaborate({**key, "action": "claim"})["claimed"]
+    receipt = {"session_id": B, "run_id": "run-old", "status": "running",
+               "model": "review-model", "runtime": {"model": "review-model"}}
+    collaboration_board.receipts[work["attempt_id"], work["message_id"]] = receipt
+    assert turns.collaborate({**key, "action": "accepted", "run_id": "run-old"})["ok"]
+    # Old engines retained the requested top-level model when the final runtime was unknown.
+    receipt.update(status="completed", output="본문", runtime={"model": served, "requested": {"model": "review-model"}})
+    for _ in range(2):
+        assert turns.collaborate({**key, "action": "report", "run_id": "run-old", "status": "failed"})["ok"]
+        saved = turns.read(A, "b", work["request_id"])["work"]
+        assert saved["status"] == expected
+        assert (saved.get("actual_model") or "") == served
+        again = turns.collaborate({**key, "action": "claim"})
+        assert not again["claimed"] and "run_id" not in again
+    replies = [item["work"] for entry in turns.state()["messages"] if entry["session_id"] == A
+               for item in entry["items"] if item.get("work", {}).get("source_message_id") == work["message_id"]]
+    assert len(replies) == 1
+    if kind == "review":
+        assert replies[0]["review_result"]["reviewed_model"] == served
+
+
+def test_poll_reconciles_old_unverified_review_without_rejoining(collaboration_board):
+    work = create(A, "b", "검토", kind="review", model="review-model",
+                  revision={"title": "문서", "content": "본문"}, requirements="본문 확인")["work"]
+    key = _key(work)
+    assert turns.collaborate({**key, "action": "claim"})["claimed"]
+    receipt = {"session_id": B, "run_id": "saved", "status": "completed",
+               "model": work["model"], "runtime": {"model": "", "requested": {"model": work["model"]}}}
+    collaboration_board.receipts[work["attempt_id"], work["message_id"]] = receipt
+    for _ in range(2):
+        incoming = [item["work"] for row in turns.state(active_only=True)["messages"] if row["session_id"] == B
+                    for item in row["items"] if item["work"]["message_id"] == work["message_id"]]
+        assert len(incoming) == 1 and incoming[0]["status"] == "waiting"
+        assert "run_id" not in turns.collaborate({**key, "action": "claim"})
+
+
 def test_requested_model_mismatch_cannot_be_reported_as_complete(collaboration_board):
     work = create(A, "b", "검토 모델을 지켜 주세요", request_id="r-model", attempt_id="a-model",
                   message_id="m-model", model="review-model")["work"]

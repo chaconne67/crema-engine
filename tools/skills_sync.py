@@ -405,6 +405,18 @@ def sync_skills(quiet: bool = False) -> dict:
     """Sync bundled skills into ~/.hermes/skills/ using the manifest; returns the per-category
     result dict. Opted-out profiles seed ONLY ESSENTIAL_SKILLS (the system prompt always
     points at ``hermes-agent``)."""
+    from tools.skill_usage import skill_file_lock
+    if not _get_bundled_dir().exists():
+        return _sync_skills(quiet)
+    from tools.krema_skill_names import LEGACY_NAMES
+    from tools.skill_manager_tool import _skill_mutation_locks
+    with skill_file_lock(_skills_dir() / ".bundled-sync.lock"), _skill_mutation_locks(
+        (*LEGACY_NAMES, *LEGACY_NAMES.values()), root=_skills_dir()
+    ):
+        return _sync_skills(quiet)
+
+
+def _sync_skills(quiet: bool) -> dict:
     essential_only = (_hermes_home() / NO_BUNDLED_SKILLS_MARKER).exists()
     if essential_only and not quiet:
         print("  (profile opted out of bundled skills via .no-bundled-skills — seeding essential skills only)")
@@ -419,6 +431,12 @@ def sync_skills(quiet: bool = False) -> dict:
     suppressed = _read_suppressed_names()
     external_index = _build_external_skill_index()
     st = _SyncState(manifest=_read_manifest(), quiet=quiet)
+
+    from tools.krema_skill_names import LEGACY_NAMES, current_name, migrate_profile
+    targets = {name: _compute_relative_dest(src, bundled_dir) for name, src in bundled_skills}
+    if set(targets).intersection(LEGACY_NAMES.values()):
+        migrate_profile(_skills_dir(), st.manifest, targets)
+        suppressed.update(current_name(name) for name in tuple(suppressed))
 
     for skill_name, skill_src in bundled_skills:
         # Curator-pruned built-ins must not resurrect on every update; essentials are exempt.

@@ -531,7 +531,7 @@ _DO_NOT_CAPTURE_BLOCK = (
 )
 
 _CREMA_REVIEW_SKILL_SCOPE = (
-    "Protect bundled skills (including crema-guide, which Crema restores at startup), "
+    "Protect bundled skills (including krema-guide, which Crema restores at startup), "
     "Hub-installed, external, pinned, locked, and user-owned skills. Only update skills "
     "created by the review agent. If a lesson belongs to a protected skill, describe the "
     "suggested change in your summary so the owner can decide. Do not copy the skill.\n\n"

@@ -134,7 +134,7 @@ async def main() -> None:
     driver = importlib.util.find_spec("cua_driver")
     if driver and driver.origin:
         os.environ.setdefault("HERMES_CUA_DRIVER_CMD", str(Path(driver.origin).parent / "bin" / "cua-driver.exe"))
-    # Crema's built-in skills (skills/: the crema-guide manual) into the engine folder as installed;
+    # Crema's built-in skills (skills/: the krema-guide manual) into the engine folder as installed;
     # a chat can work without them, so a failure is logged and the engine starts.
     try:
         from tools.skills_sync import sync_skills

@@ -1038,14 +1038,14 @@ class TestCallTimeDirResolution:
 
 
 class TestCremaEssentialSkill:
-    """Crema: the essential `crema-guide` manual is the installed version — an edited or deleted copy
+    """Crema: the essential `krema-guide` manual is the installed version — an edited or deleted copy
     comes back on the next sync, while other bundled skills keep the upstream rules."""
 
     def _bundled(self, tmp_path):
         bundled = tmp_path / "bundled_skills"
-        (bundled / "crema-guide" / "references").mkdir(parents=True)
-        (bundled / "crema-guide" / "SKILL.md").write_text("---\nname: crema-guide\n---\n# Manual v1")
-        (bundled / "crema-guide" / "references" / "a.md").write_text("A v1")
+        (bundled / "krema-guide" / "references").mkdir(parents=True)
+        (bundled / "krema-guide" / "SKILL.md").write_text("---\nname: krema-guide\n---\n# Manual v1")
+        (bundled / "krema-guide" / "references" / "a.md").write_text("A v1")
         (bundled / "plain").mkdir()
         (bundled / "plain" / "SKILL.md").write_text("---\nname: plain\n---\n# Plain")
         return bundled
@@ -1059,14 +1059,14 @@ class TestCremaEssentialSkill:
 
     def test_edited_copy_is_put_back_and_other_skills_keep_edits(self, tmp_path):
         bundled, skills_dir = self._bundled(tmp_path), tmp_path / "user_skills"
-        assert set(self._sync(bundled, skills_dir)["copied"]) == {"crema-guide", "plain"}
-        (skills_dir / "crema-guide" / "references" / "a.md").write_text("edited by the agent")
+        assert set(self._sync(bundled, skills_dir)["copied"]) == {"krema-guide", "plain"}
+        (skills_dir / "krema-guide" / "references" / "a.md").write_text("edited by the agent")
         (skills_dir / "plain" / "SKILL.md").write_text("---\nname: plain\n---\n# Mine")
 
         result = self._sync(bundled, skills_dir)
 
-        assert result["updated"] == ["crema-guide"]
-        assert dir_hash(skills_dir / "crema-guide") == dir_hash(bundled / "crema-guide")
+        assert result["updated"] == ["krema-guide"]
+        assert dir_hash(skills_dir / "krema-guide") == dir_hash(bundled / "krema-guide")
         assert "Mine" in (skills_dir / "plain" / "SKILL.md").read_text()
         # Unchanged since: nothing to do.
         assert self._sync(bundled, skills_dir)["updated"] == []
@@ -1074,39 +1074,98 @@ class TestCremaEssentialSkill:
     def test_deleted_copy_comes_back_and_other_deletions_hold(self, tmp_path):
         bundled, skills_dir = self._bundled(tmp_path), tmp_path / "user_skills"
         self._sync(bundled, skills_dir)
-        shutil.rmtree(skills_dir / "crema-guide")
+        shutil.rmtree(skills_dir / "krema-guide")
         shutil.rmtree(skills_dir / "plain")
 
         result = self._sync(bundled, skills_dir)
 
-        assert result["copied"] == ["crema-guide"]
-        assert (skills_dir / "crema-guide" / "SKILL.md").exists()
+        assert result["copied"] == ["krema-guide"]
+        assert (skills_dir / "krema-guide" / "SKILL.md").exists()
         assert not (skills_dir / "plain").exists()
 
     def test_new_release_replaces_an_edited_copy(self, tmp_path):
         bundled, skills_dir = self._bundled(tmp_path), tmp_path / "user_skills"
         self._sync(bundled, skills_dir)
-        (skills_dir / "crema-guide" / "SKILL.md").write_text("---\nname: crema-guide\n---\n# edited")
-        (bundled / "crema-guide" / "SKILL.md").write_text("---\nname: crema-guide\n---\n# Manual v2")
+        (skills_dir / "krema-guide" / "SKILL.md").write_text("---\nname: krema-guide\n---\n# edited")
+        (bundled / "krema-guide" / "SKILL.md").write_text("---\nname: krema-guide\n---\n# Manual v2")
 
         result = self._sync(bundled, skills_dir)
 
-        assert result["updated"] == ["crema-guide"]
-        assert "Manual v2" in (skills_dir / "crema-guide" / "SKILL.md").read_text()
-        assert read_skill_name(skills_dir / "crema-guide" / "SKILL.md", "") == "crema-guide"
+        assert result["updated"] == ["krema-guide"]
+        assert "Manual v2" in (skills_dir / "krema-guide" / "SKILL.md").read_text()
+        assert read_skill_name(skills_dir / "krema-guide" / "SKILL.md", "") == "krema-guide"
 
     def test_repository_ships_the_manual_with_a_whole_index_description(self):
         from agent.skill_utils import ESSENTIAL_SKILLS, SKILL_PROMPT_DESC_LIMIT, parse_frontmatter
 
         found = dict(_discover_bundled_skills(_get_bundled_dir()))
-        assert "crema-guide" in found and "crema-guide" in ESSENTIAL_SKILLS
-        frontmatter = parse_frontmatter((found["crema-guide"] / "SKILL.md").read_text(encoding="utf-8"))[0]
+        assert "krema-guide" in found and "krema-guide" in ESSENTIAL_SKILLS
+        frontmatter = parse_frontmatter((found["krema-guide"] / "SKILL.md").read_text(encoding="utf-8"))[0]
         # The skills index cuts a longer description, and the index line is how the agent knows to open it.
         assert 0 < len(frontmatter["description"]) <= SKILL_PROMPT_DESC_LIMIT
         # Windows tar.exe, which unpacks the bundle (Crema's build-engine.ps1) and a quick apply, fails on
         # non-ASCII file names: the manual's are ASCII, its text Korean.
-        assert all(p.name.isascii() for p in found["crema-guide"].rglob("*")), "non-ASCII file name"
+        assert all(p.name.isascii() for p in found["krema-guide"].rglob("*")), "non-ASCII file name"
         # Every reference the manual routes to is shipped with it.
-        body = (found["crema-guide"] / "SKILL.md").read_text(encoding="utf-8")
+        body = (found["krema-guide"] / "SKILL.md").read_text(encoding="utf-8")
         for name in __import__("re").findall(r"\]\(references/([^)#]+)", body):
-            assert (found["crema-guide"] / "references" / name).is_file(), name
+            assert (found["krema-guide"] / "references" / name).is_file(), name
+
+
+class TestKremaSkillNames:
+    _bundled = TestCremaEssentialSkill._bundled
+    _sync = TestCremaEssentialSkill._sync
+
+    @pytest.mark.parametrize("state", ["pristine", "edited", "deleted", "archived", "collision"])
+    def test_upgrade(self, tmp_path, state):
+        from agent.skill_commands import resolve_slash_key
+        from hermes_cli.skills_config import get_disabled_skills
+        from tools.skills_tool import locate_skill
+        from agent.skill_utils import TIER_LOCAL
+
+        bundled = self._bundled(tmp_path)
+        root = tmp_path / "profile" / "skills"
+        old, new = "crema-appdesign", "krema-appdesign"
+        installed = root / old
+        installed.mkdir(parents=True)
+        marker = installed / "SKILL.md"
+        marker.write_bytes(f"---\r\nname: {old}\r\n---\r\noriginal".encode())
+        (root / ".bundled_manifest").write_text(f"{old}:{dir_hash(installed)}\ncrema-guide:old\n")
+        target = bundled / new
+        target.mkdir()
+        (target / "SKILL.md").write_text(f"---\nname: {new}\n---\nnew release")
+        (root / ".usage.json").write_text(json.dumps({old: {"locked": True}}))
+        if state == "edited":
+            marker.write_bytes(marker.read_bytes() + b"\r\nmy notes")
+            (installed / "my.txt").write_bytes(b"my attachment")
+        if state == "deleted":
+            shutil.rmtree(installed)
+        if state == "archived":
+            (root / ".archive").mkdir()
+            installed.rename(root / ".archive" / old)
+        if state == "collision":
+            (root / new).mkdir()
+            (root / new / "SKILL.md").write_text(f"---\nname: {new}\n---\nindependent")
+        with patch("tools.skills_sync._read_suppressed_names", return_value={old} if state == "archived" else set()):
+            self._sync(bundled, root)
+            self._sync(bundled, root)
+        assert (root / "krema-guide" / "SKILL.md").exists()
+        assert get_disabled_skills({"skills": {"platform_disabled": {"pc": [old, "crema-guide"]}}}, "pc") == {new}
+        assert resolve_slash_key(old, {"/" + new: {}}) == "/" + new
+        if state == "collision":
+            assert (root / old / "SKILL.md").exists()
+            assert (root / new / "SKILL.md").read_text().endswith("independent")
+            return
+        assert json.loads((root / ".usage.json").read_text())[new]["locked"] is True
+        assert not (root / old).exists()
+        if state in ("deleted", "archived"):
+            assert not (root / new).exists()
+            if state == "archived":
+                assert read_skill_name(root / ".archive" / new / "SKILL.md", "") == new
+        else:
+            assert locate_skill(old, None, [(TIER_LOCAL, root)])[2] == root / new / "SKILL.md"
+            if state == "pristine":
+                assert dir_hash(root / new) == dir_hash(target)
+            else:
+                assert (root / new / "SKILL.md").read_bytes().endswith(b"\r\nmy notes")
+                assert (root / new / "my.txt").read_bytes() == b"my attachment"

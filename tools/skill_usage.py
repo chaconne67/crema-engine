@@ -197,7 +197,8 @@ def _prune_builtins_enabled() -> bool:
 def read_suppressed_names() -> set[str]:
     """Built-ins the curator pruned (``.curator_suppressed``); the update-time re-seeder must leave these archived."""
     lines = _read_lines(_skills_dir() / ".curator_suppressed", "Failed to read curator suppression list: %s")
-    return {line for line in lines if not line.startswith("#")}
+    from tools.krema_skill_names import current_name
+    return {current_name(line) for line in lines if not line.startswith("#")}
 
 
 def _toggle_suppressed_name(skill_name: str, *, add: bool) -> None:

@@ -145,7 +145,7 @@ def test_personal_skill_management_uses_local_store_and_preserves_slash_list(des
         return f"---\nname: {name}\ndescription: {description}\n---\n\n작업을 정리합니다.\n"
 
     bundled = Path(os.environ["HERMES_BUNDLED_SKILLS"])
-    for name in ("crema-guide", "ego-browser"):
+    for name in ("krema-guide", "ego-browser"):
         package = bundled / name
         package.mkdir(parents=True)
         (package / "SKILL.md").write_text(text(name, "제품 안내"), encoding="utf-8")
@@ -162,19 +162,19 @@ def test_personal_skill_management_uses_local_store_and_preserves_slash_list(des
         assert client.get(SKILLS, params={"name": "my-skill"}).json() == {**expected, "text": content}
         rows = {row["name"]: row for row in client.get(SKILLS).json()["skills"]}
         assert rows["my-skill"] == expected
-        assert rows["crema-guide"]["common"] and not rows["crema-guide"]["editable"]
+        assert rows["krema-guide"]["common"] and not rows["krema-guide"]["editable"]
         assert get_skill_commands().keys() == before.keys() | {"/my-skill"}
         changed = text("my-skill", "바뀐 스킬")
         assert client.post(SKILLS, json={"action": "patch", "name": "my-skill", "content": changed}).json()["success"]
         assert client.get(SKILLS, params={"name": "my-skill"}).json()["text"] == changed
         assert client.post(SKILLS, json={"action": "patch", "name": "my-skill",
-                                         "content": text("crema-guide", "다른 이름")}).json()["success"] is False
+                                         "content": text("krema-guide", "다른 이름")}).json()["success"] is False
         assert client.post(SKILLS, json={"action": "delete", "name": "../my-skill"}).status_code == 400
         assert client.post(SKILLS, json={"action": "create", "name": "nul", "content": text("nul", "안내")}).status_code == 400
         assert client.post(SKILLS, json={"action": "install", "url": "https://example.invalid"}).status_code == 404
-        for name in ("crema-guide", "ego-browser"):
+        for name in ("krema-guide", "ego-browser"):
             assert client.post(SKILLS, json={"action": "delete", "name": name}).status_code == 403
-        assert client.post(SKILLS, json={"action": "patch", "name": "crema-guide", "content": changed}).status_code == 403
+        assert client.post(SKILLS, json={"action": "patch", "name": "krema-guide", "content": changed}).status_code == 403
 
         version = text("ego-browser", "개인 사본")
         assert client.post(SKILLS, json={"action": "patch", "name": "ego-browser", "content": version}).json()["success"]

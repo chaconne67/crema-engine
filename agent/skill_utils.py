@@ -275,9 +275,9 @@ def _home_relative(p: Path) -> Path:
 
 # Never disableable: `hermes-agent` is the agent's own operating manual and the
 # system prompt points at it unconditionally.
-# Crema: `crema-guide` (skills/crema-guide) is Crema's manual; it ships with each release and
+# Crema: `krema-guide` (skills/krema-guide) is Crema's manual; it ships with each release and
 # tools/skills_sync.py puts the installed version back over an edited or deleted copy.
-ESSENTIAL_SKILLS: frozenset = frozenset({"hermes-agent", "crema-guide"})
+ESSENTIAL_SKILLS: frozenset = frozenset({"hermes-agent", "krema-guide"})
 
 
 def get_disabled_skill_names(platform: str | None = None) -> set[str]:
@@ -292,7 +292,8 @@ def get_disabled_skill_names(platform: str | None = None) -> set[str]:
     platform_disabled = (skills_cfg.get("platform_disabled") or {}).get(resolved_platform) if resolved_platform else None
     if platform_disabled is not None:
         disabled |= _normalize_string_set(platform_disabled)
-    return disabled - ESSENTIAL_SKILLS
+    from tools.krema_skill_names import current_name
+    return {alias for name in disabled if current_name(name) not in ESSENTIAL_SKILLS for alias in (name, current_name(name))}
 
 
 def parse_config_string_list(value) -> list[str]:

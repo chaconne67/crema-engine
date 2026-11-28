@@ -1002,6 +1002,6 @@ def test_review_prompts_protect_crema_skills():
     from agent.background_review import _COMBINED_REVIEW_PROMPT, _SKILL_REVIEW_PROMPT
 
     for prompt in (_SKILL_REVIEW_PROMPT, _COMBINED_REVIEW_PROMPT):
-        for protected in ("crema-guide", "Hub-installed", "external", "pinned", "locked", "user-owned"):
+        for protected in ("krema-guide", "Hub-installed", "external", "pinned", "locked", "user-owned"):
             assert protected in prompt
         assert "hermes curator" not in prompt

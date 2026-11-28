@@ -63,7 +63,7 @@ profile. The assembled input supplies chat and scheduled toolsets, plugins and h
 | Shared files | chats that change the same file take turns: an order on the kanban board, a hand-over when the other chat is quiet and committed, else one judge call (the chat's model or `auxiliary.crema_turns`); a refused write waits for nothing, and the app starts the chat again | `agent/crema_file_turns.py`, `/api/crema/turns` |
 | Approval words | the approval box explains held commands in Korean. The event translates recognized descriptions and shows a general warning for unknown ones. The original approval identifier stays in `pattern_key`. | `agent/crema_approval_words.py`, `gateway/platforms/api_server.py::_approval_request_event` |
 | Messages between chats | a chat lists the user's other chats and sends one a message (the `crema_chats` tool): a replying chat reads it after its current tool step, an idle one when it next works, or now when the sender asks to wake it (the app starts it) | `crema_chats` in `toolsets.py`; `agent/crema_file_turns.py` notes, `/api/crema/chats` |
-| Crema's manual | the built-in skill `crema-guide`: how Crema's screens, settings, engine, account and updates work, read by the agent when the user asks about Crema; each release ships its own, and an edited or deleted copy is put back at start | `skills/crema-guide/`, seeded by `crema_engine.py` |
+| Crema's manual | the built-in skill `krema-guide`: how Crema's screens, settings, engine, account and updates work, read by the agent when the user asks about Crema; each release ships its own, and an edited or deleted copy is put back at start | `skills/krema-guide/`, seeded by `crema_engine.py` |
 
 ## Changes from upstream
 
@@ -173,13 +173,13 @@ profile. The assembled input supplies chat and scheduled toolsets, plugins and h
      Crema's connected Providers drive — `plugins/image_gen/` (openai-codex, openai, openrouter, xai) and
      `plugins/video_gen/` (openrouter, xai)
 14. Crema's manual as a built-in skill (Crema plan `Crema-기본-설명서-스킬-계획-2026-10-11.md`):
-   - new: `skills/crema-guide/` — `SKILL.md` (what Crema is, how to use the manual, which reference answers what)
+   - new: `skills/krema-guide/` — `SKILL.md` (what Crema is, how to use the manual, which reference answers what)
      and `references/*.md` (screens, settings, models and connections, memory and the notebook, chats together,
      the engine, account/updates/data, troubleshooting), in Korean as the app is. A change to what users see or
      do in Crema (app or engine) updates it in the same work; the Crema plans' `crema/AGENTS.md` says so
    - `crema_engine.py`: `sync_skills()` (upstream `tools/skills_sync.py`, which only the gateway and the CLI
      called) at start, so the bundled skills reach `HERMES_HOME/skills`
-   - `agent/skill_utils.py`: `crema-guide` in `ESSENTIAL_SKILLS` (never disabled or deleted by the agent)
+   - `agent/skill_utils.py`: `krema-guide` in `ESSENTIAL_SKILLS` (never disabled or deleted by the agent)
    - `tools/skills_sync.py`: an essential skill's copy is compared with the bundled one on every sync and put
      back when edited or deleted — upstream keeps a user-modified bundled skill and stops updating it, which
      would freeze the manual at the first edit the agent makes; tests in `tests/tools/test_skills_sync.py`
@@ -187,10 +187,10 @@ profile. The assembled input supplies chat and scheduled toolsets, plugins and h
    `thock_heard` tool, its `thock` toolset and its place in `_DIRECT_SURFACE_TOOLSETS` are gone.)
 
 16. Review prompts without Hermes' CLI (Crema plan `Crema-기본-설명서-스킬-계획-2026-10-11.md`):
-   `agent/background_review.py`'s skill and combined review prompts name `crema-guide` as the bundled
+   `agent/background_review.py`'s skill and combined review prompts name `krema-guide` as the bundled
    skill and reserve edits for agent-owned skills. Hub-installed, external, pinned, locked, and
    user-owned skills are protected by the review instructions. The skill tool blocks background
-   writes to `crema-guide` even after the reviewer reads it.
+   writes to `krema-guide` even after the reviewer reads it.
 
 17. Each run works in the folder Crema names: `POST /v1/runs` takes `cwd` (the chat's project folder, else the app's
    `Documents\Crema`; one that is not an existing absolute folder is a 400 `invalid_cwd`, never a fallback).

@@ -737,7 +737,11 @@ def resolve_slash_key(command: str, table: Mapping[str, Any]) -> Optional[str]:
     if exact_key in table:
         return exact_key
     cmd_key = f"/{command.replace('_', '-').lower()}"
-    return cmd_key if cmd_key in table else None
+    if cmd_key in table:
+        return cmd_key
+    from tools.krema_skill_names import current_name
+    alias = current_name(cmd_key)
+    return alias if alias in table else None
 
 
 def build_skill_invocation_message(

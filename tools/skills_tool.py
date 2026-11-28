@@ -211,7 +211,10 @@ def _is_skill_disabled(*names: str, platform: str | None = None) -> bool:
         if resolved_platform:
             platform_disabled = cfg_get(skills_cfg, "platform_disabled", resolved_platform)
         disabled = skills_cfg.get("disabled", [])
-        return any((platform_disabled is not None and n in platform_disabled) or n in disabled for n in names)
+        from agent.skill_utils import ESSENTIAL_SKILLS, _normalize_string_set
+        from tools.krema_skill_names import current_name
+        blocked = {current_name(n) for n in _normalize_string_set(disabled) | _normalize_string_set(platform_disabled)}
+        return not (blocked - ESSENTIAL_SKILLS).isdisjoint(current_name(n) for n in names)
     except Exception:
         return False
 
@@ -562,6 +565,9 @@ def locate_skill(name: str, local_category_name: Optional[str], roots):
         return _fail(
             "Skills directory does not exist yet. It will be created on first install."), None, None
     candidates = _collect_skill_candidates(name, local_category_name, all_dirs)
+    from tools.krema_skill_names import current_name
+    if not candidates and current_name(name) != name:
+        candidates = _collect_skill_candidates(current_name(name), None, all_dirs)
     tier_of = {d: t for t, d in roots}
     if len(candidates) > 1:
         owned = [(c, _owning_search_dir(c[1], all_dirs)) for c in candidates]

@@ -37,14 +37,16 @@ def get_disabled_skills(config: dict, platform: Optional[str] = None) -> set[str
         platform_disabled = cfg_get(skills_cfg, "platform_disabled", platform)
         if platform_disabled is not None:
             disabled = disabled | _normalize_skill_names(platform_disabled)
-    return disabled - ESSENTIAL_SKILLS
+    from tools.krema_skill_names import current_name
+    return {current_name(name) for name in disabled} - ESSENTIAL_SKILLS
 
 
 def save_disabled_skills(config: dict, disabled: set[str], platform: Optional[str] = None):
     """Persist disabled skill names to config; essential skills (e.g. ``hermes-agent``) are
     silently dropped — they cannot be disabled from any surface."""
     from agent.skill_utils import ESSENTIAL_SKILLS
-    disabled = set(disabled) - ESSENTIAL_SKILLS
+    from tools.krema_skill_names import current_name
+    disabled = {current_name(name) for name in disabled} - ESSENTIAL_SKILLS
     config.setdefault("skills", {})
     if platform is None:
         config["skills"]["disabled"] = sorted(disabled)

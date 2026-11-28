@@ -426,16 +426,16 @@ class TestStartRun:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("text, expected", [
-        ("/crema-guide 설명해 줘", "[skill crema-guide] 설명해 줘"),
-        ("/crema_guide", "[skill crema-guide] "),
+        ("/krema-guide 설명해 줘", "[skill krema-guide] 설명해 줘"),
+        ("/crema_guide", "[skill krema-guide] "),
         ("/none hello", "/none hello"),
-        ("hello /crema-guide", "hello /crema-guide"),
+        ("hello /krema-guide", "hello /krema-guide"),
     ], ids=["skill and instruction", "skill alone", "not a skill", "not at the start"])
     async def test_start_expands_a_leading_skill_name(self, adapter, text, expected):
         """Crema's '/' menu: a message starting with a skill's name reaches the agent as that skill's text."""
         app = _create_runs_app(adapter)
         captured = {}
-        skills = {"/crema-guide": {"name": "crema-guide"}}
+        skills = {"/krema-guide": {"name": "krema-guide"}}
 
         async with TestClient(TestServer(app)) as cli:
             with patch.object(adapter, "_create_agent", return_value=self._capturing_agent(captured)), \

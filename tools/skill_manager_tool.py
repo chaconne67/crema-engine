@@ -78,13 +78,13 @@ def _security_scan_skill(skill_dir: Path, baseline: Optional[Counter] = None,
     return None
 
 
-def _skill_lock_path(name: str) -> Path:
+def _skill_lock_path(name: str, root: Optional[Path] = None) -> Path:
     """Per-skill lock file under ``<skills>/.locks/`` (same idiom as the usage ledger's
     ``.usage.json.lock``), never inside the skill dir so delete/recreate cannot unlink it under a
     waiting writer. Keyed by a digest of the basename so ``foo`` and ``category/foo`` share one
     lock and no name can hit a filesystem limit (callers validate the basename first)."""
     digest = hashlib.sha256(Path(name).name.encode("utf-8", "surrogatepass")).hexdigest()
-    return _skills_dir() / ".locks" / f"{digest}.lock"
+    return (root if root is not None else _skills_dir()) / ".locks" / f"{digest}.lock"
 
 
 def _skill_mutation_lock(name: str):
@@ -93,11 +93,11 @@ def _skill_mutation_lock(name: str):
     return skill_file_lock(_skill_lock_path(name))
 
 
-def _skill_mutation_locks(names):
+def _skill_mutation_locks(names, *, root=None):
     """Every lock of an atomic batch, acquired in one stable path order (deadlock-free across batches)."""
     from tools.skill_usage import skill_file_lock
     stack = ExitStack()
-    for lock_path in sorted({_skill_lock_path(n) for n in names}):
+    for lock_path in sorted({_skill_lock_path(n, root) for n in names}):
         stack.enter_context(skill_file_lock(lock_path))
     return stack
 
@@ -397,8 +397,8 @@ def _locate_for_write(name: str, action: str, not_found_suffix: str = ""):
     if not existing:
         return None, _err(_skill_not_found_error(name, not_found_suffix))
     skill_dir = existing["path"]
-    if _is_background_review() and skill_dir.name == "crema-guide":
-        return None, _err("Crema restores crema-guide at startup. Suggest the change in the review summary.")
+    if _is_background_review() and skill_dir.name == "krema-guide":
+        return None, _err("Crema restores krema-guide at startup. Suggest the change in the review summary.")
     guard = _background_review_delete_guard(name, skill_dir) if action == "delete" else None
     return (None, guard) if guard else (skill_dir, None)
 
